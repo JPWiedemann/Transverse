@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+python/settings.json
+python/build/
+python/dist/
+*.spec
+
+# Rust
+target/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
