@@ -4,9 +4,11 @@ pub mod control;
 pub mod error;
 pub mod fd2d;
 pub mod losses;
+pub mod postproc;
 pub mod quasistatic;
 pub mod special;
 pub mod synthesis;
+pub mod units;
 
 pub use control::Ctl;
 pub use error::{TvError, TvResult};
