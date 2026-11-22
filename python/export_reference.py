@@ -8,7 +8,9 @@ import json
 import sys
 from dataclasses import asdict, replace
 
-from cpwg_solver import Params, analytic, ground_split, solve, synthesize
+import numpy as np
+
+from cpwg_solver import Params, analytic, e_field, ground_split, solve, synthesize
 
 BASE = Params()
 CASES = {
@@ -61,6 +63,36 @@ def split_entry(sol) -> dict:
     }
 
 
+def field_samples(sol) -> dict:
+    """Potentials and E field at deterministic nodes (None where the node is a conductor)."""
+    ex, ey, e = e_field(sol)
+    ny, nx = sol.V.shape
+
+    def val(a, j, i):
+        return None if np.isnan(a[j, i]) else float(a[j, i])
+
+    nodes = []
+    for k in range(24):
+        j, i = (k * 37 + 5) % ny, (k * 101 + 11) % nx
+        nodes.append(
+            {
+                "i": i,
+                "j": j,
+                "v": float(sol.V[j, i]),
+                "v0": float(sol.V0[j, i]),
+                "ex": val(ex, j, i),
+                "ey": val(ey, j, i),
+                "e": val(e, j, i),
+            }
+        )
+    return {
+        "nx": nx,
+        "ny": ny,
+        "nodes": nodes,
+        "e_p997": float(np.percentile(e[np.isfinite(e)], 99.7)),
+    }
+
+
 def main() -> None:
     out = []
     synth = []
@@ -95,6 +127,8 @@ def main() -> None:
             "loss": sol.losses(p.f),
             "split": split_entry(sol),
         }
+        if name == "final_stackup":
+            entry["field"] = field_samples(sol)
         if p.t == 0 and p.closed():
             z0, eeff, _ = analytic(p)
             entry["analytic_z0"] = z0
