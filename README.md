@@ -119,3 +119,7 @@ uv run --group dev pytest
 ## Contributing and releases
 
 Pull requests go to `dev` with a [Conventional Commits](https://www.conventionalcommits.org/) title and are squash merged; `main` only receives the release pull request, and merging it publishes a release. See [CONTRIBUTING.md](CONTRIBUTING.md) and [MAINTAINING.md](MAINTAINING.md).
+
+## License
+
+Transverse is free software, licensed under the [GNU General Public License, version 3 only](LICENSE). Contributions are accepted under the [Contributor License Agreement](CLA.md). Copyright (C) 2026 The Transverse authors.
