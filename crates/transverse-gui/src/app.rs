@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::views::cross_section;
 use crate::views::field::FieldView;
 use crate::views::loss::LossView;
-use crate::views::{cross_section, return_current};
+use crate::views::return_current::ReturnView;
 use eframe::egui::{self, Color32, RichText};
 use transverse_core::units::parse_number;
 use transverse_gui::form::{FieldState, FormState, unit_options};
@@ -45,6 +46,7 @@ pub struct App {
     result: Option<Analysis>,
     field_view: FieldView,
     loss_view: LossView,
+    return_view: ReturnView,
     /// Counts results; plots reset their bounds when a new one arrives.
     generation: u64,
     tab: Tab,
@@ -93,10 +95,17 @@ impl App {
             result: None,
             field_view,
             loss_view,
+            return_view: ReturnView::default(),
             generation: 0,
             tab: Tab::CrossSection,
             error: None,
         }
+    }
+
+    /// The frequency currently typed in the parameter form [Hz], if it parses.
+    fn form_frequency(&self) -> Option<f64> {
+        let spec = self.model.params().iter().find(|p| matches!(p.kind, ParamKind::Frequency { .. }))?;
+        self.form.to_params(&*self.model).ok()?.num(spec.key).ok()
     }
 
     fn busy(&self) -> bool {
@@ -350,13 +359,16 @@ impl App {
                 }
             },
             Tab::ReturnCurrent => match self.result.as_ref().and_then(|a| a.modes.first()?.split.as_ref()) {
-                Some(split) => return_current::show(ui, split, self.generation),
+                Some(split) => self.return_view.ui(ui, split, self.generation),
                 None => {
                     ui.label("No result yet. Press Analyze or Synthesize.");
                 }
             },
             Tab::Loss => match &self.result {
-                Some(a) => self.loss_view.ui(ui, &*a.freq, a.modes[0].z0, a.modes[0].f_hz, self.generation),
+                Some(a) => {
+                    let live_f = self.form_frequency();
+                    self.loss_view.ui(ui, &*a.freq, a.modes[0].z0, a.modes[0].f_hz, live_f, self.generation)
+                }
                 None => {
                     ui.label("No result yet. Press Analyze or Synthesize.");
                 }

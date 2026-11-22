@@ -21,3 +21,9 @@ pub fn wheel_zoom(pui: &mut PlotUi<'_>) {
         pui.zoom_bounds_around_hovered(Vec2::splat((scroll as f64 * SCROLL_ZOOM).exp() as f32));
     }
 }
+
+/// x value [data units] under the cursor if it is inside the plot frame.
+pub fn hover_x(resp: &egui_plot::PlotResponse<()>) -> Option<f64> {
+    let pos = resp.response.hover_pos().filter(|p| resp.transform.frame().contains(*p))?;
+    Some(resp.transform.value_from_position(pos).x)
+}

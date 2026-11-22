@@ -3,16 +3,47 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, vec2};
 use transverse_lines::model::{Anchor, SchemColor, SchemItem, Schematic};
 
-fn colour(c: SchemColor) -> Color32 {
+/// Colours for one theme. Dielectrics and copper keep their meaning in both themes; background,
+/// text and the colours that would vanish against the background change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Palette {
+    pub background: Color32,
+    text: Color32,
+    muted: Color32,
+    signal: Color32,
+    copper_edge: Color32,
+}
+
+pub fn palette(dark: bool) -> Palette {
+    if dark {
+        Palette {
+            background: Color32::from_gray(0x1c),
+            text: Color32::from_gray(0xe4),
+            muted: Color32::from_gray(0x9c),
+            signal: Color32::from_rgb(0x3f, 0x88, 0xe8),
+            copper_edge: Color32::from_rgb(0xf0, 0xb0, 0x88),
+        }
+    } else {
+        Palette {
+            background: Color32::from_gray(0xfa),
+            text: Color32::from_gray(0x22),
+            muted: Color32::from_gray(0x66),
+            signal: Color32::from_rgb(0x1f, 0x5f, 0xbf),
+            copper_edge: Color32::from_rgb(0x8a, 0x4a, 0x25),
+        }
+    }
+}
+
+fn colour(c: SchemColor, p: &Palette) -> Color32 {
     match c {
         SchemColor::UpperDielectric => Color32::from_rgb(0xe6, 0xc9, 0x7a),
         SchemColor::LowerDielectric => Color32::from_rgb(0x7f, 0xb0, 0xe6),
         SchemColor::CustomGap => Color32::from_rgb(0x93, 0xd1, 0x7f),
         SchemColor::Copper => Color32::from_rgb(0xd9, 0x82, 0x4f),
-        SchemColor::CopperEdge => Color32::from_rgb(0x8a, 0x4a, 0x25),
-        SchemColor::Signal => Color32::from_rgb(0x1f, 0x5f, 0xbf),
-        SchemColor::Text => Color32::from_gray(0x22),
-        SchemColor::Muted => Color32::from_gray(0x66),
+        SchemColor::CopperEdge => p.copper_edge,
+        SchemColor::Signal => p.signal,
+        SchemColor::Text => p.text,
+        SchemColor::Muted => p.muted,
     }
 }
 
@@ -49,7 +80,8 @@ fn arrow_heads(painter: &egui::Painter, a: Pos2, b: Pos2, size: f32, col: Color3
 pub fn show(ui: &mut egui::Ui, s: &Schematic) {
     let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, Color32::from_gray(0xfa));
+    let pal = palette(ui.visuals().dark_mode);
+    painter.rect_filled(rect, 4.0, pal.background);
     let (scale, origin) = fit(rect, s.width, s.height);
     let p = |x: f64, y: f64| origin + vec2(x as f32, y as f32) * scale;
     let font =
@@ -60,14 +92,14 @@ pub fn show(ui: &mut egui::Ui, s: &Schematic) {
         match item {
             SchemItem::Rect { x0, y0, x1, y1, fill, outline } => {
                 let r = Rect::from_two_pos(p(*x0, *y0), p(*x1, *y1));
-                painter.rect_filled(r, 0.0, colour(*fill));
+                painter.rect_filled(r, 0.0, colour(*fill, &pal));
                 if let Some(o) = outline {
-                    painter.rect_stroke(r, 0.0, Stroke::new(1.0, colour(*o)), egui::StrokeKind::Inside);
+                    painter.rect_stroke(r, 0.0, Stroke::new(1.0, colour(*o, &pal)), egui::StrokeKind::Inside);
                 }
             }
             SchemItem::Line { x0, y0, x1, y1, color, dashed, arrows } => {
                 let (a, b) = (p(*x0, *y0), p(*x1, *y1));
-                let stroke = Stroke::new(line_w, colour(*color));
+                let stroke = Stroke::new(line_w, colour(*color, &pal));
                 if *dashed {
                     painter.extend(Shape::dashed_line(
                         &[a, b],
@@ -79,11 +111,11 @@ pub fn show(ui: &mut egui::Ui, s: &Schematic) {
                     painter.line_segment([a, b], stroke);
                 }
                 if *arrows {
-                    arrow_heads(&painter, a, b, (7.0 * scale).clamp(5.0, 12.0), colour(*color));
+                    arrow_heads(&painter, a, b, (7.0 * scale).clamp(5.0, 12.0), colour(*color, &pal));
                 }
             }
             SchemItem::Text { x, y, text, anchor, bold, color } => {
-                painter.text(p(*x, *y), align(*anchor), text, font(*bold), colour(*color));
+                painter.text(p(*x, *y), align(*anchor), text, font(*bold), colour(*color, &pal));
             }
         }
     }
@@ -92,6 +124,28 @@ pub fn show(ui: &mut egui::Ui, s: &Schematic) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Relative luminance difference between two colours (rough, sRGB gamma ignored).
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let l = |c: Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
+        (l(a) - l(b)).abs() / 255.0
+    }
+
+    #[test]
+    fn both_themes_keep_text_and_signal_readable_on_their_background() {
+        let (dark, light) = (palette(true), palette(false));
+        assert_ne!(dark.background, light.background);
+        assert!(dark.background.r() < 0x40, "dark theme gets a dark background");
+        assert!(light.background.r() > 0xd0, "light theme gets a light background");
+        for p in [dark, light] {
+            for c in [SchemColor::Text, SchemColor::Muted, SchemColor::Signal, SchemColor::CopperEdge] {
+                assert!(contrast(colour(c, &p), p.background) > 0.25, "{c:?} on {:?}", p.background);
+            }
+            // the dielectric and copper fills are the same in both themes
+            assert_eq!(colour(SchemColor::UpperDielectric, &p), Color32::from_rgb(0xe6, 0xc9, 0x7a));
+            assert_eq!(colour(SchemColor::Copper, &p), Color32::from_rgb(0xd9, 0x82, 0x4f));
+        }
+    }
 
     #[test]
     fn fit_centres_and_keeps_the_aspect_ratio() {

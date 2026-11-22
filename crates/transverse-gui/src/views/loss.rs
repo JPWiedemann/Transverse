@@ -2,25 +2,33 @@
 
 use std::collections::BTreeMap;
 
-use eframe::egui::{self, Color32};
-use egui_plot::{AxisHints, HPlacement, Legend, Line, LineStyle, Plot, PlotPoints, VLine};
+use eframe::egui::{self, Color32, vec2};
+use egui_plot::{AxisHints, HPlacement, Line, LineStyle, Plot, PlotBounds, PlotPoints, VLine};
 use transverse_core::NP2DB;
 use transverse_core::losses::{FreqResponse, sweep};
 use transverse_core::units::{FREQ_UNITS, factor, format_g, parse_number};
 
+use super::legend::{self, LegendEntry};
 use super::nav;
 
 const POINTS: usize = 400;
 const DEFAULT_FMAX_HZ: f64 = 20e9;
+/// Two lines of values under the plot.
+const READOUT_HEIGHT: f32 = 44.0;
+/// Curve colours (matplotlib C0, C1; the total uses the text colour).
+const CONDUCTOR: Color32 = Color32::from_rgb(31, 119, 180);
+const DIELECTRIC: Color32 = Color32::from_rgb(255, 127, 14);
 
 pub struct LossView {
     fmax_text: String,
     fmax_unit: String,
+    /// View requested by the Fit button, applied in the next plot pass.
+    pending: Option<[f64; 4]>,
 }
 
 impl Default for LossView {
     fn default() -> Self {
-        Self { fmax_text: "20".into(), fmax_unit: "GHz".into() }
+        Self { fmax_text: "20".into(), fmax_unit: "GHz".into(), pending: None }
     }
 }
 
@@ -38,11 +46,17 @@ pub fn curves(freq: &dyn FreqResponse, fmax_hz: f64) -> Vec<(f64, f64, f64, f64)
 }
 
 impl LossView {
-    /// Highest frequency [Hz] of the plot; an invalid entry falls back to 20 GHz.
+    /// The "f max" entry [Hz]; an invalid entry falls back to 20 GHz.
     pub fn fmax_hz(&self) -> f64 {
         let v =
             parse_number(&self.fmax_text).zip(factor(&FREQ_UNITS, &self.fmax_unit, None)).map(|(v, f)| v * f);
         v.filter(|v| *v > 0.0).unwrap_or(DEFAULT_FMAX_HZ)
+    }
+
+    /// Upper end of the plot: the entry, but never below `floor_hz` (the analysis frequency and the
+    /// frequency typed in the parameter form), so that frequency is always inside the plot.
+    pub fn effective_fmax_hz(&self, floor_hz: f64) -> f64 {
+        self.fmax_hz().max(if floor_hz.is_finite() { floor_hz } else { 0.0 })
     }
 
     pub fn load(&mut self, ui: &BTreeMap<String, serde_json::Value>) {
@@ -61,7 +75,18 @@ impl LossView {
         ui.insert("fmax_unit".into(), self.fmax_unit.clone().into());
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, freq: &dyn FreqResponse, z0: f64, f_hz: f64, generation: u64) {
+    /// `f_hz`: analysis frequency; `form_f_hz`: the frequency currently typed in the parameter form.
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        freq: &dyn FreqResponse,
+        z0: f64,
+        f_hz: f64,
+        form_f_hz: Option<f64>,
+        generation: u64,
+    ) {
+        let floor = f_hz.max(form_f_hz.unwrap_or(0.0));
+        let fmax = self.effective_fmax_hz(floor);
         ui.horizontal(|ui| {
             ui.label("f max");
             let bad = parse_number(&self.fmax_text).is_none();
@@ -77,16 +102,24 @@ impl LossView {
                     }
                 },
             );
+            if fmax > self.fmax_hz() {
+                ui.weak(format!("plot extended to {} GHz, the set frequency", format_g(fmax / 1e9)));
+            }
+            if ui.button("Fit").clicked() {
+                self.pending = Some([0.0, fmax / 1e9, 0.0, 0.0]); // y filled in below
+            }
         });
         ui.label(format!("Loss vs frequency (Z0 = {z0:.2} Ohm; er, tan d constant)"));
 
-        let fmax = self.fmax_hz();
         let c = curves(freq, fmax);
+        let top = 1.05 * c.iter().map(|r| r.3).fold(0.0, f64::max);
+        let pending = self.pending.take().map(|v| [v[0], v[1], v[2], top.max(f64::MIN_POSITIVE)]);
         let series = |pick: fn(&(f64, f64, f64, f64)) -> f64| {
             PlotPoints::from(c.iter().map(|r| [r.0, pick(r)]).collect::<Vec<_>>())
         };
+        let total_colour = ui.visuals().text_color();
         let plot = Plot::new(("loss", generation, fmax.to_bits()))
-            .height(ui.available_height().max(160.0))
+            .height((ui.available_height() - READOUT_HEIGHT).max(160.0))
             .x_axis_label("Frequency [GHz]")
             .custom_y_axes(vec![
                 AxisHints::new_y().label("Loss [dB/mm]"),
@@ -95,23 +128,51 @@ impl LossView {
                     .placement(HPlacement::Right)
                     .formatter(|mark, _| format_g(mark.value * 25.4)),
             ])
-            .include_y(0.0)
-            .legend(Legend::default());
-        let total_colour = ui.visuals().text_color();
-        nav::configure(plot).show(ui, |pui| {
+            .default_x_bounds(0.0, fmax / 1e9)
+            .include_y(0.0);
+        let resp = nav::configure(plot).show(ui, |pui| {
             nav::wheel_zoom(pui);
-            pui.line(Line::new("Conductor", series(|r| r.1)).width(1.6));
-            pui.line(Line::new("Dielectric", series(|r| r.2)).width(1.6));
-            pui.line(Line::new("Total", series(|r| r.3)).color(total_colour).width(2.4));
-            if f_hz <= fmax {
-                pui.add(
-                    VLine::new("", f_hz / 1e9)
-                        .color(Color32::GRAY)
-                        .width(0.9)
-                        .style(LineStyle::dashed_loose()),
-                );
+            if let Some(v) = pending {
+                pui.set_plot_bounds(PlotBounds::from_min_max([v[0], v[2]], [v[1], v[3]]));
             }
+            pui.line(Line::new("Conductor", series(|r| r.1)).color(CONDUCTOR).width(1.6));
+            pui.line(Line::new("Dielectric", series(|r| r.2)).color(DIELECTRIC).width(1.6));
+            pui.line(Line::new("Total", series(|r| r.3)).color(total_colour).width(2.4));
+            pui.add(
+                VLine::new("", f_hz / 1e9).color(Color32::GRAY).width(0.9).style(LineStyle::dashed_loose()),
+            );
         });
+        let entry =
+            |label: &str, color, width| LegendEntry { label: label.into(), color, dashed: false, width };
+        legend::draw(
+            ui,
+            *resp.transform.frame(),
+            0.0,
+            &[
+                entry("Conductor", CONDUCTOR, 1.6),
+                entry("Dielectric", DIELECTRIC, 1.6),
+                entry("Total", total_colour, 2.4),
+            ],
+        );
+
+        // loss at the cursor frequency, evaluated exactly (not read off the sampled curves)
+        let text = match nav::hover_x(&resp).filter(|x| *x > 0.0) {
+            Some(x) => {
+                let p = freq.at(x * 1e9);
+                let (ac, ad) = (p.alpha_c * NP2DB / 1000.0, p.alpha_d * NP2DB / 1000.0);
+                let v =
+                    |name: &str, db_mm: f64| format!("{name}: {db_mm:.5} dB/mm ({:.4} dB/in)", db_mm * 25.4);
+                format!(
+                    "f = {} GHz      {}      {}      {}",
+                    format_g(x),
+                    v("Conductor", ac),
+                    v("Dielectric", ad),
+                    v("Total", ac + ad)
+                )
+            }
+            None => "Move the cursor over the plot for the losses at that frequency.".to_string(),
+        };
+        ui.add_sized(vec2(ui.available_width(), READOUT_HEIGHT - 4.0), egui::Label::new(text).wrap());
     }
 }
 
@@ -156,5 +217,19 @@ mod tests {
         ui.insert("fmax_unit".into(), "parsec".into());
         w.load(&ui);
         assert_eq!(w.fmax_unit, "GHz");
+    }
+
+    #[test]
+    fn plot_range_never_ends_below_the_set_frequency() {
+        let v = LossView { fmax_text: "5".into(), ..Default::default() };
+        // entry larger than the set frequency: the entry wins
+        assert_eq!(v.effective_fmax_hz(2e9), 5e9);
+        // set frequency larger than the entry: it wins
+        assert_eq!(v.effective_fmax_hz(12e9), 12e9);
+        // exactly equal
+        assert_eq!(v.effective_fmax_hz(5e9), 5e9);
+        // nonsense floors do not break the range
+        assert_eq!(v.effective_fmax_hz(f64::NAN), 5e9);
+        assert_eq!(v.effective_fmax_hz(-1.0), 5e9);
     }
 }
