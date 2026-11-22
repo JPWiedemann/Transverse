@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/transverse-core", "crates/transverse-lines", "crates/transverse-cli"]
+members = [
+    "crates/transverse-core",
+    "crates/transverse-lines",
+    "crates/transverse-gui",
+    "crates/transverse-cli",
+]
 
 [workspace.package]
 version = "0.1.0"

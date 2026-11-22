@@ -1,0 +1,13 @@
+[package]
+name = "transverse-gui"
+description = "Desktop application for Transverse (form state, settings and worker are UI-independent)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+transverse-core.workspace = true
+transverse-lines.workspace = true
+serde.workspace = true
+serde_json.workspace = true

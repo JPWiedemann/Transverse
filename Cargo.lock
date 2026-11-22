@@ -699,6 +699,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "transverse-gui"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "transverse-core",
+ "transverse-lines",
+]
+
+[[package]]
 name = "transverse-lines"
 version = "0.1.0"
 dependencies = [
