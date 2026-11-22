@@ -13,11 +13,18 @@
 //! All lengths in mm, frequency in Hz.
 
 mod grid;
+mod ground_split;
 mod params;
+mod synthesis;
+mod wheeler;
 
 pub use grid::*;
+pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
 pub use params::{CpwgParams, GapMode, MeshMode, analytic};
+pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize};
+pub use wheeler::wheeler_dzdn;
 
+use transverse_core::losses::LossModel;
 use transverse_core::quasistatic::{self, Solution};
 use transverse_core::{Ctl, TvResult};
 
@@ -25,4 +32,20 @@ use transverse_core::{Ctl, TvResult};
 pub fn analyze(p: &CpwgParams, ctl: &Ctl) -> TvResult<Solution> {
     p.validate()?;
     quasistatic::solve(p, &p.fd_options(), ctl)
+}
+
+/// Analysis with losses and ground split.
+pub struct Analysis {
+    pub sol: Solution,
+    pub loss: LossModel,
+    pub split: Split,
+}
+
+/// Field solution + Wheeler conductor loss + dielectric loss model + ground split.
+pub fn full_analysis(p: &CpwgParams, ctl: &Ctl) -> TvResult<Analysis> {
+    let sol = analyze(p, ctl)?;
+    let dzdn = wheeler_dzdn(p, &sol, ctl)?;
+    let loss = LossModel { z0: sol.z0, g_over_omega: sol.g_over_omega, dzdn, sigma: p.sigma, rq_mm: p.rq };
+    let split = ground_split(p, &sol);
+    Ok(Analysis { sol, loss, split })
 }
