@@ -1,0 +1,5 @@
+# Fallback for building the Windows target with a plain mingw-w64 toolchain
+# (`cargo build --release -p transverse-gui --target x86_64-pc-windows-gnu`).
+# The normal route is scripts/build-release.sh, which uses cargo-zigbuild and does not need this.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
