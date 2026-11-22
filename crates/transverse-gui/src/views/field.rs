@@ -15,6 +15,9 @@ const COPPER: Color32 = Color32::from_rgb(0xc8, 0x75, 0x33);
 const LINE_BLUE: Color32 = Color32::from_rgb(0x9f, 0xd3, 0xff);
 const IMAGE_WIDTH: usize = 1100;
 const BAR_WIDTH: f32 = 110.0;
+/// Field lines as polylines in mm.
+type Polylines = Vec<Vec<[f64; 2]>>;
+
 const EQUIPOTENTIALS: [f64; 9] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 
 struct RasterCache {
@@ -36,7 +39,7 @@ pub struct FieldView {
     generation: u64,
     raster: Option<RasterCache>,
     e: Option<(u64, EField)>,
-    lines: Option<((u64, bool), Vec<Vec<[f64; 2]>>)>,
+    lines: Option<((u64, bool), Polylines)>,
     eq: Option<(u64, Vec<[[f64; 2]; 2]>)>,
 }
 
