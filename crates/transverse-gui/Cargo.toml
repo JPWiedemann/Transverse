@@ -11,3 +11,8 @@ transverse-core.workspace = true
 transverse-lines.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "wayland", "x11", "clipboard"] }
+
+[[bin]]
+name = "transverse-gui"
+path = "src/main.rs"

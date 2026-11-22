@@ -118,6 +118,20 @@ impl FormState {
         }
     }
 
+    /// Flags and choices only (everything else at its default): enough to decide which controls are
+    /// enabled while some text field holds unfinished input.
+    pub fn control_set(&self, model: &dyn LineModel) -> ParamSet {
+        let mut set = model.defaults();
+        for (k, f) in &self.fields {
+            match f {
+                FieldState::Flag(b) => set.set(k, ParamValue::Bool(*b)),
+                FieldState::Choice(i) => set.set(k, ParamValue::Num(*i as f64)),
+                FieldState::Quantity { .. } => {}
+            }
+        }
+        set
+    }
+
     /// Parameters in internal units. Sizes given in λ refer to the wavelength computed from the
     /// other fields.
     pub fn to_params(&self, model: &dyn LineModel) -> Result<ParamSet, FormError> {
