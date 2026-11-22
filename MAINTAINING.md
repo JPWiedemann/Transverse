@@ -102,7 +102,7 @@ Rulesets (like branch protection) are only enforced for private repositories on 
 | `release-preview.yml` | push to `dev`, release PR events | opens/updates the draft release PR                               |
 | `release.yml`         | push to `main`                   | version, tag, GitHub release, Linux and Windows builds           |
 
-When changing the release logic, `scripts/release.mjs` can be run locally: `node scripts/release.mjs --ref origin/dev --preview` prints the next version and the notes without changing anything, and `node --test scripts/` runs its tests.
+When changing the release logic, `scripts/release.mjs` can be run locally: `node scripts/release.mjs --ref origin/dev --preview` prints the next version and the notes without changing anything, and `node --test scripts/release.test.mjs` runs its tests.
 
 ## Building a release locally
 
