@@ -1,0 +1,16 @@
+[package]
+name = "transverse-core"
+description = "Numerics for Transverse: finite-difference field solver, mesh levels, extrapolation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# rayon is not wired up yet; the single-threaded path is the default and the tested one
+parallel = []
+
+[dependencies]
+faer.workspace = true
+serde.workspace = true
+thiserror.workspace = true
