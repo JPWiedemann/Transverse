@@ -11,6 +11,7 @@ See CONTRIBUTING.md for details.
 ## Checklist
 
 - [ ] This PR contains a single feature or bug fix
+- [ ] I agree to the [Contributor License Agreement](https://github.com/JPWiedemann/Transverse/blob/dev/CLA.md)
 - [ ] The PR targets `dev` and the title is a conventional commit
 - [ ] I tested the change (in the app, if it affects the GUI)
 - [ ] `cargo fmt --all --check`, `cargo clippy --release --all-targets -- -D warnings` and `cargo test --release` pass

@@ -14,3 +14,8 @@ transverse       (transverse.exe on Windows)
 
 Linux: needs a desktop with OpenGL (Mesa is fine) and X11 or Wayland.
 Windows: needs nothing besides OpenGL 2.0 or newer (any normal graphics driver).
+
+License
+-------
+Transverse is free software: GNU General Public License, version 3 only (see LICENSE).
+Source code: https://github.com/JPWiedemann/Transverse
