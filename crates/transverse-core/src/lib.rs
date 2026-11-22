@@ -3,8 +3,10 @@
 pub mod control;
 pub mod error;
 pub mod fd2d;
+pub mod losses;
 pub mod quasistatic;
 pub mod special;
+pub mod synthesis;
 
 pub use control::Ctl;
 pub use error::{TvError, TvResult};
