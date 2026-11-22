@@ -19,6 +19,9 @@ enum Tab {
     Loss,
 }
 
+/// Width of all entry boxes [points]: room for about 12 characters.
+const ENTRY_WIDTH: f32 = 110.0;
+
 const TABS: [(Tab, &str); 5] = [
     (Tab::CrossSection, "Cross-section"),
     (Tab::Results, "Results"),
@@ -39,6 +42,14 @@ pub struct App {
     result: Option<Analysis>,
     tab: Tab,
     error: Option<String>,
+}
+
+/// Fixed-size entry box (red text while the content is not a number).
+fn entry(ui: &mut egui::Ui, text: &mut String, enabled: bool) {
+    let bad = parse_number(text).is_none();
+    let edit = egui::TextEdit::singleline(text).text_color_opt(bad.then_some(Color32::RED));
+    let size = [ENTRY_WIDTH, ui.spacing().interact_size.y];
+    ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, edit));
 }
 
 impl App {
@@ -202,11 +213,7 @@ impl App {
         match state {
             FieldState::Quantity { text, unit } => {
                 ui.label(spec.label);
-                let bad = parse_number(text).is_none();
-                let edit = egui::TextEdit::singleline(text)
-                    .desired_width(80.0)
-                    .text_color_opt(bad.then_some(Color32::RED));
-                ui.add_enabled(enabled, edit);
+                entry(ui, text, enabled);
                 if options.is_empty() {
                     ui.label(&*unit);
                 } else {
@@ -255,12 +262,7 @@ impl App {
                 ui.label(RichText::new("Synthesis").strong());
                 egui::Grid::new("synthesis").num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
                     ui.label("Target Z0");
-                    let bad = parse_number(&self.z_target).is_none();
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.z_target)
-                            .desired_width(80.0)
-                            .text_color_opt(bad.then_some(Color32::RED)),
-                    );
+                    entry(ui, &mut self.z_target, true);
                     ui.label("Ohm");
                     ui.end_row();
                     ui.label("Vary");
@@ -342,7 +344,7 @@ impl eframe::App for App {
             });
         });
 
-        egui::Panel::left("form").resizable(true).default_size(380.0).show(ui, |ui| {
+        egui::Panel::left("form").resizable(true).default_size(420.0).show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.heading(self.model.name());
                 ui.add_space(4.0);
