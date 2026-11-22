@@ -82,7 +82,11 @@ pub struct Raster {
 #[derive(Clone, Copy, Debug)]
 pub struct RasterSpec {
     pub mode: FieldMode,
+    /// Region to draw.
     pub view: Bounds,
+    /// Region that sets the colour scale (99.7 % percentile of |E|); keeps colours stable while the
+    /// drawn region changes with zoom and pan.
+    pub scale_view: Bounds,
     pub db_range: f64,
     /// Image width in pixels; the height follows the aspect ratio of the view.
     pub width: usize,
@@ -100,8 +104,33 @@ fn bilerp(s: &[f64], nx: usize, i: usize, j: usize, tx: f64, ty: f64) -> f64 {
         + ty * ((1.0 - tx) * g(i, j + 1) + tx * g(i + 1, j + 1))
 }
 
+/// Bilinear interpolation that ignores NaN corners (conductor nodes): the remaining corners are
+/// re-weighted, so the colours continue smoothly up to a conductor surface. NaN if no corner is valid.
+fn bilerp_valid(s: &[f64], nx: usize, i: usize, j: usize, tx: f64, ty: f64) -> f64 {
+    let corners = [
+        (s[j * nx + i], (1.0 - tx) * (1.0 - ty)),
+        (s[j * nx + i + 1], tx * (1.0 - ty)),
+        (s[(j + 1) * nx + i], (1.0 - tx) * ty),
+        (s[(j + 1) * nx + i + 1], tx * ty),
+    ];
+    let (mut sum, mut weight, mut n, mut plain) = (0.0, 0.0, 0, 0.0);
+    for (v, w) in corners {
+        if !v.is_nan() {
+            sum += v * w;
+            weight += w;
+            n += 1;
+            plain += v;
+        }
+    }
+    match n {
+        0 => f64::NAN,
+        _ if weight > 1e-12 => sum / weight,
+        _ => plain / n as f64, // exactly on an invalid corner's opposite node: weights vanish
+    }
+}
+
 enum Source {
-    /// Nodal values, interpolated; NaN corners are transparent.
+    /// Nodal values, interpolated; cells without any valid corner are transparent.
     Nodes(Vec<f64>),
     /// One value per cell.
     Cells,
@@ -119,9 +148,10 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
     let height = ((width as f64 * (y1 - y0) / (x1 - x0)).round() as usize).clamp(8, 4000);
 
     // quantity and colour scale
+    let [sx0, sx1, sy0, sy1] = spec.scale_view;
     let in_view = |k: usize| {
         let (x, y) = (f.x[k % nx], f.y[k / nx]);
-        x >= x0 && x <= x1 && y >= y0 && y <= y1
+        x >= sx0 && x <= sx1 && y >= sy0 && y <= sy1
     };
     let e_hi = || {
         let view = percentile((0..e.e.len()).filter(|&k| in_view(k)).map(|k| e.e[k]), 99.7);
@@ -131,7 +161,12 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
         FieldMode::EDb | FieldMode::EDbLines => {
             let top = 20.0 * e_hi().log10();
             let lo = top - spec.db_range;
-            let s = e.e.iter().map(|&v| (20.0 * v.max(1e-30).log10()).clamp(lo, top)).collect();
+            // NaN (conductor nodes) must stay NaN: `f64::max` would turn it into the minimum
+            let s = e
+                .e
+                .iter()
+                .map(|&v| if v.is_nan() { f64::NAN } else { (20.0 * v.max(1e-30).log10()).clamp(lo, top) })
+                .collect();
             (Source::Nodes(s), lo, top, Cmap::Inferno, "|E| [dB re 1 V/mm]".to_string())
         }
         FieldMode::ELinear => {
@@ -163,7 +198,7 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
         let (cj, ty) = locate(&f.y, y1 - (j as f64 + 0.5) / height as f64 * (y1 - y0));
         for (i, &(ci, tx)) in cols.iter().enumerate() {
             let v = match &source {
-                Source::Nodes(s) => bilerp(s, nx, ci, cj, tx, ty), // NaN if any corner is a conductor
+                Source::Nodes(s) => bilerp_valid(s, nx, ci, cj, tx, ty), // NaN only inside conductors
                 Source::Cells => f.er[cj * (nx - 1) + ci],
             };
             if v.is_nan() {
@@ -198,7 +233,7 @@ pub fn probe(f: &FieldData, e: &EField, x: f64, y: f64) -> Option<Probe> {
     let near = |a: usize, t: f64| if t < 0.5 { a } else { a + 1 };
     Some(Probe {
         v: bilerp(&f.v, nx, i, j, tx, ty),
-        e: bilerp(&e.e, nx, i, j, tx, ty),
+        e: bilerp_valid(&e.e, nx, i, j, tx, ty),
         er: f.er[j * (nx - 1) + i],
         in_conductor: f.fixed[near(j, ty) * nx + near(i, tx)],
     })
@@ -222,13 +257,15 @@ mod tests {
     use transverse_core::postproc::e_field;
     use transverse_lines::model::{DrawRect, ShapeKind};
 
-    /// 3 x 3 nodes, x = 0, 1, 3 / y = 0, 2, 3; V = x / 3 (a uniform field in x); node (2, 2) is a conductor.
+    /// 3 x 3 nodes, x = 0, 1, 3 / y = 0, 2, 3; V = x / 3 (a uniform field in x); the cell between nodes (1..2, 1..2) lies inside a conductor.
     fn tiny() -> (FieldData, EField) {
         let x = vec![0.0, 1.0, 3.0];
         let y = vec![0.0, 2.0, 3.0];
         let v: Vec<f64> = (0..9).map(|k| x[k % 3] / 3.0).collect();
         let mut fixed = vec![false; 9];
-        fixed[8] = true;
+        for k in [4, 5, 7, 8] {
+            fixed[k] = true;
+        }
         let f = FieldData {
             x: x.clone(),
             y: y.clone(),
@@ -249,7 +286,13 @@ mod tests {
     }
 
     fn spec(mode: FieldMode) -> RasterSpec {
-        RasterSpec { mode, view: [0.0, 3.0, 0.0, 3.0], db_range: 40.0, width: 30 }
+        RasterSpec {
+            mode,
+            view: [0.0, 3.0, 0.0, 3.0],
+            scale_view: [0.0, 3.0, 0.0, 3.0],
+            db_range: 40.0,
+            width: 30,
+        }
     }
 
     fn px(r: &Raster, i: usize, j: usize) -> [u8; 4] {
@@ -276,10 +319,64 @@ mod tests {
         let (lo, hi) = (px(&r, 0, 15), px(&r, 29, 15));
         assert_eq!(lo[3], 255);
         assert!(lo[0] < 90 && hi[0] > 230, "viridis runs from purple to yellow: {lo:?} {hi:?}");
-        // E modes: the cell around the conductor node (2, 2) has a NaN corner
+        // E modes: the cell whose four corners are conductor nodes is transparent
         let r = render(&f, &e, &spec(FieldMode::ELinear));
-        assert_eq!(px(&r, 28, 1)[3], 0, "pixel in the cell next to the conductor node");
+        assert_eq!(px(&r, 28, 1)[3], 0, "pixel in the cell inside the conductor");
         assert_eq!(px(&r, 2, 28)[3], 255, "pixel far from it");
+    }
+
+    #[test]
+    fn cells_touching_a_conductor_continue_from_their_valid_corners() {
+        // corners (0,0)=1, (1,0)=NaN, (0,1)=3, (1,1)=5 in a single cell
+        let s = [1.0, f64::NAN, 3.0, 5.0];
+        assert!((bilerp_valid(&s, 2, 0, 0, 0.5, 0.5) - 3.0).abs() < 1e-12, "mean of the valid corners");
+        assert!((bilerp_valid(&s, 2, 0, 0, 0.0, 0.0) - 1.0).abs() < 1e-12, "at a valid node");
+        assert!(
+            (bilerp_valid(&s, 2, 0, 0, 1.0, 0.0) - 3.0).abs() < 1e-12,
+            "on the invalid corner: neighbours' mean"
+        );
+        assert!(bilerp_valid(&[f64::NAN; 4], 2, 0, 0, 0.5, 0.5).is_nan());
+        // in the image such a cell is opaque and no longer fades to the background
+        let (f, e) = tiny();
+        let r = render(&f, &e, &spec(FieldMode::ELinear));
+        assert_eq!(px(&r, 2, 28)[3], 255);
+        assert_eq!(px(&r, 8, 8)[3], 255, "cell (0,0) touches conductor node 4 but has valid corners");
+    }
+
+    #[test]
+    fn conductor_nodes_do_not_darken_the_neighbouring_cells_in_db_mode() {
+        let (f, e) = tiny();
+        // uniform |E| everywhere outside the conductor: every opaque pixel must have the same colour
+        for mode in [FieldMode::EDb, FieldMode::ELinear] {
+            let r = render(&f, &e, &spec(mode));
+            let reference = px(&r, 2, 28);
+            let mut opaque = 0;
+            for j in 0..r.height {
+                for i in 0..r.width {
+                    let p = px(&r, i, j);
+                    if p[3] != 0 {
+                        opaque += 1;
+                        assert_eq!(p, reference, "{mode:?}: pixel ({i},{j}) differs near the conductor");
+                    }
+                }
+            }
+            assert!(
+                opaque > 0 && opaque < r.width * r.height,
+                "{mode:?}: conductor cell must be transparent"
+            );
+            assert_eq!(px(&r, 28, 1)[3], 0, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn colour_scale_comes_from_the_scale_region_not_the_drawn_region() {
+        let (f, e) = tiny();
+        let a = render(&f, &e, &spec(FieldMode::EDb)).legend.unwrap();
+        // drawing only a corner must not change the colour scale
+        let b = render(&f, &e, &RasterSpec { view: [0.0, 1.0, 0.0, 1.0], ..spec(FieldMode::EDb) })
+            .legend
+            .unwrap();
+        assert_eq!((a.vmin, a.vmax), (b.vmin, b.vmax));
     }
 
     #[test]
