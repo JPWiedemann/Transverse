@@ -1,7 +1,10 @@
 //! Return-current tab: share table, explanation and current density along the ground conductors.
 
 use eframe::egui::{self, Align2, Color32, RichText, Stroke, vec2};
-use egui_plot::{Line, LineStyle, Plot, PlotBounds, PlotPoint, PlotPoints, Polygon, Text, VLine};
+use egui_plot::{
+    Line, LineStyle, Plot, PlotBounds, PlotPoint, PlotPoints, Polygon, Text, VLine, uniform_grid_spacer,
+};
+use transverse_core::units::{UnitSystem, auto_length_unit, format_g, format_sig, grid_steps_mm};
 use transverse_lines::model::{Bounds, CurrentProfile, SplitSummary};
 
 use super::legend::{self, LegendEntry};
@@ -89,6 +92,19 @@ pub fn profile_value(p: &CurrentProfile, x: f64) -> Option<f64> {
     Some(p.j[i - 1] + t * (p.j[i] - p.j[i - 1]))
 }
 
+/// Values of all curves at `x_mm`, in `unit` (`uf` mm per unit): "x = ...   J_s/I [1/unit]   name: v ...".
+pub fn readout_text(split: &SplitSummary, x_mm: f64, unit: &str, uf: f64) -> String {
+    let vals: Vec<String> = split
+        .profiles
+        .iter()
+        .map(|p| match profile_value(p, x_mm) {
+            Some(v) => format!("{}: {}", p.label, format_sig(v * uf, 4)),
+            None => format!("{}: -", p.label),
+        })
+        .collect();
+    format!("x = {} {unit}      J_s/I [1/{unit}]    {}", format_sig(x_mm / uf, 5), vals.join("     "))
+}
+
 #[derive(Default)]
 pub struct ReturnView {
     /// View requested by a button, applied in the next plot pass.
@@ -98,7 +114,7 @@ pub struct ReturnView {
 }
 
 impl ReturnView {
-    pub fn ui(&mut self, ui: &mut egui::Ui, split: &SplitSummary, generation: u64) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, split: &SplitSummary, generation: u64, units: UnitSystem) {
         egui::Grid::new("split_table").striped(true).num_columns(3).spacing([24.0, 3.0]).show(ui, |ui| {
             ui.label(RichText::new("Ground conductor").strong());
             ui.label(RichText::new("E-field share").strong());
@@ -118,7 +134,7 @@ impl ReturnView {
         ui.label(&split.info);
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            if ui.button("Fit").on_hover_text("keep the x range, scale y to the curves in it").clicked() {
+            if ui.button("Fit y").on_hover_text("keep the x range, scale y to the curves in it").clicked() {
                 let [x0, x1, ..] = self.bounds.unwrap_or_else(|| fit_bounds(split));
                 self.pending = Some([x0, x1, 0.0, y_fit(split, x0, x1)]);
             }
@@ -135,13 +151,21 @@ impl ReturnView {
             ui.weak("wheel: zoom   left drag: zoom box   right drag: pan   double-click: reset");
         });
 
+        // x in a length unit that suits the visible range, J_s/I per that unit
+        let span = self.bounds.map_or(2.0 * split.plot.half_width, |b| b[1] - b[0]);
+        let (unit, uf) = auto_length_unit(units, span);
         let ymax = fit_bounds(split)[3];
         let hw = split.plot.half_width;
         let pending = self.pending.take();
         let plot = Plot::new(("return_current", generation))
             .height((ui.available_height() - READOUT_HEIGHT).max(160.0))
-            .x_axis_label("x [mm]")
-            .y_axis_label("J_s / I  [1/mm]")
+            .x_axis_label(format!("x [{unit}]"))
+            .y_axis_label(format!("J_s / I  [1/{unit}]"))
+            .x_axis_formatter(move |m, _| format_g(m.value / uf))
+            .y_axis_formatter(move |m, _| format_g(m.value * uf))
+            .x_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, uf)))
+            .y_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, 1.0 / uf)))
+            .y_axis_min_width(60.0)
             .default_x_bounds(-hw, hw)
             .default_y_bounds(0.0, ymax);
         let resp = nav::configure(plot).show(ui, |pui| {
@@ -198,17 +222,7 @@ impl ReturnView {
 
         // values of all curves at the cursor
         let text = match nav::hover_x(&resp) {
-            Some(x) => {
-                let vals: Vec<String> = split
-                    .profiles
-                    .iter()
-                    .map(|p| match profile_value(p, x) {
-                        Some(v) => format!("{}: {v:.4}", p.label),
-                        None => format!("{}: -", p.label),
-                    })
-                    .collect();
-                format!("x = {x:.4} mm      J_s/I [1/mm]    {}", vals.join("     "))
-            }
+            Some(x) => readout_text(split, x, unit, uf),
             None => {
                 "Move the cursor over the plot for the current density of every curve at that x.".to_string()
             }
@@ -268,6 +282,23 @@ mod tests {
     }
 
     #[test]
+    fn readout_is_in_the_chosen_length_unit() {
+        let split = SplitSummary { profiles: vec![profile(false)], ..Default::default() };
+        // x = -1.5 mm, value 1.5 1/mm
+        let m = readout_text(&split, -1.5, "mm", 1.0);
+        assert_eq!(m, "x = -1.5000 mm      J_s/I [1/mm]    l: 1.500");
+        // in mil: x = -59.055 mil, and the density per mil is 0.0254 times the density per mm
+        let i = readout_text(&split, -1.5, "mil", 0.0254);
+        assert!(i.starts_with("x = -59.055 mil      J_s/I [1/mil]"), "{i}");
+        assert!(i.ends_with("l: 0.03810"), "{i}");
+        // outside the data and across a gap
+        assert!(readout_text(&split, 5.0, "mm", 1.0).ends_with("l: -"));
+        let mut broken = split.clone();
+        broken.profiles[0].break_at_zero = true;
+        assert!(readout_text(&broken, 0.0, "mm", 1.0).ends_with("l: -"));
+    }
+
+    #[test]
     fn fit_scales_y_to_the_curves_inside_the_visible_x_range() {
         let mut split = SplitSummary { profiles: vec![profile(false)], ..Default::default() };
         // profile: x [-2, -1, 1, 2], j [1, 2, 4, 1]
@@ -300,7 +331,7 @@ mod tests {
                 ..Default::default()
             };
             let _ = ctx.run_ui(input, |ui| {
-                egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &split, 0));
+                egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &split, 0, UnitSystem::Metric));
             });
         }
         let b = view.bounds.expect("bounds are stored after drawing");

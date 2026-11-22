@@ -13,8 +13,8 @@ pub struct Palette {
     upper: Color32,
     lower: Color32,
     custom: Color32,
-    copper: Color32,
-    copper_edge: Color32,
+    conductor: Color32,
+    conductor_edge: Color32,
     signal: Color32,
 }
 
@@ -27,8 +27,8 @@ pub fn palette(dark: bool) -> Palette {
             upper: Color32::from_rgb(0x6e, 0x5c, 0x28),
             lower: Color32::from_rgb(0x2d, 0x5c, 0x91),
             custom: Color32::from_rgb(0x3d, 0x6e, 0x35),
-            copper: Color32::from_rgb(0xa8, 0x58, 0x2c),
-            copper_edge: Color32::from_rgb(0xf0, 0xb0, 0x88),
+            conductor: Color32::from_rgb(0xa8, 0x58, 0x2c),
+            conductor_edge: Color32::from_rgb(0xf0, 0xb0, 0x88),
             signal: Color32::from_rgb(0x3f, 0x88, 0xe8),
         }
     } else {
@@ -39,8 +39,8 @@ pub fn palette(dark: bool) -> Palette {
             upper: Color32::from_rgb(0xe6, 0xc9, 0x7a),
             lower: Color32::from_rgb(0x7f, 0xb0, 0xe6),
             custom: Color32::from_rgb(0x93, 0xd1, 0x7f),
-            copper: Color32::from_rgb(0xd9, 0x82, 0x4f),
-            copper_edge: Color32::from_rgb(0x8a, 0x4a, 0x25),
+            conductor: Color32::from_rgb(0xd9, 0x82, 0x4f),
+            conductor_edge: Color32::from_rgb(0x8a, 0x4a, 0x25),
             signal: Color32::from_rgb(0x1f, 0x5f, 0xbf),
         }
     }
@@ -51,8 +51,8 @@ fn colour(c: SchemColor, p: &Palette) -> Color32 {
         SchemColor::UpperDielectric => p.upper,
         SchemColor::LowerDielectric => p.lower,
         SchemColor::CustomGap => p.custom,
-        SchemColor::Copper => p.copper,
-        SchemColor::CopperEdge => p.copper_edge,
+        SchemColor::Conductor => p.conductor,
+        SchemColor::ConductorEdge => p.conductor_edge,
         SchemColor::Signal => p.signal,
         SchemColor::Text => p.text,
         SchemColor::Muted => p.muted,
@@ -149,7 +149,7 @@ mod tests {
         assert_ne!(dark.background, light.background);
         assert!(dark.background.r() < 0x40 && light.background.r() > 0xd0);
         for (name, p) in [("dark", dark), ("light", light)] {
-            for c in [SchemColor::Text, SchemColor::Muted, SchemColor::Signal, SchemColor::CopperEdge] {
+            for c in [SchemColor::Text, SchemColor::Muted, SchemColor::Signal, SchemColor::ConductorEdge] {
                 assert!(contrast(colour(c, &p), p.background) > 0.25, "{name}: {c:?} on the background");
             }
             // texts are drawn over the dielectric sections (and the gap layer): enough contrast on each
@@ -160,8 +160,8 @@ mod tests {
                 }
             }
             // the signal trace must stand out from the copper next to it and from the gap material
-            assert!(contrast(colour(SchemColor::Signal, &p), colour(SchemColor::Copper, &p)) > 0.0);
-            assert_ne!(colour(SchemColor::Signal, &p), colour(SchemColor::Copper, &p));
+            assert!(contrast(colour(SchemColor::Signal, &p), colour(SchemColor::Conductor, &p)) > 0.0);
+            assert_ne!(colour(SchemColor::Signal, &p), colour(SchemColor::Conductor, &p));
         }
         // dark theme = darker sections, light theme = lighter sections
         let lum = |c: Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
@@ -169,7 +169,7 @@ mod tests {
             SchemColor::UpperDielectric,
             SchemColor::LowerDielectric,
             SchemColor::CustomGap,
-            SchemColor::Copper,
+            SchemColor::Conductor,
         ] {
             assert!(lum(colour(fill, &dark)) < lum(colour(fill, &light)), "{fill:?}");
         }

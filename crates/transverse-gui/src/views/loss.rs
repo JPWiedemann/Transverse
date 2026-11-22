@@ -3,10 +3,12 @@
 use std::collections::BTreeMap;
 
 use eframe::egui::{self, Color32, vec2};
-use egui_plot::{AxisHints, HPlacement, Line, LineStyle, Plot, PlotBounds, PlotPoints, VLine};
+use egui_plot::{
+    AxisHints, HPlacement, Line, LineStyle, Plot, PlotBounds, PlotPoints, VLine, uniform_grid_spacer,
+};
 use transverse_core::NP2DB;
 use transverse_core::losses::{FreqResponse, sweep};
-use transverse_core::units::{FREQ_UNITS, factor, format_g, parse_number};
+use transverse_core::units::{FREQ_UNITS, UnitSystem, factor, format_g, grid_steps_mm, parse_number};
 
 use super::legend::{self, LegendEntry};
 use super::nav;
@@ -18,6 +20,20 @@ const READOUT_HEIGHT: f32 = 44.0;
 /// Curve colours (matplotlib C0, C1; the total uses the text colour).
 const CONDUCTOR: Color32 = Color32::from_rgb(31, 119, 180);
 const DIELECTRIC: Color32 = Color32::from_rgb(255, 127, 14);
+
+/// What the loss tab shows.
+#[derive(Clone, Copy)]
+pub struct LossData<'a> {
+    pub freq: &'a dyn FreqResponse,
+    pub z0: f64,
+    /// Analysis frequency [Hz].
+    pub f_hz: f64,
+    /// The frequency currently typed in the parameter form [Hz], if it parses.
+    pub form_f_hz: Option<f64>,
+    pub units: UnitSystem,
+    /// Counts results; the plot resets its bounds when it changes.
+    pub generation: u64,
+}
 
 pub struct LossView {
     fmax_text: String,
@@ -32,6 +48,33 @@ impl Default for LossView {
     fn default() -> Self {
         Self { fmax_text: "20".into(), fmax_unit: "GHz".into(), pending: None, bounds: None }
     }
+}
+
+/// (label, factor from the plotted dB/mm) of the left axis and of the right axis.
+fn loss_axes(units: UnitSystem) -> (&'static str, f64, &'static str, f64) {
+    match units {
+        UnitSystem::Metric => ("Loss [dB/mm]", 1.0, "Loss [dB/in]", 25.4),
+        UnitSystem::Imperial => ("Loss [dB/in]", 25.4, "Loss [dB/mm]", 1.0),
+    }
+}
+
+/// Losses at `f_ghz` for the cursor readout, evaluated exactly: the unit system's unit first.
+pub fn readout_text(freq: &dyn FreqResponse, f_ghz: f64, units: UnitSystem) -> String {
+    let p = freq.at(f_ghz * 1e9);
+    let (ac, ad) = (p.alpha_c * NP2DB / 1000.0, p.alpha_d * NP2DB / 1000.0);
+    let (_, k1, _, k2) = loss_axes(units);
+    let (u1, u2) = match units {
+        UnitSystem::Metric => ("dB/mm", "dB/in"),
+        UnitSystem::Imperial => ("dB/in", "dB/mm"),
+    };
+    let v = |name: &str, db_mm: f64| format!("{name}: {:.5} {u1} ({:.4} {u2})", db_mm * k1, db_mm * k2);
+    format!(
+        "f = {} GHz      {}      {}      {}",
+        format_g(f_ghz),
+        v("Conductor", ac),
+        v("Dielectric", ad),
+        v("Total", ac + ad)
+    )
 }
 
 /// Top of the y range that fits the total loss between `f0_ghz` and `f1_ghz`: 5 % above the maximum.
@@ -92,16 +135,8 @@ impl LossView {
         ui.insert("fmax_unit".into(), self.fmax_unit.clone().into());
     }
 
-    /// `f_hz`: analysis frequency; `form_f_hz`: the frequency currently typed in the parameter form.
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        freq: &dyn FreqResponse,
-        z0: f64,
-        f_hz: f64,
-        form_f_hz: Option<f64>,
-        generation: u64,
-    ) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, data: &LossData<'_>) {
+        let LossData { freq, z0, f_hz, form_f_hz, units, generation } = *data;
         let floor = f_hz.max(form_f_hz.unwrap_or(0.0));
         let fmax = self.effective_fmax_hz(floor);
         ui.horizontal(|ui| {
@@ -142,16 +177,19 @@ impl LossView {
             PlotPoints::from(c.iter().map(|r| [r.0, pick(r)]).collect::<Vec<_>>())
         };
         let total_colour = ui.visuals().text_color();
+        // the primary (left) axis follows the unit system, the other one shows the second unit
+        let (left_label, k_left, right_label, k_right) = loss_axes(units);
         let plot = Plot::new(("loss", generation, fmax.to_bits()))
             .height((ui.available_height() - READOUT_HEIGHT).max(160.0))
             .x_axis_label("Frequency [GHz]")
             .custom_y_axes(vec![
-                AxisHints::new_y().label("Loss [dB/mm]"),
+                AxisHints::new_y().label(left_label).formatter(move |mark, _| format_g(mark.value * k_left)),
                 AxisHints::new_y()
-                    .label("Loss [dB/in]")
+                    .label(right_label)
                     .placement(HPlacement::Right)
-                    .formatter(|mark, _| format_g(mark.value * 25.4)),
+                    .formatter(move |mark, _| format_g(mark.value * k_right)),
             ])
+            .y_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, 1.0 / k_left)))
             .default_x_bounds(0.0, fmax / 1e9)
             .include_y(0.0);
         let resp = nav::configure(plot).show(ui, |pui| {
@@ -183,19 +221,7 @@ impl LossView {
 
         // loss at the cursor frequency, evaluated exactly (not read off the sampled curves)
         let text = match nav::hover_x(&resp).filter(|x| *x > 0.0) {
-            Some(x) => {
-                let p = freq.at(x * 1e9);
-                let (ac, ad) = (p.alpha_c * NP2DB / 1000.0, p.alpha_d * NP2DB / 1000.0);
-                let v =
-                    |name: &str, db_mm: f64| format!("{name}: {db_mm:.5} dB/mm ({:.4} dB/in)", db_mm * 25.4);
-                format!(
-                    "f = {} GHz      {}      {}      {}",
-                    format_g(x),
-                    v("Conductor", ac),
-                    v("Dielectric", ad),
-                    v("Total", ac + ad)
-                )
-            }
+            Some(x) => readout_text(freq, x, units),
             None => "Move the cursor over the plot for the losses at that frequency.".to_string(),
         };
         ui.add_sized(vec2(ui.available_width(), READOUT_HEIGHT - 4.0), egui::Label::new(text).wrap());
@@ -220,6 +246,26 @@ mod tests {
     }
 
     #[test]
+    fn readout_leads_with_the_unit_of_the_selected_system() {
+        let m = LossModel { z0: 50.0, eeff: 3.5, g_over_omega: 1e-12, dzdn: 1e6, sigma: 5.8e7, rq_mm: 0.0 };
+        let metric = readout_text(&m, 2.0, UnitSystem::Metric);
+        let imperial = readout_text(&m, 2.0, UnitSystem::Imperial);
+        assert!(metric.starts_with("f = 2 GHz") && metric.contains("Total: "), "{metric}");
+        let p = m.at(2e9);
+        let total_mm = (p.alpha_c + p.alpha_d) * NP2DB / 1000.0;
+        assert!(
+            metric.contains(&format!("Total: {:.5} dB/mm ({:.4} dB/in)", total_mm, total_mm * 25.4)),
+            "{metric}"
+        );
+        assert!(
+            imperial.contains(&format!("Total: {:.5} dB/in ({:.4} dB/mm)", total_mm * 25.4, total_mm)),
+            "{imperial}"
+        );
+        assert_eq!(loss_axes(UnitSystem::Imperial).0, "Loss [dB/in]");
+        assert_eq!(loss_axes(UnitSystem::Metric).2, "Loss [dB/in]");
+    }
+
+    #[test]
     fn the_plot_reports_its_bounds_so_fit_can_use_them() {
         use eframe::egui::{Pos2, Rect, vec2};
         let ctx = egui::Context::default();
@@ -231,7 +277,19 @@ mod tests {
                 ..Default::default()
             };
             let _ = ctx.run_ui(input, |ui| {
-                egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &m, 50.0, 1e9, None, 0));
+                egui::CentralPanel::default().show(ui, |ui| {
+                    view.ui(
+                        ui,
+                        &LossData {
+                            freq: &m,
+                            z0: 50.0,
+                            f_hz: 1e9,
+                            form_f_hz: None,
+                            units: UnitSystem::Metric,
+                            generation: 0,
+                        },
+                    )
+                });
             });
         }
         let b = view.bounds.expect("bounds are stored after drawing");

@@ -44,6 +44,31 @@ impl UnitSystem {
         }
     }
 
+    /// Base unit of the electric field strength: V/m, or V/mil (= kV/in), the unit of dielectric
+    /// strength in the US.
+    pub fn field_unit(self) -> &'static str {
+        match self {
+            Self::Metric => "V/m",
+            Self::Imperial => "V/mil",
+        }
+    }
+
+    /// Unit of field strengths on a dB scale: dBV/m, dBV/mil.
+    pub fn field_db_unit(self) -> &'static str {
+        match self {
+            Self::Metric => "dBV/m",
+            Self::Imperial => "dBV/mil",
+        }
+    }
+
+    /// Value in [`Self::field_unit`] per V/m (1 V/mil = 39 370 V/m).
+    pub fn field_per_v_per_m(self) -> f64 {
+        match self {
+            Self::Metric => 1.0,
+            Self::Imperial => 0.0254e-3, // 1 V/m = 0.0254e-3 V/mil
+        }
+    }
+
     /// Prefixes the automatic choice picks from, smallest first: (symbol, factor to mm).
     pub fn auto_units(self) -> [(&'static str, f64); 4] {
         match self {
@@ -61,6 +86,26 @@ pub fn auto_length_unit(system: UnitSystem, span_mm: f64) -> (&'static str, f64)
         return units[1];
     }
     units.into_iter().rev().find(|(_, f)| span_mm / f >= 1.0).unwrap_or(units[0])
+}
+
+/// SI prefix for a field strength given in the base unit: the largest prefix in which the value is
+/// at least 1 (µ ... G). Returns (prefix, factor from the base unit to the prefixed unit).
+/// Zero and invalid values keep the base unit.
+pub fn field_prefix(value_in_base_unit: f64) -> (&'static str, f64) {
+    const PREFIXES: [(&str, f64); 6] =
+        [("G", 1e-9), ("M", 1e-6), ("k", 1e-3), ("", 1.0), ("m", 1e3), ("µ", 1e6)];
+    let v = value_in_base_unit.abs();
+    if !v.is_finite() || v == 0.0 {
+        return ("", 1.0);
+    }
+    PREFIXES.into_iter().find(|(_, m)| v * m >= 1.0 - 1e-9).unwrap_or(("µ", 1e6))
+}
+
+/// "15.34 kV/m" for a field strength given in V/m, in the unit system's base unit with a suitable prefix.
+pub fn format_field(system: UnitSystem, e_v_per_m: f64) -> String {
+    let base = e_v_per_m * system.field_per_v_per_m();
+    let (prefix, mult) = field_prefix(base);
+    format!("{} {prefix}{}", format_sig(base * mult, 4), system.field_unit())
 }
 
 /// Smallest 1, 2 or 5 times a power of ten that is >= `x` (x > 0).
@@ -87,8 +132,13 @@ pub fn format_sig(v: f64, digits: usize) -> String {
     if v == 0.0 || !v.is_finite() {
         return format!("{v}");
     }
-    let decimals = (digits as i32 - 1 - v.abs().log10().floor() as i32).clamp(0, 12) as usize;
-    format!("{v:.decimals$}")
+    if v.abs() >= 10f64.powi(digits as i32 - 1) {
+        return format!("{v:.0}"); // large values keep all integer digits
+    }
+    // round to the significant digits first: 0.99999999 must read "1.000", not "1.0000"
+    let r: f64 = format!("{:.*e}", digits.saturating_sub(1), v).parse().unwrap_or(v);
+    let decimals = (digits as i32 - 1 - r.abs().log10().floor() as i32).clamp(0, 12) as usize;
+    format!("{r:.decimals$}")
 }
 
 /// Format a value like Python's `{:.6g}`: six significant digits, no trailing zeros.
@@ -140,6 +190,37 @@ mod tests {
     }
 
     #[test]
+    fn field_units_prefixes_and_formatting() {
+        // V/mil = kV/in = 39 370 V/m
+        assert!((UnitSystem::Imperial.field_per_v_per_m() * 39_370.078_74 - 1.0).abs() < 1e-6);
+        assert_eq!(UnitSystem::Metric.field_unit(), "V/m");
+        assert_eq!(UnitSystem::Imperial.field_db_unit(), "dBV/mil");
+        for (v, want) in [
+            (3.0e9, ("G", 1e-9)),
+            (3.0e6, ("M", 1e-6)),
+            (15340.0, ("k", 1e-3)),
+            (1000.0, ("k", 1e-3)),
+            (999.0, ("", 1.0)),
+            (12.5, ("", 1.0)),
+            (0.4, ("m", 1e3)),
+            (2e-4, ("µ", 1e6)),
+            (1e-9, ("µ", 1e6)),
+            (0.0, ("", 1.0)),
+            (f64::NAN, ("", 1.0)),
+            (-2500.0, ("k", 1e-3)),
+        ] {
+            assert_eq!(field_prefix(v), want, "{v}");
+        }
+        assert_eq!(format_field(UnitSystem::Metric, 15340.2), "15.34 kV/m");
+        assert_eq!(format_field(UnitSystem::Metric, 333.33), "333.3 V/m");
+        assert_eq!(format_field(UnitSystem::Metric, 2.5e6), "2.500 MV/m");
+        // 39 370 V/m is 1 V/mil; a dielectric-strength style value of 500 V/mil is 19.7 MV/m
+        assert_eq!(format_field(UnitSystem::Imperial, 39_370.078_74), "1.000 V/mil");
+        assert_eq!(format_field(UnitSystem::Imperial, 500.0 * 39_370.078_74), "500.0 V/mil");
+        assert_eq!(format_field(UnitSystem::Imperial, 3_937.0), "100.0 mV/mil");
+    }
+
+    #[test]
     fn nice_steps_and_grid_levels() {
         for (x, want) in [
             (0.8, 1.0),
@@ -182,6 +263,11 @@ mod tests {
         assert_eq!(format_sig(-0.00123456, 3), "-0.00123");
         assert_eq!(format_sig(0.0, 5), "0");
         assert_eq!(format_sig(f64::NAN, 5), "NaN");
+        // rounding can change the magnitude
+        assert_eq!(format_sig(0.999_999_99, 4), "1.000");
+        assert_eq!(format_sig(9.999_96, 4), "10.00");
+        assert_eq!(format_sig(99_999.9, 4), "100000");
+        assert_eq!(format_sig(999.96, 4), "1000");
     }
 
     #[test]

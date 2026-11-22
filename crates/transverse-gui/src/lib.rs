@@ -3,6 +3,7 @@
 pub mod colormap;
 mod colormap_data;
 pub mod form;
+pub mod prefs;
 pub mod raster;
 pub mod settings;
 pub mod worker;

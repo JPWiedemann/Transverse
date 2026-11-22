@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use crate::views::cross_section;
 use crate::views::field::FieldView;
-use crate::views::loss::LossView;
+use crate::views::loss::{LossData, LossView};
 use crate::views::return_current::ReturnView;
 use eframe::egui::{self, Color32, RichText};
-use transverse_core::units::parse_number;
+use transverse_core::units::{UnitSystem, parse_number};
 use transverse_gui::form::{FieldState, FormState, unit_options};
+use transverse_gui::prefs::{Prefs, ThemeChoice};
 use transverse_gui::settings::{self, LineSettings, Settings};
 use transverse_gui::worker::{Job, Msg, Worker};
 use transverse_lines::model::{Analysis, LineModel, ParamKind, ParamSpec, is_enabled};
@@ -21,6 +22,14 @@ enum Tab {
     Field,
     ReturnCurrent,
     Loss,
+}
+
+fn egui_theme(t: ThemeChoice) -> egui::ThemePreference {
+    match t {
+        ThemeChoice::System => egui::ThemePreference::System,
+        ThemeChoice::Light => egui::ThemePreference::Light,
+        ThemeChoice::Dark => egui::ThemePreference::Dark,
+    }
 }
 
 /// Width of all entry boxes [points]: room for about 12 characters.
@@ -46,6 +55,8 @@ pub struct App {
     result: Option<Analysis>,
     field_view: FieldView,
     loss_view: LossView,
+    /// Unit system and theme, applied to all tabs.
+    prefs: Prefs,
     return_view: ReturnView,
     /// Counts results; plots reset their bounds when a new one arrives.
     generation: u64,
@@ -62,12 +73,14 @@ fn entry(ui: &mut egui::Ui, text: &mut String, enabled: bool) {
 }
 
 impl App {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings_path = settings::default_path();
         let (settings, note) = settings::load(&settings_path);
         let model = transverse_lines::find_model(&settings.line_type)
             .unwrap_or_else(|| transverse_lines::registry().remove(0));
         let mut form = FormState::new(&*model);
+        let prefs = Prefs::load(&settings.ui);
+        cc.egui_ctx.set_theme(egui_theme(prefs.theme));
         let mut field_view = FieldView::default();
         field_view.load(&settings.ui);
         let mut loss_view = LossView::default();
@@ -95,6 +108,7 @@ impl App {
             result: None,
             field_view,
             loss_view,
+            prefs,
             return_view: ReturnView::default(),
             generation: 0,
             tab: Tab::CrossSection,
@@ -108,6 +122,43 @@ impl App {
         self.form.to_params(&*self.model).ok()?.num(spec.key).ok()
     }
 
+    /// Global preferences: unit system (all tabs) and colour theme.
+    fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
+        let before = self.prefs;
+        ui.label("Units");
+        egui::ComboBox::from_id_salt("unit_system")
+            .selected_text(self.prefs.units.label())
+            .width(80.0)
+            .show_ui(ui, |ui| {
+                for u in [UnitSystem::Metric, UnitSystem::Imperial] {
+                    ui.selectable_value(&mut self.prefs.units, u, u.label());
+                }
+            })
+            .response
+            .on_hover_text("Lengths on the plot axes and readouts, losses and field strengths");
+        ui.add_space(12.0);
+        let detected = match ui.ctx().system_theme() {
+            Some(egui::Theme::Dark) => "dark",
+            Some(egui::Theme::Light) => "light",
+            None => "not reported by the window system",
+        };
+        ui.label("Theme");
+        egui::ComboBox::from_id_salt("theme")
+            .selected_text(self.prefs.theme.label())
+            .width(80.0)
+            .show_ui(ui, |ui| {
+                for t in ThemeChoice::ALL {
+                    ui.selectable_value(&mut self.prefs.theme, t, t.label());
+                }
+            })
+            .response
+            .on_hover_text(format!("System follows the desktop theme. Detected: {detected}."));
+        if self.prefs != before {
+            ui.ctx().set_theme(egui_theme(self.prefs.theme));
+            self.save_settings();
+        }
+    }
+
     fn busy(&self) -> bool {
         self.worker.is_some()
     }
@@ -118,6 +169,7 @@ impl App {
         ls.extra.insert("synth_target".into(), target.into());
         ls.extra.insert("z_target".into(), self.z_target.clone().into());
         self.field_view.save(&mut self.settings.ui);
+        self.prefs.save(&mut self.settings.ui);
         self.loss_view.save(&mut self.settings.ui);
         self.settings.line_type = self.model.id().to_string();
         self.settings.lines.insert(self.model.id().to_string(), ls);
@@ -346,7 +398,7 @@ impl App {
             },
             Tab::Field => {
                 match self.result.as_ref().and_then(|a| a.field.as_ref().map(|f| (f, a.accuracy.as_ref()))) {
-                    Some((f, acc)) => self.field_view.ui(ui, f, acc),
+                    Some((f, acc)) => self.field_view.ui(ui, f, acc, self.prefs.units),
                     None => {
                         ui.label("No result yet. Press Analyze or Synthesize.");
                     }
@@ -359,7 +411,7 @@ impl App {
                 }
             },
             Tab::ReturnCurrent => match self.result.as_ref().and_then(|a| a.modes.first()?.split.as_ref()) {
-                Some(split) => self.return_view.ui(ui, split, self.generation),
+                Some(split) => self.return_view.ui(ui, split, self.generation, self.prefs.units),
                 None => {
                     ui.label("No result yet. Press Analyze or Synthesize.");
                 }
@@ -367,7 +419,15 @@ impl App {
             Tab::Loss => match &self.result {
                 Some(a) => {
                     let live_f = self.form_frequency();
-                    self.loss_view.ui(ui, &*a.freq, a.modes[0].z0, a.modes[0].f_hz, live_f, self.generation)
+                    let data = LossData {
+                        freq: &*a.freq,
+                        z0: a.modes[0].z0,
+                        f_hz: a.modes[0].f_hz,
+                        form_f_hz: live_f,
+                        units: self.prefs.units,
+                        generation: self.generation,
+                    };
+                    self.loss_view.ui(ui, &data)
                 }
                 None => {
                     ui.label("No result yet. Press Analyze or Synthesize.");
@@ -386,6 +446,10 @@ impl eframe::App for App {
         if self.busy() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
+
+        egui::Panel::top("toolbar").show(ui, |ui| {
+            ui.horizontal(|ui| self.toolbar_ui(ui));
+        });
 
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {

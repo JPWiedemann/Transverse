@@ -11,10 +11,15 @@ pub mod return_current;
 mod tests {
     use eframe::egui::{self, Pos2, Rect, vec2};
     use transverse_core::Ctl;
+    use transverse_core::units::UnitSystem;
     use transverse_lines::cpwg_inner::CpwgInner;
     use transverse_lines::model::{Analysis, LineModel, ParamValue};
 
-    use super::{cross_section, loss::LossView, return_current::ReturnView};
+    use super::{
+        cross_section,
+        loss::{LossData, LossView},
+        return_current::ReturnView,
+    };
 
     fn frame(ctx: &egui::Context, mut f: impl FnMut(&mut egui::Ui)) {
         let input = egui::RawInput {
@@ -42,7 +47,7 @@ mod tests {
             let split = a.modes[0].split.as_ref().unwrap();
             let mut view = ReturnView::default();
             for _ in 0..2 {
-                frame(&ctx, |ui| view.ui(ui, split, gen_ as u64));
+                frame(&ctx, |ui| view.ui(ui, split, gen_ as u64, UnitSystem::Metric));
             }
         }
     }
@@ -54,18 +59,54 @@ mod tests {
         let mut view = LossView::default();
         let m = &a.modes[0];
         for _ in 0..2 {
-            frame(&ctx, |ui| view.ui(ui, &*a.freq, m.z0, m.f_hz, None, 0));
+            frame(&ctx, |ui| {
+                view.ui(
+                    ui,
+                    &LossData {
+                        freq: &*a.freq,
+                        z0: m.z0,
+                        f_hz: m.f_hz,
+                        form_f_hz: None,
+                        units: UnitSystem::Metric,
+                        generation: 0,
+                    },
+                )
+            });
         }
         let mut ui_state = std::collections::BTreeMap::new();
         ui_state.insert("fmax_text".into(), "500".into());
         ui_state.insert("fmax_unit".into(), "MHz".into());
         view.load(&ui_state); // analysis frequency (1 GHz) is now beyond the entry: the plot is extended
         for _ in 0..2 {
-            frame(&ctx, |ui| view.ui(ui, &*a.freq, m.z0, m.f_hz, None, 0));
+            frame(&ctx, |ui| {
+                view.ui(
+                    ui,
+                    &LossData {
+                        freq: &*a.freq,
+                        z0: m.z0,
+                        f_hz: m.f_hz,
+                        form_f_hz: None,
+                        units: UnitSystem::Metric,
+                        generation: 0,
+                    },
+                )
+            });
         }
         // a frequency typed in the form (but not analysed yet) extends the plot too
         for _ in 0..2 {
-            frame(&ctx, |ui| view.ui(ui, &*a.freq, m.z0, m.f_hz, Some(30e9), 0));
+            frame(&ctx, |ui| {
+                view.ui(
+                    ui,
+                    &LossData {
+                        freq: &*a.freq,
+                        z0: m.z0,
+                        f_hz: m.f_hz,
+                        form_f_hz: Some(30e9),
+                        units: UnitSystem::Imperial,
+                        generation: 0,
+                    },
+                )
+            });
         }
     }
 

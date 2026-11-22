@@ -14,7 +14,9 @@ use eframe::egui::{
 use egui_plot::{Plot, PlotBounds, PlotImage, PlotPoint, uniform_grid_spacer};
 use transverse_core::postproc::EField;
 use transverse_core::quasistatic::Accuracy;
-use transverse_core::units::{UnitSystem, auto_length_unit, format_sig, grid_steps_mm};
+use transverse_core::units::{
+    UnitSystem, auto_length_unit, field_prefix, format_field, format_g, format_sig, grid_steps_mm,
+};
 use transverse_gui::raster::{FieldMode, Legend, RasterSpec, nice_ticks, probe, render};
 use transverse_lines::model::{Bounds, FieldData};
 
@@ -35,7 +37,7 @@ const READOUT_HEIGHT: f32 = 24.0;
 type Polylines = Vec<Vec<[f64; 2]>>;
 
 struct Render {
-    key: (u64, FieldMode, u64),
+    key: (u64, FieldMode, u64, UnitSystem),
     /// Visible bounds this image was rendered for.
     visible: Bounds,
     /// Region the image was asked to cover (visible plus margin); the grid may end inside it.
@@ -53,8 +55,6 @@ pub struct FieldView {
     pub show_eq: bool,
     pub show_mesh: bool,
     pub db_range: f64,
-    /// Metric or imperial lengths on the axes and in the readout (prefix chosen automatically).
-    pub units: UnitSystem,
     generation: u64,
     /// Visible bounds of the plot as of the last frame.
     plot_bounds: Option<Bounds>,
@@ -74,7 +74,6 @@ impl Default for FieldView {
             show_eq: true,
             show_mesh: false,
             db_range: 40.0,
-            units: UnitSystem::Metric,
             generation: 0,
             plot_bounds: None,
             pending_view: None,
@@ -99,6 +98,53 @@ fn box_zoom_bounds(a: [f64; 2], b: [f64; 2], frame: Vec2, points_per_unit: f64) 
     let (bw, bh) = if w / h < ratio { (h * ratio, h) } else { (w, w / ratio) };
     let (cx, cy) = (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]));
     Some([cx - 0.5 * bw, cx + 0.5 * bw, cy - 0.5 * bh, cy + 0.5 * bh])
+}
+
+/// Colour bar title and the factor from the legend's values to the displayed ones: linear field
+/// scales get an SI prefix chosen from the top of the scale (kV/m, MV/m, V/mil, ...), dB scales keep
+/// their unit (dBV/m).
+fn colourbar_scale(l: &Legend) -> (String, f64) {
+    match l.field_base {
+        Some(base) => {
+            let (prefix, mult) = field_prefix(l.vmax);
+            (format!("|E| [{prefix}{base}]"), mult)
+        }
+        None => (l.label.clone(), 1.0),
+    }
+}
+
+/// Text under the plot for the cursor at (`x_mm`, `y_mm`).
+fn readout_text(
+    f: &FieldData,
+    e: &EField,
+    x_mm: f64,
+    y_mm: f64,
+    unit: &str,
+    unit_f: f64,
+    system: UnitSystem,
+) -> String {
+    let mut s =
+        format!("x = {} {unit}   y = {} {unit}", format_sig(x_mm / unit_f, 5), format_sig(y_mm / unit_f, 5));
+    match probe(f, e, x_mm, y_mm) {
+        Some(p) if p.in_conductor => s += "   (conductor)",
+        Some(p) => {
+            s += &format!("   V = {} V", format_sig(p.v, 4));
+            if p.e.is_finite() {
+                // p.e is in V/m (SI); show it in the unit system's field unit and as a dB value
+                let db = 20.0 * (p.e * system.field_per_v_per_m()).max(1e-30).log10();
+                s += &format!(
+                    "   |E| = {} ({db:.1} {})   er = {}",
+                    format_field(system, p.e),
+                    system.field_db_unit(),
+                    p.er
+                );
+            } else {
+                s += &format!("   er = {}", p.er);
+            }
+        }
+        None => {}
+    }
+    s
 }
 
 fn expand(b: Bounds, frac: f64) -> Bounds {
@@ -128,9 +174,6 @@ impl FieldView {
         let flag = |k: &str, d: bool| ui.get(k).and_then(|v| v.as_bool()).unwrap_or(d);
         self.show_eq = flag("show_eq", self.show_eq);
         self.show_mesh = flag("show_mesh", self.show_mesh);
-        if let Some(u) = ui.get("length_system").and_then(|v| v.as_str()).and_then(UnitSystem::from_key) {
-            self.units = u;
-        }
         if let Some(d) = ui.get("db_range").and_then(|v| v.as_f64()).filter(|d| (5.0..=200.0).contains(d)) {
             self.db_range = d;
         }
@@ -141,16 +184,15 @@ impl FieldView {
         ui.insert("show_eq".into(), self.show_eq.into());
         ui.insert("show_mesh".into(), self.show_mesh.into());
         ui.insert("db_range".into(), self.db_range.into());
-        ui.insert("length_system".into(), self.units.key().into());
     }
 
     /// Unit (symbol, factor to mm) for lengths, chosen from the size of the visible region.
-    fn length_unit(&self, f: &FieldData) -> (&'static str, f64) {
+    fn length_unit(&self, f: &FieldData, units: UnitSystem) -> (&'static str, f64) {
         let b = self.plot_bounds.unwrap_or(f.view_zoom);
-        auto_length_unit(self.units, (b[1] - b[0]).max(b[3] - b[2]))
+        auto_length_unit(units, (b[1] - b[0]).max(b[3] - b[2]))
     }
 
-    fn needs_render(&self, key: (u64, FieldMode, u64), visible: Bounds) -> bool {
+    fn needs_render(&self, key: (u64, FieldMode, u64, UnitSystem), visible: Bounds) -> bool {
         let Some(r) = &self.render else { return true };
         if r.key != key || !contains(r.covered, visible) {
             return true;
@@ -161,7 +203,14 @@ impl FieldView {
 
     /// Build whatever the current options need and the caches do not have yet.
     /// `plot_px` is the plot size in screen pixels (sets the image resolution).
-    fn update_caches(&mut self, ctx: &egui::Context, f: &FieldData, visible: Bounds, plot_px: Vec2) {
+    fn update_caches(
+        &mut self,
+        ctx: &egui::Context,
+        f: &FieldData,
+        visible: Bounds,
+        plot_px: Vec2,
+        units: UnitSystem,
+    ) {
         let gen_ = self.generation;
         if self.e.as_ref().is_none_or(|(g, _)| *g != gen_) {
             self.e = Some((gen_, f.e_field(false)));
@@ -170,7 +219,7 @@ impl FieldView {
             let segs = f.equipotentials(&EQUIPOTENTIALS).into_iter().flat_map(|(_, s)| s).collect();
             self.eq = Some((gen_, segs));
         }
-        let key = (gen_, self.mode, if self.mode.is_db() { self.db_range.to_bits() } else { 0 });
+        let key = (gen_, self.mode, if self.mode.is_db() { self.db_range.to_bits() } else { 0 }, units);
         if !self.needs_render(key, visible) {
             return;
         }
@@ -184,6 +233,7 @@ impl FieldView {
                 mode: self.mode,
                 view: want,
                 scale_view: f.view_zoom,
+                system: units,
                 db_range: self.db_range,
                 width,
             },
@@ -221,7 +271,7 @@ impl FieldView {
         });
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, f: &FieldData, acc: Option<&Accuracy>) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, f: &FieldData, acc: Option<&Accuracy>, units: UnitSystem) {
         // ---- controls
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("field_mode").selected_text(self.mode.label()).width(190.0).show_ui(
@@ -244,14 +294,6 @@ impl FieldView {
                 ui.label("Range");
                 ui.add(egui::DragValue::new(&mut self.db_range).range(5.0..=200.0).speed(0.5).suffix(" dB"));
             }
-            egui::ComboBox::from_id_salt("length_system")
-                .selected_text(self.units.label())
-                .width(80.0)
-                .show_ui(ui, |ui| {
-                    for u in [UnitSystem::Metric, UnitSystem::Imperial] {
-                        ui.selectable_value(&mut self.units, u, u.label());
-                    }
-                });
             if ui.button("Signal region").clicked() {
                 self.pending_view = Some(f.view_zoom);
             }
@@ -260,7 +302,7 @@ impl FieldView {
             }
         });
         let show_mesh = self.show_mesh || self.mode == FieldMode::Mesh;
-        let (unit, unit_f) = self.length_unit(f);
+        let (unit, unit_f) = self.length_unit(f, units);
 
         // title: always two lines, so showing the mesh info does not resize the plot
         let mut title = format!("{}  -  1 V on signal, Z0 = {:.2} Ohm\n", self.mode.label(), f.z0);
@@ -285,7 +327,7 @@ impl FieldView {
         let plot_w = (avail.x - BAR_WIDTH).max(200.0);
         let ppp = ui.ctx().pixels_per_point();
         let visible = self.plot_bounds.unwrap_or(f.view_zoom);
-        self.update_caches(ui.ctx(), f, visible, vec2(plot_w, plot_h) * ppp);
+        self.update_caches(ui.ctx(), f, visible, vec2(plot_w, plot_h) * ppp, units);
 
         let (gen_, initial) = (self.generation, f.view_zoom);
         let pending = self.pending_view.take();
@@ -441,28 +483,7 @@ impl FieldView {
             // cursor readout
             if let Some(pos) = resp.response.hover_pos().filter(|p| frame_rect.contains(*p)) {
                 let v = tr.value_from_position(pos);
-                readout = format!(
-                    "x = {} {unit}   y = {} {unit}",
-                    format_sig(v.x / unit_f, 5),
-                    format_sig(v.y / unit_f, 5)
-                );
-                match probe(f, e, v.x, v.y) {
-                    Some(p) if p.in_conductor => readout += "   (conductor)",
-                    Some(p) => {
-                        readout += &format!("   V = {:.4} V", p.v);
-                        if p.e.is_finite() {
-                            readout += &format!(
-                                "   |E| = {:.4} V/mm ({:.1} dB)   er = {}",
-                                p.e,
-                                20.0 * p.e.max(1e-30).log10(),
-                                p.er
-                            );
-                        } else {
-                            readout += &format!("   er = {}", p.er);
-                        }
-                    }
-                    None => {}
-                }
+                readout = readout_text(f, e, v.x, v.y, unit, unit_f, units);
             }
 
             // colour bar next to the plot, as tall as the plot frame
@@ -480,8 +501,10 @@ impl FieldView {
                     Color32::WHITE,
                 );
                 let text_col = ui.visuals().text_color();
-                for t in nice_ticks(l.vmin, l.vmax, 6) {
-                    let y = bar_rect.bottom() - ((t - l.vmin) / (l.vmax - l.vmin)) as f32 * bar_rect.height();
+                let (title, mult) = colourbar_scale(l);
+                for t in nice_ticks(l.vmin * mult, l.vmax * mult, 6) {
+                    let y = bar_rect.bottom()
+                        - ((t / mult - l.vmin) / (l.vmax - l.vmin)) as f32 * bar_rect.height();
                     p.line_segment(
                         [Pos2::new(bar_rect.right(), y), Pos2::new(bar_rect.right() + 4.0, y)],
                         Stroke::new(1.0, text_col),
@@ -489,7 +512,7 @@ impl FieldView {
                     p.text(
                         Pos2::new(bar_rect.right() + 6.0, y),
                         Align2::LEFT_CENTER,
-                        format!("{t:.4}").trim_end_matches('0').trim_end_matches('.'),
+                        format_g(t),
                         FontId::proportional(11.0),
                         text_col,
                     );
@@ -497,7 +520,7 @@ impl FieldView {
                 p.text(
                     Pos2::new(bar_rect.left(), bar_rect.top() - 4.0),
                     Align2::LEFT_BOTTOM,
-                    &l.label,
+                    &title,
                     FontId::proportional(10.0),
                     text_col,
                 );
@@ -546,7 +569,7 @@ mod tests {
             input.events.push(egui::Event::PointerMoved(p));
         }
         let _ = ctx.run_ui(input, |ui| {
-            egui::CentralPanel::default().show(ui, |ui| view.ui(ui, f, acc));
+            egui::CentralPanel::default().show(ui, |ui| view.ui(ui, f, acc, UnitSystem::Metric));
         });
     }
 
@@ -619,8 +642,10 @@ mod tests {
         assert!(view.needs_render(key, zoom(v, 0.5)));
         assert!(view.needs_render(key, zoom(v, 1.45)));
         // other options re-render too
-        assert!(view.needs_render((key.0, FieldMode::Potential, 0), v));
-        assert!(view.needs_render((key.0 + 1, key.1, key.2), v));
+        assert!(view.needs_render((key.0, FieldMode::Potential, 0, key.3), v));
+        assert!(view.needs_render((key.0 + 1, key.1, key.2, key.3), v));
+        // the unit system changes the colour scale (V/m or V/mil)
+        assert!(view.needs_render((key.0, key.1, key.2, UnitSystem::Imperial), v));
 
         // the next frame renders for the bounds the plot reported
         let target = zoom(v, 0.4);
@@ -740,7 +765,7 @@ mod tests {
             ..Default::default()
         };
         let _ = ctx.run_ui(input, |ui| {
-            egui::CentralPanel::default().show(ui, |ui| view.ui(ui, f, Some(acc)));
+            egui::CentralPanel::default().show(ui, |ui| view.ui(ui, f, Some(acc), UnitSystem::Metric));
         });
     }
 
@@ -787,9 +812,8 @@ mod tests {
         view.new_result();
         frames(&ctx, &mut view, &f, &acc, 3);
         // the signal region is about 1.3 mm wide
-        assert_eq!(view.length_unit(&f).0, "mm");
-        view.units = UnitSystem::Imperial;
-        assert_eq!(view.length_unit(&f).0, "mil");
+        assert_eq!(view.length_unit(&f, UnitSystem::Metric).0, "mm");
+        assert_eq!(view.length_unit(&f, UnitSystem::Imperial).0, "mil");
         // zooming in changes the prefix, in both systems
         for (b, metric, imperial) in [
             ([-0.02, 0.02, -0.01, 0.01], "µm", "mil"),
@@ -799,10 +823,8 @@ mod tests {
             ([-500.0, 500.0, -300.0, 300.0], "m", "ft"),
         ] {
             view.plot_bounds = Some(b);
-            view.units = UnitSystem::Metric;
-            assert_eq!(view.length_unit(&f).0, metric, "{b:?}");
-            view.units = UnitSystem::Imperial;
-            assert_eq!(view.length_unit(&f).0, imperial, "{b:?}");
+            assert_eq!(view.length_unit(&f, UnitSystem::Metric).0, metric, "{b:?}");
+            assert_eq!(view.length_unit(&f, UnitSystem::Imperial).0, imperial, "{b:?}");
         }
     }
 
@@ -815,8 +837,16 @@ mod tests {
         frames(&ctx, &mut view, &f, &acc, 4);
         let before = view.plot_bounds.unwrap();
         for k in 0..6 {
-            view.units = if k % 2 == 0 { UnitSystem::Imperial } else { UnitSystem::Metric };
-            frames(&ctx, &mut view, &f, &acc, 2);
+            let units = if k % 2 == 0 { UnitSystem::Imperial } else { UnitSystem::Metric };
+            for _ in 0..2 {
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 700.0))),
+                    ..Default::default()
+                };
+                let _ = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &f, Some(&acc), units));
+                });
+            }
             assert!(
                 close(view.plot_bounds.unwrap(), before),
                 "switch {k}: {:?} vs {before:?}",
@@ -826,13 +856,70 @@ mod tests {
     }
 
     #[test]
+    fn the_readout_shows_field_strength_in_the_unit_system() {
+        let (f, _) = analysis(false);
+        let e = f.e_field(false);
+        // a point in the dielectric between the signal trace and the upper plane
+        let (x, y) = (0.0, 0.1);
+        let p = probe(&f, &e, x, y).unwrap();
+        assert!(p.e.is_finite() && p.e > 1e3, "|E| in V/m: {}", p.e);
+        let metric = readout_text(&f, &e, x, y, "mm", 1.0, UnitSystem::Metric);
+        let imperial = readout_text(&f, &e, x, y, "mil", 0.0254, UnitSystem::Imperial);
+        // never the old V/mm
+        assert!(!metric.contains("V/mm") && !imperial.contains("V/mm"), "{metric} | {imperial}");
+        assert!(metric.contains(&format!("|E| = {} (", format_field(UnitSystem::Metric, p.e))), "{metric}");
+        assert!(metric.contains("kV/m") && metric.contains("dBV/m)"), "{metric}");
+        assert!(
+            imperial.contains(&format!("|E| = {} (", format_field(UnitSystem::Imperial, p.e))),
+            "{imperial}"
+        );
+        assert!(imperial.contains("V/mil") && imperial.contains("dBV/mil)"), "{imperial}");
+        assert!(
+            metric.starts_with("x = 0 mm   y = 0.10000 mm")
+                && imperial.starts_with("x = 0 mil   y = 3.9370 mil"),
+            "{metric} | {imperial}"
+        );
+        // the two dB values differ by 20 log10(2.54e-5) = -91.9 dB
+        let db =
+            |t: &str| -> f64 { t.split(" (").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap() };
+        assert!((db(&imperial) - db(&metric) + 91.9).abs() < 0.11, "{metric} | {imperial}");
+        // inside a conductor (the signal trace at y = 0.009 mm) there is no field value
+        let c = readout_text(&f, &e, 0.0, 0.009, "mm", 1.0, UnitSystem::Metric);
+        assert!(c.ends_with("(conductor)") && !c.contains("|E|"), "{c}");
+        // outside the grid only the position is shown
+        assert_eq!(
+            readout_text(&f, &e, 99.0, 0.0, "mm", 1.0, UnitSystem::Metric),
+            "x = 99.000 mm   y = 0 mm"
+        );
+    }
+
+    #[test]
+    fn the_colour_bar_gets_a_prefix_for_linear_fields_and_keeps_decibel_units() {
+        let legend = |label: &str, vmax: f64, base| Legend {
+            label: label.into(),
+            vmin: 0.0,
+            vmax,
+            cmap: transverse_gui::colormap::Cmap::Inferno,
+            field_base: base,
+        };
+        assert_eq!(colourbar_scale(&legend("x", 150_000.0, Some("V/m"))), ("|E| [kV/m]".to_string(), 1e-3));
+        assert_eq!(colourbar_scale(&legend("x", 3.2e6, Some("V/m"))), ("|E| [MV/m]".to_string(), 1e-6));
+        assert_eq!(colourbar_scale(&legend("x", 850.0, Some("V/m"))), ("|E| [V/m]".to_string(), 1.0));
+        // imperial: 150 kV/m = 3.81 V/mil
+        assert_eq!(colourbar_scale(&legend("x", 3.81, Some("V/mil"))), ("|E| [V/mil]".to_string(), 1.0));
+        assert_eq!(colourbar_scale(&legend("x", 0.004, Some("V/mil"))), ("|E| [mV/mil]".to_string(), 1e3));
+        // dB scales and other quantities keep their label
+        assert_eq!(colourbar_scale(&legend("|E| [dBV/m]", 110.0, None)), ("|E| [dBV/m]".to_string(), 1.0));
+        assert_eq!(colourbar_scale(&legend("V [V]", 1.0, None)), ("V [V]".to_string(), 1.0));
+    }
+
+    #[test]
     fn options_round_trip_through_settings() {
         let mut v = FieldView {
             mode: FieldMode::Potential,
             show_eq: false,
             show_mesh: true,
             db_range: 55.0,
-            units: UnitSystem::Imperial,
             ..Default::default()
         };
         let mut ui = BTreeMap::new();
@@ -840,12 +927,10 @@ mod tests {
         let mut w = FieldView::default();
         w.load(&ui);
         assert_eq!((w.mode, w.show_eq, w.show_mesh, w.db_range), (FieldMode::Potential, false, true, 55.0));
-        assert_eq!(w.units, UnitSystem::Imperial);
         // garbage is ignored
         ui.insert("field_mode".into(), "nonsense".into());
         ui.insert("db_range".into(), 1e9.into());
-        ui.insert("length_system".into(), "furlong".into());
         v.load(&ui);
-        assert_eq!((v.mode, v.db_range, v.units), (FieldMode::Potential, 55.0, UnitSystem::Imperial));
+        assert_eq!((v.mode, v.db_range), (FieldMode::Potential, 55.0));
     }
 }

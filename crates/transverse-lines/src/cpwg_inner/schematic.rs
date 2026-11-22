@@ -41,28 +41,28 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
     // copper layer: gaps and the area beyond the coplanar ground are filled with the gap material
     rect(&mut it, x0, yc, x1, y2, gap_col, None);
     if f.plane1 {
-        rect(&mut it, x0, yt, x1, y1, Copper, None);
+        rect(&mut it, x0, yt, x1, y1, Conductor, None);
         text(&mut it, x1, yt - 8.0, "Ground plane 1", Anchor::Right, false, Muted);
     } else {
         line(&mut it, x0, y1, x1, y1, Muted, true, false);
         text(&mut it, 330.0, y1 - 22.0, "no ground plane 1  (air)", Anchor::Center, false, Muted);
     }
     if f.plane2 {
-        rect(&mut it, x0, yb, x1, yb + 10.0, Copper, None);
+        rect(&mut it, x0, yb, x1, yb + 10.0, Conductor, None);
         text(&mut it, x1, yb + 22.0, "Ground plane 2", Anchor::Right, false, Muted);
     } else {
         line(&mut it, x0, yb, x1, yb, Muted, true, false);
         text(&mut it, 330.0, yb + 22.0, "no ground plane 2  (air)", Anchor::Center, false, Muted);
     }
-    rect(&mut it, x0, yc, cx - hw - s, y2, Copper, None);
-    rect(&mut it, cx + hw + s, yc, x1, y2, Copper, None);
+    rect(&mut it, x0, yc, cx - hw - s, y2, Conductor, None);
+    rect(&mut it, cx + hw + s, yc, x1, y2, Conductor, None);
     rect(&mut it, cx - hw, yc, cx + hw, y2, Signal, None);
     for xv in [xf0, xf1] {
         if f.fence1 {
-            rect(&mut it, xv - 4.0, y1, xv + 4.0, yc, Copper, Some(CopperEdge));
+            rect(&mut it, xv - 4.0, y1, xv + 4.0, yc, Conductor, Some(ConductorEdge));
         }
         if f.fence2 {
-            rect(&mut it, xv - 4.0, y2, xv + 4.0, yb, Copper, Some(CopperEdge));
+            rect(&mut it, xv - 4.0, y2, xv + 4.0, yb, Conductor, Some(ConductorEdge));
         }
     }
     if f.fence1 {
@@ -106,12 +106,13 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         (UpperDielectric, "upper dielectric"),
         (LowerDielectric, "lower dielectric"),
         (CustomGap, "custom gap material"),
-        (Copper, "copper"),
+        (Conductor, "conductor"),
+        (Signal, "signal conductor"),
     ]
     .into_iter()
     .enumerate()
     {
-        let lx = 60.0 + i as f64 * 150.0;
+        let lx = 16.0 + i as f64 * 138.0;
         rect(&mut it, lx, ly - 6.0, lx + 14.0, ly + 6.0, col, Some(Muted));
         text(&mut it, lx + 20.0, ly, txt, Anchor::Left, false, Text);
     }
@@ -149,11 +150,58 @@ mod tests {
     }
 
     #[test]
+    fn legend_names_the_conductors_and_the_signal() {
+        let s = schematic(&flags(true, true, true, true, GapMode::Upper));
+        let legend: Vec<(&str, f64)> = s
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                SchemItem::Text { text, y, x, .. } if *y == 316.0 => Some((text.as_str(), *x)),
+                _ => None,
+            })
+            .collect();
+        let names: Vec<&str> = legend.iter().map(|l| l.0).collect();
+        assert_eq!(
+            names,
+            ["upper dielectric", "lower dielectric", "custom gap material", "conductor", "signal conductor"]
+        );
+        // each entry has its own swatch colour and the signal swatch uses the signal colour
+        let swatches: Vec<SchemColor> = s
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                SchemItem::Rect { y0, fill, outline: Some(SchemColor::Muted), .. } if *y0 == 310.0 => {
+                    Some(*fill)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            swatches,
+            [
+                SchemColor::UpperDielectric,
+                SchemColor::LowerDielectric,
+                SchemColor::CustomGap,
+                SchemColor::Conductor,
+                SchemColor::Signal
+            ]
+        );
+        // entries do not overlap: an 11 pt proportional font is about 6 points per character
+        for w in legend.windows(2) {
+            let end = w[0].1 + 6.0 * (w[0].0.len() as f64);
+            assert!(end < w[1].1 - 20.0, "{w:?}");
+        }
+        assert!(
+            !s.items.iter().any(|i| matches!(i, SchemItem::Text { text, .. } if text.contains("copper")))
+        );
+    }
+
+    #[test]
     fn planes_fences_and_gap_material_change_the_picture() {
         let all = schematic(&flags(true, true, true, true, GapMode::Upper));
         let none = schematic(&flags(false, false, false, false, GapMode::Upper));
         let fences = |s: &Schematic| {
-            count(s, |i| matches!(i, SchemItem::Rect { outline: Some(SchemColor::CopperEdge), .. }))
+            count(s, |i| matches!(i, SchemItem::Rect { outline: Some(SchemColor::ConductorEdge), .. }))
         };
         assert_eq!((fences(&all), fences(&none)), (4, 0));
         let has = |s: &Schematic, t: &str| {
@@ -172,7 +220,7 @@ mod tests {
             let s = schematic(&flags(true, true, true, true, m));
             s.items.iter().find_map(|i| match i {
                 SchemItem::Rect { y0, y1, x0, fill, .. }
-                    if *y0 == 162.0 && *y1 == 176.0 && *x0 == 40.0 && *fill != SchemColor::Copper =>
+                    if *y0 == 162.0 && *y1 == 176.0 && *x0 == 40.0 && *fill != SchemColor::Conductor =>
                 {
                     Some(*fill)
                 }

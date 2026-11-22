@@ -4,9 +4,12 @@
 use transverse_core::postproc::{EField, percentile};
 use transverse_lines::model::{Bounds, FieldData};
 
+use transverse_core::units::UnitSystem;
+
 use crate::colormap::Cmap;
 
-/// The solver works in V/mm (lengths in mm); fields are shown in V/m.
+/// The solver works in V/mm (lengths in mm); fields are converted to V/m (SI) here and to the unit
+/// system's base unit (V/m or V/mil) where they are drawn.
 pub const V_PER_M: f64 = 1000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +75,9 @@ pub struct Legend {
     pub vmin: f64,
     pub vmax: f64,
     pub cmap: Cmap,
+    /// For a linear field scale: the base unit (V/m or V/mil) of `vmin`/`vmax`. The frontend picks
+    /// an SI prefix (kV/m, ...) for the ticks and the label; dB scales have the unit in `label`.
+    pub field_base: Option<&'static str>,
 }
 
 pub struct Raster {
@@ -90,6 +96,8 @@ pub struct RasterSpec {
     /// Region that sets the colour scale (99.7 % percentile of |E|); keeps colours stable while the
     /// drawn region changes with zoom and pan.
     pub scale_view: Bounds,
+    /// Unit system of the field strength (V/m or V/mil, dBV/m or dBV/mil).
+    pub system: UnitSystem,
     pub db_range: f64,
     /// Image width in pixels; the height follows the aspect ratio of the view.
     pub width: usize,
@@ -150,7 +158,8 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
     let width = spec.width.max(8);
     let height = ((width as f64 * (y1 - y0) / (x1 - x0)).round() as usize).clamp(8, 4000);
 
-    // quantity and colour scale
+    // quantity and colour scale; |E| values are in the base unit of the unit system
+    let es = V_PER_M * spec.system.field_per_v_per_m();
     let [sx0, sx1, sy0, sy1] = spec.scale_view;
     let in_view = |k: usize| {
         let (x, y) = (f.x[k % nx], f.y[k / nx]);
@@ -158,7 +167,7 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
     };
     let e_hi = || {
         let view = percentile((0..e.e.len()).filter(|&k| in_view(k)).map(|k| e.e[k]), 99.7);
-        view.or_else(|| percentile(e.e.iter().copied(), 99.7)).unwrap_or(1.0).max(1e-30) * V_PER_M
+        view.or_else(|| percentile(e.e.iter().copied(), 99.7)).unwrap_or(1.0).max(1e-30) * es
     };
     let (source, vmin, vmax, cmap, label) = match spec.mode {
         FieldMode::EDb | FieldMode::EDbLines => {
@@ -171,16 +180,16 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
                         if v.is_nan() {
                             f64::NAN
                         } else {
-                            (20.0 * (v * V_PER_M).max(1e-30).log10()).clamp(lo, top)
+                            (20.0 * (v * es).max(1e-30).log10()).clamp(lo, top)
                         }
                     })
                     .collect();
-            (Source::Nodes(s), lo, top, Cmap::Inferno, "|E| [dB re 1 V/m]".to_string())
+            (Source::Nodes(s), lo, top, Cmap::Inferno, format!("|E| [{}]", spec.system.field_db_unit()))
         }
         FieldMode::ELinear => {
             let hi = e_hi();
-            let s = e.e.iter().map(|&v| (v * V_PER_M).clamp(0.0, hi)).collect();
-            (Source::Nodes(s), 0.0, hi, Cmap::Inferno, "|E| [V/m]".to_string())
+            let s = e.e.iter().map(|&v| (v * es).clamp(0.0, hi)).collect();
+            (Source::Nodes(s), 0.0, hi, Cmap::Inferno, format!("|E| [{}]", spec.system.field_unit()))
         }
         FieldMode::Potential => {
             let (lo, hi) =
@@ -217,7 +226,13 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
             rgba[o..o + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
         }
     }
-    let legend = (spec.mode != FieldMode::Mesh).then_some(Legend { label, vmin, vmax, cmap });
+    let legend = (spec.mode != FieldMode::Mesh).then_some(Legend {
+        label,
+        vmin,
+        vmax,
+        cmap,
+        field_base: (spec.mode == FieldMode::ELinear).then(|| spec.system.field_unit()),
+    });
     Raster { width, height, rgba, legend }
 }
 
@@ -298,6 +313,7 @@ mod tests {
             mode,
             view: [0.0, 3.0, 0.0, 3.0],
             scale_view: [0.0, 3.0, 0.0, 3.0],
+            system: UnitSystem::Metric,
             db_range: 40.0,
             width: 30,
         }
@@ -377,6 +393,40 @@ mod tests {
     }
 
     #[test]
+    fn imperial_fields_are_shown_in_v_per_mil() {
+        let (f, e) = tiny();
+        let metric = render(&f, &e, &spec(FieldMode::EDb)).legend.unwrap();
+        let imperial = render(&f, &e, &RasterSpec { system: UnitSystem::Imperial, ..spec(FieldMode::EDb) })
+            .legend
+            .unwrap();
+        // 1 V/m = 2.54e-5 V/mil: the dB scale shifts by 20 log10(2.54e-5) = -91.9 dB, the span stays
+        let shift = 20.0 * 2.54e-5f64.log10();
+        assert!(
+            (imperial.vmax - (metric.vmax + shift)).abs() < 1e-9,
+            "{} vs {}",
+            imperial.vmax,
+            metric.vmax + shift
+        );
+        assert!((imperial.vmax - imperial.vmin - 40.0).abs() < 1e-12);
+        assert_eq!(imperial.label, "|E| [dBV/mil]");
+        assert_eq!(imperial.field_base, None, "dB scales carry the unit in the label");
+        // linear scales report the base unit and the frontend adds the prefix
+        let lin_m = render(&f, &e, &spec(FieldMode::ELinear)).legend.unwrap();
+        let lin_i = render(&f, &e, &RasterSpec { system: UnitSystem::Imperial, ..spec(FieldMode::ELinear) })
+            .legend
+            .unwrap();
+        assert_eq!((lin_m.field_base, lin_i.field_base), (Some("V/m"), Some("V/mil")));
+        assert!((lin_m.vmax - 1000.0 / 3.0).abs() < 1e-6, "E = 1/3 V/mm = 333.3 V/m");
+        assert!((lin_i.vmax - lin_m.vmax * 2.54e-5).abs() < 1e-12);
+        // the colours do not depend on the unit system
+        let a = render(&f, &e, &spec(FieldMode::EDb));
+        let b = render(&f, &e, &RasterSpec { system: UnitSystem::Imperial, ..spec(FieldMode::EDb) });
+        assert_eq!(a.rgba, b.rgba);
+        // potential and permittivity have no field unit
+        assert_eq!(render(&f, &e, &spec(FieldMode::Potential)).legend.unwrap().field_base, None);
+    }
+
+    #[test]
     fn colour_scale_comes_from_the_scale_region_not_the_drawn_region() {
         let (f, e) = tiny();
         let a = render(&f, &e, &spec(FieldMode::EDb)).legend.unwrap();
@@ -395,7 +445,7 @@ mod tests {
         assert!((l.vmax - l.vmin - 40.0).abs() < 1e-12);
         // uniform E = 1/3 V/mm = 333.3 V/m up to the conductor: the top of the scale is 20 log10(333.3) dB re 1 V/m
         assert!((l.vmax - 20.0 * (1000.0f64 / 3.0).log10()).abs() < 0.5, "top = {}", l.vmax);
-        assert_eq!(l.label, "|E| [dB re 1 V/m]");
+        assert_eq!(l.label, "|E| [dBV/m]");
         assert_eq!(l.cmap, Cmap::Inferno);
     }
 
