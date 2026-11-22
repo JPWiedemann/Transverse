@@ -18,6 +18,7 @@ mod ground_split;
 mod model;
 mod params;
 mod report;
+mod schematic;
 mod synthesis;
 mod wheeler;
 
@@ -27,6 +28,7 @@ pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
 pub use model::CpwgInner;
 pub use params::{CpwgParams, GapMode, MeshMode, analytic};
 pub use report::report;
+pub use schematic::{SchematicFlags, schematic};
 pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize};
 pub use wheeler::wheeler_dzdn;
 

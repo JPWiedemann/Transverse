@@ -223,3 +223,58 @@ fn equipotentials_and_field_lines_of_a_real_solution() {
         assert!(v(&l[l.len() - 1]) <= v(&l[0]) + 0.02, "line runs against the field");
     }
 }
+
+#[test]
+fn schematic_follows_the_form_values() {
+    use transverse_lines::model::SchemItem;
+    let m = CpwgInner;
+    let mut set = m.defaults();
+    let all = m.schematic(&set).unwrap();
+    assert_eq!((all.width, all.height), (700.0, 340.0));
+    set.set("plane1", ParamValue::Bool(false));
+    set.set("gap_mode", ParamValue::Num(2.0));
+    let s = m.schematic(&set).unwrap();
+    assert_ne!(s, all);
+    assert!(
+        s.items
+            .iter()
+            .any(|i| matches!(i, SchemItem::Text { text, .. } if text == "no ground plane 1  (air)"))
+    );
+    // wrong kinds give no sketch instead of a panic
+    set.set("fence2", ParamValue::Num(1.0));
+    assert!(m.schematic(&set).is_none());
+}
+
+#[test]
+fn split_summary_carries_what_the_return_current_tab_needs() {
+    let m = CpwgInner;
+    let a = m.analyze(&m.defaults(), &Ctl::new()).unwrap();
+    assert_eq!(a.modes[0].f_hz, 1e9);
+    let s = a.modes[0].split.as_ref().unwrap();
+    // plot hints: signal span, the four dotted lines and the x range of the Python plot
+    assert_eq!(s.plot.signal, Some([-0.18025, 0.18025]));
+    assert_eq!(s.plot.markers.len(), 4);
+    let sw = 0.3605 / 2.0 + 0.11;
+    assert!((s.plot.half_width - (sw + 1.0f64.min(1.5 * sw))).abs() < 1e-12);
+    assert!(s.plot.title.starts_with("HF return-current density (coplanar gap flank 8."));
+    assert_eq!(s.plot.labels.len(), 3);
+    // profile styling: planes keep their colours, the coplanar faces share one, bottom is dashed
+    let style =
+        |k: &str| s.profiles.iter().find(|p| p.key == k).map(|p| (p.color, p.dashed, p.break_at_zero));
+    assert_eq!(style("plane1"), Some((0, false, false)));
+    assert_eq!(style("plane2"), Some((1, false, false)));
+    assert_eq!(style("cop_top"), Some((2, false, true)));
+    assert_eq!(style("cop_bottom"), Some((2, true, true)));
+    // info text as in the Python tool
+    assert!(s.info.contains("90 % of the plane return current flows within |x| <="), "{}", s.info);
+    assert!(s.info.contains("Skin depth at 1 GHz: 2.09 um -> valid."), "{}", s.info);
+    assert!(!s.info.contains("Domain boundary"));
+    // an open structure adds the boundary explanation and the skin-depth warning for thin copper
+    let mut set = m.defaults();
+    set.set("plane1", ParamValue::Bool(false));
+    set.set("fence1", ParamValue::Bool(false));
+    set.set("t", ParamValue::Num(0.004));
+    let o = m.analyze(&set, &Ctl::new()).unwrap();
+    let info = &o.modes[0].split.as_ref().unwrap().info;
+    assert!(info.contains("Domain boundary") && info.contains("NOT well below t"), "{info}");
+}

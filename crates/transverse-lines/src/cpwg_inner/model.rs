@@ -4,8 +4,8 @@ use transverse_core::units::format_g;
 use transverse_core::{Ctl, TvError, TvResult};
 
 use super::{
-    CpwgAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SynthVar, analysis_from_solution,
-    field_data, full_analysis, report, synthesize,
+    CpwgAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SchematicFlags, SynthVar,
+    analysis_from_solution, field_data, full_analysis, report, schematic, synthesize,
 };
 use crate::model::*;
 
@@ -239,6 +239,34 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
     }
     x90.push(("90 % of coplanar current within (from the gap edge)".to_string(), a.split.x90_cop));
 
+    let (w2, sw) = (p.w / 2.0, p.w / 2.0 + p.s);
+    let plot = ProfilePlot {
+        title: format!(
+            "HF return-current density (coplanar gap flank {:.1} %, not shown as a curve)",
+            cur.get(GroundCat::CopFlank)
+        ),
+        half_width: (sw + p.g.min(1.5 * sw)).min(p.geometry(a.sol.accuracy.margin).xd),
+        signal: Some([-w2, w2]),
+        markers: vec![-sw, -w2, w2, sw],
+        labels: vec![(0.0, "signal".into()), (-(w2 + p.s / 2.0), "s".into()), (w2 + p.s / 2.0, "s".into())],
+    };
+    let delta_um = a.loss.at(p.f).delta * 1e6;
+    let valid = p.t > 0.0 && delta_um * 1e-3 < p.t / 3.0;
+    let mut info = String::new();
+    if let Some(x) = a.split.x90_planes {
+        info += &format!("90 % of the plane return current flows within |x| <= {x:.3} mm; ");
+    }
+    info += &format!(
+        "90 % of the coplanar return current within {:.3} mm of the gap edge.\nE-field share = where the field lines end (solution with dielectrics). Return current = HF distribution (skin depth << t). Skin depth at {} GHz: {:.2} um -> {}",
+        a.split.x90_cop,
+        format_g(p.f / 1e9),
+        delta_um,
+        if valid { "valid." } else { "NOT well below t: the real current spreads more widely." }
+    );
+    if !p.closed() {
+        info += "\nDomain boundary = flux / current reaching the outer edge of the computation domain (remote ground).";
+    }
+
     let profile_label = |c: GroundCat| match c {
         GroundCat::CopTop => "Coplanar top face",
         GroundCat::CopBottom => "Coplanar bottom face",
@@ -254,9 +282,16 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
             share_pct: cur.get(pr.cat),
             x: pr.x.clone(),
             j: pr.js.clone(),
+            color: match pr.cat {
+                GroundCat::Plane1 => 0,
+                GroundCat::Plane2 => 1,
+                _ => 2,
+            },
+            dashed: pr.cat == GroundCat::CopBottom,
+            break_at_zero: matches!(pr.cat, GroundCat::CopTop | GroundCat::CopBottom),
         })
         .collect();
-    SplitSummary { rows, x90, profiles }
+    SplitSummary { rows, x90, profiles, plot, info }
 }
 
 fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
@@ -266,6 +301,7 @@ fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
         eps_eff: a.sol.eeff,
         l: a.sol.l,
         c: a.sol.c,
+        f_hz: p.f,
         at_f: a.loss.at(p.f),
         split: Some(split_summary(p, &a)),
     };
@@ -301,6 +337,17 @@ impl LineModel for CpwgInner {
     fn wavelength_mm(&self, p: &ParamSet) -> Option<f64> {
         let p = CpwgParams::from_set(p).ok()?;
         (p.f > 0.0 && p.er1 > 0.0 && p.er2 > 0.0).then(|| p.wavelength())
+    }
+
+    fn schematic(&self, p: &ParamSet) -> Option<Schematic> {
+        Some(schematic(&SchematicFlags {
+            plane1: get_flag(p, "plane1", true).ok()?,
+            plane2: get_flag(p, "plane2", true).ok()?,
+            fence1: get_flag(p, "fence1", true).ok()?,
+            fence2: get_flag(p, "fence2", true).ok()?,
+            gap_mode: [GapMode::Upper, GapMode::Lower, GapMode::Custom]
+                [get_choice(p, "gap_mode", 0, 3).ok()?],
+        }))
     }
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis> {

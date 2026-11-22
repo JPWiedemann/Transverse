@@ -155,6 +155,25 @@ pub struct CurrentProfile {
     pub share_pct: f64,
     pub x: Vec<f64>,
     pub j: Vec<f64>,
+    /// Index into the frontend's colour cycle; profiles of one conductor share it.
+    pub color: usize,
+    pub dashed: bool,
+    /// Draw the left and right halves as separate lines (the profile is not defined across the signal).
+    pub break_at_zero: bool,
+}
+
+/// Hints for plotting the current profiles.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProfilePlot {
+    pub title: String,
+    /// The plot shows x in -half_width..half_width [mm].
+    pub half_width: f64,
+    /// Shaded x range (the signal trace).
+    pub signal: Option<[f64; 2]>,
+    /// Dotted vertical lines [mm].
+    pub markers: Vec<f64>,
+    /// Texts at the top of the plot: (x [mm], text).
+    pub labels: Vec<(f64, String)>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -163,6 +182,9 @@ pub struct SplitSummary {
     /// Extra statements such as "90 % of plane current within |x| <= 0.305 mm" (label, mm).
     pub x90: Vec<(String, f64)>,
     pub profiles: Vec<CurrentProfile>,
+    pub plot: ProfilePlot,
+    /// Explanation shown below the table.
+    pub info: String,
 }
 
 /// Result for one propagation mode (phase 1: always exactly one).
@@ -174,6 +196,8 @@ pub struct ModeResult {
     /// Per metre.
     pub l: f64,
     pub c: f64,
+    /// Analysis frequency [Hz].
+    pub f_hz: f64,
     /// Values at the analysis frequency.
     pub at_f: LossPoint,
     pub split: Option<SplitSummary>,
@@ -258,6 +282,46 @@ pub struct Analysis {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Cross-section sketch
+// ---------------------------------------------------------------------------------------------
+
+/// Semantic colours of the sketch; the frontend maps them to its palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SchemColor {
+    UpperDielectric,
+    LowerDielectric,
+    CustomGap,
+    Copper,
+    CopperEdge,
+    Signal,
+    Text,
+    Muted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Anchor {
+    Center,
+    Left,
+    Right,
+}
+
+/// Drawing primitive in sketch coordinates (y grows downwards, like a canvas).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SchemItem {
+    Rect { x0: f64, y0: f64, x1: f64, y1: f64, fill: SchemColor, outline: Option<SchemColor> },
+    Line { x0: f64, y0: f64, x1: f64, y1: f64, color: SchemColor, dashed: bool, arrows: bool },
+    Text { x: f64, y: f64, text: String, anchor: Anchor, bold: bool, color: SchemColor },
+}
+
+/// A schematic (not to scale) of the line cross-section for the cross-section tab.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Schematic {
+    pub width: f64,
+    pub height: f64,
+    pub items: Vec<SchemItem>,
+}
+
+// ---------------------------------------------------------------------------------------------
 // The line-type interface
 // ---------------------------------------------------------------------------------------------
 
@@ -278,6 +342,11 @@ pub trait LineModel: Send + Sync {
 
     /// Wavelength [mm] used for sizes given in λ, if the line type has one.
     fn wavelength_mm(&self, _p: &ParamSet) -> Option<f64> {
+        None
+    }
+
+    /// Sketch of the cross-section for the current form values (None if the line type has none).
+    fn schematic(&self, _p: &ParamSet) -> Option<Schematic> {
         None
     }
 

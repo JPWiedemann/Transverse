@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::views::field::FieldView;
+use crate::views::loss::LossView;
+use crate::views::{cross_section, return_current};
 use eframe::egui::{self, Color32, RichText};
 use transverse_core::units::parse_number;
 use transverse_gui::form::{FieldState, FormState, unit_options};
@@ -42,6 +44,9 @@ pub struct App {
     status: String,
     result: Option<Analysis>,
     field_view: FieldView,
+    loss_view: LossView,
+    /// Counts results; plots reset their bounds when a new one arrives.
+    generation: u64,
     tab: Tab,
     error: Option<String>,
 }
@@ -63,6 +68,8 @@ impl App {
         let mut form = FormState::new(&*model);
         let mut field_view = FieldView::default();
         field_view.load(&settings.ui);
+        let mut loss_view = LossView::default();
+        loss_view.load(&settings.ui);
         let mut synth_target = 0;
         let mut z_target = "35".to_string();
         if let Some(ls) = settings.lines.get(model.id()) {
@@ -85,6 +92,8 @@ impl App {
             status: note.unwrap_or_else(|| "Ready".into()),
             result: None,
             field_view,
+            loss_view,
+            generation: 0,
             tab: Tab::CrossSection,
             error: None,
         }
@@ -100,6 +109,7 @@ impl App {
         ls.extra.insert("synth_target".into(), target.into());
         ls.extra.insert("z_target".into(), self.z_target.clone().into());
         self.field_view.save(&mut self.settings.ui);
+        self.loss_view.save(&mut self.settings.ui);
         self.settings.line_type = self.model.id().to_string();
         self.settings.lines.insert(self.model.id().to_string(), ls);
         if let Err(e) = settings::save(&self.settings_path, &self.settings) {
@@ -157,6 +167,7 @@ impl App {
                         format!("Done in {el:.1} s: Z0 = {:.3} Ohm, {nodes} nodes", out.analysis.modes[0].z0);
                     self.result = Some(out.analysis);
                     self.field_view.new_result();
+                    self.generation += 1;
                     if self.tab == Tab::CrossSection {
                         self.tab = Tab::Results;
                     }
@@ -332,10 +343,24 @@ impl App {
                     }
                 }
             }
-            other => {
-                let name = TABS.iter().find(|t| t.0 == other).map_or("", |t| t.1);
-                ui.label(format!("\"{name}\" follows in the next iteration."));
-            }
+            Tab::CrossSection => match self.model.schematic(&self.form.control_set(&*self.model)) {
+                Some(sch) => cross_section::show(ui, &sch),
+                None => {
+                    ui.label("This line type has no sketch.");
+                }
+            },
+            Tab::ReturnCurrent => match self.result.as_ref().and_then(|a| a.modes.first()?.split.as_ref()) {
+                Some(split) => return_current::show(ui, split, self.generation),
+                None => {
+                    ui.label("No result yet. Press Analyze or Synthesize.");
+                }
+            },
+            Tab::Loss => match &self.result {
+                Some(a) => self.loss_view.ui(ui, &*a.freq, a.modes[0].z0, a.modes[0].f_hz, self.generation),
+                None => {
+                    ui.label("No result yet. Press Analyze or Synthesize.");
+                }
+            },
         }
     }
 }

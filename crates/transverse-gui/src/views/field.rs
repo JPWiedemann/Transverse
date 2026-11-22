@@ -26,8 +26,6 @@ const EQUIPOTENTIALS: [f64; 9] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 const MARGIN: f64 = 0.25;
 /// Re-render when the visible width changed by more than this factor since the last render.
 const RERENDER_RATIO: (f64, f64) = (0.6, 1.4);
-/// Zoom per scroll point (exponential).
-const SCROLL_ZOOM: f64 = 0.0015;
 /// Height reserved for the title (two lines) and the readout line, so toggling options never
 /// changes the plot size.
 const READOUT_HEIGHT: f32 = 24.0;
@@ -296,11 +294,7 @@ impl FieldView {
                     if let Some(v) = pending {
                         pui.set_plot_bounds(PlotBounds::from_min_max([v[0], v[2]], [v[1], v[3]]));
                     }
-                    let scroll = pui.ctx().input(|i| i.smooth_scroll_delta.y);
-                    if scroll != 0.0 && pui.response().hovered() {
-                        let z = (scroll as f64 * SCROLL_ZOOM).exp() as f32;
-                        pui.zoom_bounds_around_hovered(Vec2::splat(z));
-                    }
+                    super::nav::wheel_zoom(pui);
                     pui.add(PlotImage::new("field", tex_id, centre, size));
                 });
             let tr = resp.transform;
