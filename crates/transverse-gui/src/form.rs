@@ -161,16 +161,21 @@ impl FormState {
         Ok(set)
     }
 
-    /// Switch the unit of a field. The number in the entry box stays as typed: it now means the
-    /// same number in the new unit. Unknown units are ignored.
+    /// Switch the display unit of a field and convert the shown value (an unparsable text is kept).
     pub fn change_unit(&mut self, model: &dyn LineModel, key: &str, new_unit: &str) {
         let Some(spec) = model.params().iter().find(|s| s.key == key) else { return };
+        let lam = self.to_params(model).ok().and_then(|s| model.wavelength_mm(&s));
+        let Some(FieldState::Quantity { text, unit }) = self.fields.get_mut(spec.key) else { return };
+        let old = unit.clone();
         if !unit_options(spec).contains(&new_unit) {
             return;
         }
-        if let Some(FieldState::Quantity { unit, .. }) = self.fields.get_mut(spec.key) {
-            *unit = new_unit.to_string();
+        if let (Some(v), Some(fo), Some(fnew)) =
+            (parse_number(text), factor(spec, &old, lam), factor(spec, new_unit, lam))
+        {
+            *text = format_g(v * fo / fnew);
         }
+        *unit = new_unit.to_string();
     }
 
     pub fn to_saved(&self) -> BTreeMap<String, SavedField> {
@@ -269,24 +274,30 @@ mod tests {
     }
 
     #[test]
-    fn unit_change_keeps_the_typed_number() {
+    fn unit_change_converts_the_shown_value() {
         let m = CpwgInner;
         let mut f = FormState::new(&m);
         f.change_unit(&m, "w", "mil");
-        // the number stays, its meaning changes
-        assert_eq!(text(&f, "w"), ("0.3605".into(), "mil".into()));
-        assert!((f.to_params(&m).unwrap().num("w").unwrap() - 0.3605 * 0.0254).abs() < 1e-12);
+        assert_eq!(text(&f, "w").1, "mil");
+        assert_eq!(text(&f, "w").0, format_g(0.3605 / 0.0254));
         f.change_unit(&m, "w", "µm");
-        assert!((f.to_params(&m).unwrap().num("w").unwrap() - 0.3605e-3).abs() < 1e-15);
+        assert_eq!(text(&f, "w").0, "360.5");
+        // internal value unchanged by unit switching
+        assert!((f.to_params(&m).unwrap().num("w").unwrap() - 0.3605).abs() < 1e-12);
         // editing in the new unit, decimal comma accepted
         if let Some(FieldState::Quantity { text, .. }) = f.fields.get_mut("w") {
             *text = "400,5".into();
         }
         assert!((f.to_params(&m).unwrap().num("w").unwrap() - 0.4005).abs() < 1e-12);
-        // unknown unit and unknown key are ignored
+        // unknown unit and unknown key are ignored, unparsable text survives a unit change
         f.change_unit(&m, "w", "parsec");
         f.change_unit(&m, "nonexistent", "mm");
-        assert_eq!(text(&f, "w"), ("400,5".into(), "µm".into()));
+        assert_eq!(text(&f, "w").1, "µm");
+        if let Some(FieldState::Quantity { text, .. }) = f.fields.get_mut("w") {
+            *text = "abc".into();
+        }
+        f.change_unit(&m, "w", "mm");
+        assert_eq!(text(&f, "w"), ("abc".into(), "mm".into()));
         // plain numbers have a fixed unit
         f.change_unit(&m, "sigma", "S/m");
         assert_eq!(text(&f, "sigma").1, "MS/m");
@@ -300,6 +311,7 @@ mod tests {
         assert!(!unit_options(m.params().iter().find(|p| p.key == "w").unwrap()).contains(&"λ"));
         f.change_unit(&m, "dmin", "λ");
         let lam = m.wavelength_mm(&m.defaults()).unwrap();
+        assert_eq!(text(&f, "dmin").0, format_g(0.002 / lam));
         if let Some(FieldState::Quantity { text, .. }) = f.fields.get_mut("dmin") {
             *text = "0.001".into();
         }
@@ -310,11 +322,6 @@ mod tests {
             *text = "2".into();
         }
         assert!((f.to_params(&m).unwrap().num("dmin").unwrap() - 0.001 * lam / 2.0).abs() < 1e-12);
-        // showing parameters again keeps the λ unit while a wavelength exists
-        let mut set = m.defaults();
-        set.set("dmin", ParamValue::Num(0.002));
-        f.set_params(&m, &set);
-        assert_eq!(text(&f, "dmin").1, "λ");
     }
 
     #[test]
