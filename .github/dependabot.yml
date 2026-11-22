@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: monthly
+    groups:
+      cargo-dependencies:
+        patterns: ["*"]
+    ignore:
+      # faer is pinned to an exact version: its sparse API changes between releases and the
+      # build was verified for native and wasm32 with this one. Update manually and test both.
+      - dependency-name: faer
+      # eframe, egui and egui_plot have to move together and every 0.x release changes the API
+      # (e.g. App::ui and the panel functions). Update them manually in one go.
+      - dependency-name: eframe
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: egui_plot
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: uv
+    directory: /python
+    target-branch: dev
+    schedule:
+      interval: monthly
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"

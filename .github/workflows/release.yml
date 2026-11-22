@@ -1,0 +1,204 @@
+name: Release
+
+# Every push to main is a merge of the dev -> main release PR (direct pushes are blocked by the
+# ruleset). The version and the notes are derived from the conventional commit titles since the
+# last release, see scripts/release.mjs. If nothing releasable is in there, no release is made.
+#
+# prepare:  computes the version and the notes
+# web:      builds the core for WebAssembly (the website itself follows in phase W)
+# desktop:  builds the desktop app for Linux (tar.gz) and Windows (zip), both on a Linux runner
+# selftest-windows: runs the cross-built transverse.exe self-test on a real Windows machine
+# release:  creates the tag and the GitHub release with all files, only if every build succeeded
+#           (a failed build can be re-run from the Actions tab, then the release follows)
+#
+# The workspace version in Cargo.toml is the placeholder 0.0.0 (main is protected, nothing is
+# committed for a release), the tag is the source of truth. The build jobs set the real version with
+# scripts/set-version.sh for their build only.
+#
+# Manual dry run (Actions tab -> Release -> Run workflow): runs the builds with a dummy version and
+# keeps the files as workflow artifacts for 3 days. No tag, no release.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Dummy version for the dry run (MAJOR.MINOR.PATCH)"
+        default: "0.0.1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.release.outputs.release || steps.dry-run.outputs.release }}
+      version: ${{ steps.release.outputs.version || steps.dry-run.outputs.version }}
+      tag: ${{ steps.release.outputs.tag || steps.dry-run.outputs.tag }}
+    steps:
+      - name: Dry run
+        id: dry-run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if ! echo "$INPUT_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::The version must look like 1.2.3"
+            exit 1
+          fi
+          {
+            echo "release=true"
+            echo "version=$INPUT_VERSION"
+            echo "tag=v$INPUT_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history and tags are needed to find the changes since the last release
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      # A "release-as:X.Y.Z" label on the release PR overrides the computed version,
+      # e.g. to go from 0.x to 1.0.0
+      - name: Look up release-as label
+        id: label
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LABEL=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq '[.[].labels[].name | select(startswith("release-as:"))][0] // ""')
+          echo "release_as=${LABEL#release-as:}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute version and notes
+        id: release
+        if: github.event_name == 'push'
+        env:
+          RELEASE_AS: ${{ steps.label.outputs.release_as }}
+        run: node scripts/release.mjs --release-as "$RELEASE_AS" --notes-file release-notes.md
+
+      - name: Nothing to release
+        if: github.event_name == 'push' && steps.release.outputs.release != 'true'
+        run: echo "::notice::No feat/fix/perf/breaking change since ${{ steps.release.outputs.since }}, no release created."
+
+      - name: Keep the release notes
+        if: github.event_name == 'push' && steps.release.outputs.release == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && 3 || 1 }}
+
+  web:
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the core for WebAssembly
+        run: cargo build --release --target wasm32-unknown-unknown -p transverse-core -p transverse-lines
+      # Phase W: build the wasm-bindgen layer and the Svelte frontend, run the reference cases
+      # through Node, and upload the website as the "web" artifact (the release job picks up
+      # *.zip files), for example:
+      #   - run: scripts/set-version.sh "$VERSION"
+      #   - run: cargo install wasm-bindgen-cli --locked --version <pinned>
+      #   - run: cargo build --release --target wasm32-unknown-unknown -p transverse-wasm
+      #   - run: wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/transverse_wasm.wasm
+      #   - run: npm ci && npm run build   (in web/)
+      #   - run: node web/tests/reference.mjs
+      #   - run: (cd web/dist && zip -r "../../transverse-web-v$VERSION.zip" .)
+      #   - uses: actions/upload-artifact@v7
+      #     with: { name: web, path: transverse-web-v*.zip, if-no-files-found: error }
+
+  desktop:
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    strategy:
+      fail-fast: false # let the other platform finish, so one run shows all problems
+      matrix:
+        target: [linux, windows]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild@0.24.1
+      - name: Install zig
+        run: |
+          python3 -m venv .zigenv
+          .zigenv/bin/pip install ziglang==0.17.1
+          echo "$PWD/.zigenv/bin" >> "$GITHUB_PATH"
+      - name: Set version
+        run: scripts/set-version.sh "$VERSION"
+      - name: Build desktop app
+        run: scripts/build-release.sh ${{ matrix.target }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && 3 || 1 }}
+
+  # Runs the self-test of the cross-built Windows binary on a real Windows machine.
+  selftest-windows:
+    needs: desktop
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-windows
+      - shell: pwsh
+        run: |
+          Expand-Archive -Path transverse-*-windows-x86_64.zip -DestinationPath .
+          $exe = Get-ChildItem -Recurse -Filter transverse.exe | Select-Object -First 1
+          & $exe.FullName --version
+          & $exe.FullName selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  release:
+    needs: [prepare, web, desktop, selftest-windows]
+    # the manual dry run stops before this job
+    if: github.event_name == 'push' && needs.prepare.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Create GitHub release
+        run: |
+          mkdir release-files
+          find artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} release-files/ \;
+          (cd release-files && sha256sum -- * > SHA256SUMS.txt)
+          ls -l release-files
+          gh release create "$TAG" release-files/* \
+            --target "$GITHUB_SHA" --title "$TAG" \
+            --notes-file artifacts/release-notes/release-notes.md

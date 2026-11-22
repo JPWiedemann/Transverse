@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  # every branch push (but not tags, the release workflow handles those)
+  push:
+    branches: ["**"]
+  # PRs from forks don't trigger a push run in this repo
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      # headers some windowing / GL crates look for while building
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lints
+        run: cargo clippy --release --all-targets --locked -- -D warnings
+      # includes the parity tests against the Python reference cases in tests/reference
+      - name: Tests
+        run: cargo test --release --locked
+      # the numerical core and the line types must stay buildable for WebAssembly (no std::fs,
+      # std::thread or Instant in them), so the web version stays possible
+      - name: WebAssembly portability gate
+        run: cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Release script tests
+        run: node --test scripts/
+      - uses: astral-sh/setup-uv@v6
+      - name: Python reference implementation
+        working-directory: python
+        run: |
+          uv run --group dev ruff check .
+          uv run --group dev ruff format --check .
+          uv run --group dev pytest -q
+
+  build:
+    name: build
+    # only build for main and dev: on pushes to them and on pull requests targeting them
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild@0.24.1
+      - name: Install zig
+        run: |
+          python3 -m venv .zigenv
+          .zigenv/bin/pip install ziglang==0.17.1
+          echo "$PWD/.zigenv/bin" >> "$GITHUB_PATH"
+      # the release builds of the desktop app for Linux (glibc 2.28) and Windows; catches linker and
+      # cross-compilation problems before a release. The packages are only published by the release
+      # workflow.
+      - name: Build desktop app (Linux and Windows)
+        run: scripts/build-release.sh all
+      - name: Build the core for WebAssembly
+        run: cargo build --release --target wasm32-unknown-unknown -p transverse-core -p transverse-lines
