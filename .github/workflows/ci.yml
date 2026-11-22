@@ -45,7 +45,8 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Release script tests
-        run: node --test scripts/
+        # an explicit file: Node 22 does not expand a directory argument (newer versions do)
+        run: node --test scripts/release.test.mjs
       - uses: astral-sh/setup-uv@v6
       - name: Python reference implementation
         working-directory: python

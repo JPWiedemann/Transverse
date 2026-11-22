@@ -52,7 +52,7 @@ cargo fmt --all                                        # formatting (CI: cargo f
 cargo clippy --release --all-targets -- -D warnings    # lints
 cargo test --release                                   # includes the parity tests against the Python reference
 cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines   # web portability gate
-node --test scripts/                                   # release script tests (only if you touched scripts/)
+node --test scripts/release.test.mjs                                   # release script tests (only if you touched scripts/)
 cd python && uv run --group dev ruff check . && uv run --group dev ruff format --check . && uv run --group dev pytest   # only for Python changes
 ```
 
