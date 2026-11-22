@@ -174,7 +174,7 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
             rgba[o..o + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
         }
     }
-    let legend = (spec.mode != FieldMode::Mesh).then(|| Legend { label, vmin, vmax, cmap });
+    let legend = (spec.mode != FieldMode::Mesh).then_some(Legend { label, vmin, vmax, cmap });
     Raster { width, height, rgba, legend }
 }
 
@@ -206,7 +206,7 @@ pub fn probe(f: &FieldData, e: &EField, x: f64, y: f64) -> Option<Probe> {
 
 /// "Nice" tick values (1, 2, 5 × 10^k) between `lo` and `hi`, about `n` of them.
 pub fn nice_ticks(lo: f64, hi: f64, n: usize) -> Vec<f64> {
-    if !(hi > lo) || n == 0 {
+    if hi.is_nan() || lo.is_nan() || hi <= lo || n == 0 {
         return vec![lo];
     }
     let raw = (hi - lo) / n as f64;

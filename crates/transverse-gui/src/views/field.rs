@@ -368,7 +368,7 @@ mod tests {
             input.events.push(egui::Event::PointerMoved(p));
         }
         let _ = ctx.run_ui(input, |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| view.ui(ui, f, acc));
+            egui::CentralPanel::default().show(ui, |ui| view.ui(ui, f, acc));
         });
     }
 
