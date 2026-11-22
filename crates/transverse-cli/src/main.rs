@@ -6,7 +6,6 @@
 //! transverse selftest [cases.json]                            compare against the Python reference cases
 //! ```
 
-mod report;
 mod selftest;
 
 use std::io::Read;
@@ -56,7 +55,7 @@ fn progress() -> Ctl {
     Ctl::new().with_progress(|m| eprintln!("{m}"))
 }
 
-fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::Analysis, secs: f64, json_out: bool) {
+fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::CpwgAnalysis, secs: f64, json_out: bool) {
     if json_out {
         let delay_ps = p.length * 1e-3 * a.sol.eeff.sqrt() / C_LIGHT * 1e12;
         let out = serde_json::json!({
@@ -68,7 +67,7 @@ fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::Analysis, secs: f
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     } else {
-        print!("{}", report::report(title, p, a));
+        print!("{}", cpwg_inner::report(title, p, a));
         println!("Time            : {secs:.2} s");
     }
 }

@@ -2,10 +2,10 @@
 
 use std::fmt::Write;
 
+use super::{CpwgAnalysis, CpwgParams, GroundCat, analytic};
 use transverse_core::{C_LIGHT, NP2DB};
-use transverse_lines::cpwg_inner::{Analysis, CpwgParams, GroundCat, analytic};
 
-pub fn report(title: &str, p: &CpwgParams, a: &Analysis) -> String {
+pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
     let sol = &a.sol;
     let lo = a.loss.at(p.f);
     let to_db_mm = NP2DB / 1000.0;

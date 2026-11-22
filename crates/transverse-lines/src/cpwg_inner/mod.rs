@@ -12,15 +12,21 @@
 //!
 //! All lengths in mm, frequency in Hz.
 
+mod field;
 mod grid;
 mod ground_split;
+mod model;
 mod params;
+mod report;
 mod synthesis;
 mod wheeler;
 
+pub use field::field_data;
 pub use grid::*;
 pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
+pub use model::CpwgInner;
 pub use params::{CpwgParams, GapMode, MeshMode, analytic};
+pub use report::report;
 pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize};
 pub use wheeler::wheeler_dzdn;
 
@@ -34,18 +40,30 @@ pub fn analyze(p: &CpwgParams, ctl: &Ctl) -> TvResult<Solution> {
     quasistatic::solve(p, &p.fd_options(), ctl)
 }
 
-/// Analysis with losses and ground split.
-pub struct Analysis {
+/// Analysis with losses and ground split (CPWG-specific; [`CpwgInner`] converts it to the generic
+/// [`crate::model::Analysis`]).
+pub struct CpwgAnalysis {
     pub sol: Solution,
     pub loss: LossModel,
     pub split: Split,
 }
 
-/// Field solution + Wheeler conductor loss + dielectric loss model + ground split.
-pub fn full_analysis(p: &CpwgParams, ctl: &Ctl) -> TvResult<Analysis> {
-    let sol = analyze(p, ctl)?;
+/// Wheeler conductor loss and ground split for an existing solution.
+pub fn analysis_from_solution(p: &CpwgParams, sol: Solution, ctl: &Ctl) -> TvResult<CpwgAnalysis> {
     let dzdn = wheeler_dzdn(p, &sol, ctl)?;
-    let loss = LossModel { z0: sol.z0, g_over_omega: sol.g_over_omega, dzdn, sigma: p.sigma, rq_mm: p.rq };
+    let loss = LossModel {
+        z0: sol.z0,
+        eeff: sol.eeff,
+        g_over_omega: sol.g_over_omega,
+        dzdn,
+        sigma: p.sigma,
+        rq_mm: p.rq,
+    };
     let split = ground_split(p, &sol);
-    Ok(Analysis { sol, loss, split })
+    Ok(CpwgAnalysis { sol, loss, split })
+}
+
+/// Field solution + Wheeler conductor loss + dielectric loss model + ground split.
+pub fn full_analysis(p: &CpwgParams, ctl: &Ctl) -> TvResult<CpwgAnalysis> {
+    analysis_from_solution(p, analyze(p, ctl)?, ctl)
 }

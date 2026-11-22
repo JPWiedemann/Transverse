@@ -50,6 +50,21 @@ impl GroundCat {
         }
     }
 
+    /// Stable identifier (used in reference data and serialised results).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Plane1 => "plane1",
+            Self::Plane2 => "plane2",
+            Self::CopFlank => "cop_flank",
+            Self::CopTop => "cop_top",
+            Self::CopBottom => "cop_bottom",
+            Self::CopOuter => "cop_outer",
+            Self::Fence1 => "fence1",
+            Self::Fence2 => "fence2",
+            Self::Boundary => "boundary",
+        }
+    }
+
     fn index(self) -> usize {
         Self::ALL.iter().position(|&c| c == self).unwrap()
     }
