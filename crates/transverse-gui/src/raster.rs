@@ -6,6 +6,9 @@ use transverse_lines::model::{Bounds, FieldData};
 
 use crate::colormap::Cmap;
 
+/// The solver works in V/mm (lengths in mm); fields are shown in V/m.
+pub const V_PER_M: f64 = 1000.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldMode {
     /// |E| in dB with field lines.
@@ -155,24 +158,29 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
     };
     let e_hi = || {
         let view = percentile((0..e.e.len()).filter(|&k| in_view(k)).map(|k| e.e[k]), 99.7);
-        view.or_else(|| percentile(e.e.iter().copied(), 99.7)).unwrap_or(1.0).max(1e-30)
+        view.or_else(|| percentile(e.e.iter().copied(), 99.7)).unwrap_or(1.0).max(1e-30) * V_PER_M
     };
     let (source, vmin, vmax, cmap, label) = match spec.mode {
         FieldMode::EDb | FieldMode::EDbLines => {
             let top = 20.0 * e_hi().log10();
             let lo = top - spec.db_range;
             // NaN (conductor nodes) must stay NaN: `f64::max` would turn it into the minimum
-            let s = e
-                .e
-                .iter()
-                .map(|&v| if v.is_nan() { f64::NAN } else { (20.0 * v.max(1e-30).log10()).clamp(lo, top) })
-                .collect();
-            (Source::Nodes(s), lo, top, Cmap::Inferno, "|E| [dB re 1 V/mm]".to_string())
+            let s =
+                e.e.iter()
+                    .map(|&v| {
+                        if v.is_nan() {
+                            f64::NAN
+                        } else {
+                            (20.0 * (v * V_PER_M).max(1e-30).log10()).clamp(lo, top)
+                        }
+                    })
+                    .collect();
+            (Source::Nodes(s), lo, top, Cmap::Inferno, "|E| [dB re 1 V/m]".to_string())
         }
         FieldMode::ELinear => {
             let hi = e_hi();
-            let s = e.e.iter().map(|&v| v.clamp(0.0, hi)).collect();
-            (Source::Nodes(s), 0.0, hi, Cmap::Inferno, "|E| [V/mm]".to_string())
+            let s = e.e.iter().map(|&v| (v * V_PER_M).clamp(0.0, hi)).collect();
+            (Source::Nodes(s), 0.0, hi, Cmap::Inferno, "|E| [V/m]".to_string())
         }
         FieldMode::Potential => {
             let (lo, hi) =
@@ -217,7 +225,7 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
 #[derive(Clone, Copy, Debug)]
 pub struct Probe {
     pub v: f64,
-    /// |E| [V/mm] (NaN next to a conductor surface).
+    /// |E| [V/m] (NaN inside a conductor).
     pub e: f64,
     pub er: f64,
     pub in_conductor: bool,
@@ -233,7 +241,7 @@ pub fn probe(f: &FieldData, e: &EField, x: f64, y: f64) -> Option<Probe> {
     let near = |a: usize, t: f64| if t < 0.5 { a } else { a + 1 };
     Some(Probe {
         v: bilerp(&f.v, nx, i, j, tx, ty),
-        e: bilerp_valid(&e.e, nx, i, j, tx, ty),
+        e: bilerp_valid(&e.e, nx, i, j, tx, ty) * V_PER_M,
         er: f.er[j * (nx - 1) + i],
         in_conductor: f.fixed[near(j, ty) * nx + near(i, tx)],
     })
@@ -385,8 +393,9 @@ mod tests {
         let r = render(&f, &e, &spec(FieldMode::EDb));
         let l = r.legend.unwrap();
         assert!((l.vmax - l.vmin - 40.0).abs() < 1e-12);
-        // uniform E = 1/3 V/mm up to the conductor: top of the scale is about 20 log10(1/3)
-        assert!((l.vmax - 20.0 * (1.0f64 / 3.0).log10()).abs() < 0.5, "top = {}", l.vmax);
+        // uniform E = 1/3 V/mm = 333.3 V/m up to the conductor: the top of the scale is 20 log10(333.3) dB re 1 V/m
+        assert!((l.vmax - 20.0 * (1000.0f64 / 3.0).log10()).abs() < 0.5, "top = {}", l.vmax);
+        assert_eq!(l.label, "|E| [dB re 1 V/m]");
         assert_eq!(l.cmap, Cmap::Inferno);
     }
 
@@ -410,7 +419,7 @@ mod tests {
         let (f, e) = tiny();
         let p = probe(&f, &e, 0.5, 0.5).unwrap();
         assert!((p.v - 0.5 / 3.0).abs() < 1e-12 && p.er == 1.0 && !p.in_conductor);
-        assert!((p.e - 1.0 / 3.0).abs() < 1e-9);
+        assert!((p.e - 1000.0 / 3.0).abs() < 1e-6, "|E| is shown in V/m");
         let c = probe(&f, &e, 2.5, 2.5).unwrap();
         assert!(c.in_conductor && c.e.is_nan() && c.er == 4.0);
         assert!(probe(&f, &e, -1.0, 0.0).is_none() && probe(&f, &e, 0.0, 3.5).is_none());

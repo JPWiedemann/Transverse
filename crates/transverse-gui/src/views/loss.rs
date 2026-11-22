@@ -22,14 +22,31 @@ const DIELECTRIC: Color32 = Color32::from_rgb(255, 127, 14);
 pub struct LossView {
     fmax_text: String,
     fmax_unit: String,
-    /// View requested by the Fit button, applied in the next plot pass.
+    /// View requested by a button, applied in the next plot pass.
     pending: Option<[f64; 4]>,
+    /// Visible bounds as of the last frame.
+    bounds: Option<[f64; 4]>,
 }
 
 impl Default for LossView {
     fn default() -> Self {
-        Self { fmax_text: "20".into(), fmax_unit: "GHz".into(), pending: None }
+        Self { fmax_text: "20".into(), fmax_unit: "GHz".into(), pending: None, bounds: None }
     }
+}
+
+/// Top of the y range that fits the total loss between `f0_ghz` and `f1_ghz`: 5 % above the maximum.
+pub fn y_fit(freq: &dyn FreqResponse, f0_ghz: f64, f1_ghz: f64) -> f64 {
+    let to_db_mm = NP2DB / 1000.0;
+    let (lo, hi) = (f0_ghz.max(0.0), f1_ghz.max(f0_ghz.max(0.0)));
+    let m = (0..=60)
+        .map(|k| lo + (hi - lo) * k as f64 / 60.0)
+        .filter(|f| *f > 0.0)
+        .map(|f| {
+            let p = freq.at(f * 1e9);
+            (p.alpha_c + p.alpha_d) * to_db_mm
+        })
+        .fold(0.0, f64::max);
+    if m > 0.0 { 1.05 * m } else { 1.0 }
 }
 
 /// Curves in dB/mm over `fmax`: (GHz, conductor, dielectric, total).
@@ -105,15 +122,22 @@ impl LossView {
             if fmax > self.fmax_hz() {
                 ui.weak(format!("plot extended to {} GHz, the set frequency", format_g(fmax / 1e9)));
             }
-            if ui.button("Fit").clicked() {
-                self.pending = Some([0.0, fmax / 1e9, 0.0, 0.0]); // y filled in below
+            if ui
+                .button("Fit")
+                .on_hover_text("keep the frequency range, scale y to the curves in it")
+                .clicked()
+            {
+                let [x0, x1, ..] = self.bounds.unwrap_or([0.0, fmax / 1e9, 0.0, 0.0]);
+                self.pending = Some([x0, x1, 0.0, y_fit(freq, x0, x1)]);
+            }
+            if ui.button("Full range").on_hover_text("0 to f max").clicked() {
+                self.pending = Some([0.0, fmax / 1e9, 0.0, y_fit(freq, 0.0, fmax / 1e9)]);
             }
         });
         ui.label(format!("Loss vs frequency (Z0 = {z0:.2} Ohm; er, tan d constant)"));
 
         let c = curves(freq, fmax);
-        let top = 1.05 * c.iter().map(|r| r.3).fold(0.0, f64::max);
-        let pending = self.pending.take().map(|v| [v[0], v[1], v[2], top.max(f64::MIN_POSITIVE)]);
+        let pending = self.pending.take();
         let series = |pick: fn(&(f64, f64, f64, f64)) -> f64| {
             PlotPoints::from(c.iter().map(|r| [r.0, pick(r)]).collect::<Vec<_>>())
         };
@@ -142,6 +166,8 @@ impl LossView {
                 VLine::new("", f_hz / 1e9).color(Color32::GRAY).width(0.9).style(LineStyle::dashed_loose()),
             );
         });
+        let b = resp.transform.bounds();
+        self.bounds = Some([b.min()[0], b.max()[0], b.min()[1], b.max()[1]]);
         let entry =
             |label: &str, color, width| LegendEntry { label: label.into(), color, dashed: false, width };
         legend::draw(
@@ -191,6 +217,40 @@ mod tests {
         // conductor loss ~ sqrt(f), dielectric loss ~ f
         let (a, b) = (c[99], c[399]); // 2.5 GHz and 10 GHz
         assert!((b.1 / a.1 - 2.0).abs() < 1e-9 && (b.2 / a.2 - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_plot_reports_its_bounds_so_fit_can_use_them() {
+        use eframe::egui::{Pos2, Rect, vec2};
+        let ctx = egui::Context::default();
+        let m = LossModel { z0: 50.0, eeff: 3.5, g_over_omega: 1e-12, dzdn: 1e6, sigma: 5.8e7, rq_mm: 0.0 };
+        let mut view = LossView::default();
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &m, 50.0, 1e9, None, 0));
+            });
+        }
+        let b = view.bounds.expect("bounds are stored after drawing");
+        assert!(b[0] <= 0.0 + 1e-9 && b[1] >= 20.0 - 1e-9, "the default range 0..20 GHz is visible: {b:?}");
+        assert!(b[3] > b[2]);
+    }
+
+    #[test]
+    fn fit_follows_the_curves_in_the_visible_range() {
+        let m = LossModel { z0: 50.0, eeff: 3.5, g_over_omega: 1e-12, dzdn: 1e6, sigma: 5.8e7, rq_mm: 0.0 };
+        let total = |f_ghz: f64| {
+            let p = m.at(f_ghz * 1e9);
+            (p.alpha_c + p.alpha_d) * NP2DB / 1000.0
+        };
+        // the loss grows with frequency: the top is 5 % above the value at the right edge
+        assert!((y_fit(&m, 0.0, 10.0) - 1.05 * total(10.0)).abs() < 1e-12);
+        assert!((y_fit(&m, 2.0, 4.0) - 1.05 * total(4.0)).abs() < 1e-12);
+        // a range left of zero or an empty one gives a sane value
+        assert!(y_fit(&m, -5.0, -1.0) > 0.0 && y_fit(&m, 3.0, 3.0) > 0.0);
     }
 
     #[test]

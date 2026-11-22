@@ -26,7 +26,7 @@ fn y_top(split: &SplitSummary, limit: f64) -> f64 {
     if m > 0.0 { 1.15 * m } else { 1.0 }
 }
 
-/// The view the plot starts with and "Fit" returns to: the Python plot's x range.
+/// The view the plot starts with and "Signal region" returns to: the Python plot's x range.
 pub fn fit_bounds(split: &SplitSummary) -> Bounds {
     let hw = split.plot.half_width;
     [-hw, hw, 0.0, y_top(split, hw)]
@@ -40,6 +40,23 @@ pub fn all_bounds(split: &SplitSummary) -> Bounds {
         .flat_map(|p| p.x.iter().copied())
         .fold((f64::INFINITY, f64::NEG_INFINITY), |a, x| (a.0.min(x), a.1.max(x)));
     if lo < hi { [lo, hi, 0.0, y_top(split, f64::INFINITY)] } else { fit_bounds(split) }
+}
+
+/// Top of the y range that fits the curves inside `x0..x1`: 15 % above their maximum there,
+/// evaluated at the points and at both edges.
+pub fn y_fit(split: &SplitSummary, x0: f64, x1: f64) -> f64 {
+    let mut m = 0.0f64;
+    for p in &split.profiles {
+        for (x, j) in p.x.iter().zip(&p.j) {
+            if *x >= x0 && *x <= x1 && j.is_finite() {
+                m = m.max(*j);
+            }
+        }
+        for x in [x0, x1] {
+            m = m.max(profile_value(p, x).filter(|v| v.is_finite()).unwrap_or(0.0));
+        }
+    }
+    if m > 0.0 { 1.15 * m } else { 1.0 }
 }
 
 /// The points of a profile as one or two lines (two when it is not defined across the signal).
@@ -76,6 +93,8 @@ pub fn profile_value(p: &CurrentProfile, x: f64) -> Option<f64> {
 pub struct ReturnView {
     /// View requested by a button, applied in the next plot pass.
     pending: Option<Bounds>,
+    /// Visible bounds of the plot as of the last frame.
+    bounds: Option<Bounds>,
 }
 
 impl ReturnView {
@@ -99,14 +118,18 @@ impl ReturnView {
         ui.label(&split.info);
         ui.add_space(2.0);
         ui.horizontal(|ui| {
+            if ui.button("Fit").on_hover_text("keep the x range, scale y to the curves in it").clicked() {
+                let [x0, x1, ..] = self.bounds.unwrap_or_else(|| fit_bounds(split));
+                self.pending = Some([x0, x1, 0.0, y_fit(split, x0, x1)]);
+            }
             if ui
-                .button("Fit")
-                .on_hover_text("x range of the signal region, y from 0 to the maximum")
+                .button("Signal region")
+                .on_hover_text("the trace and its gaps plus the nearest ground")
                 .clicked()
             {
                 self.pending = Some(fit_bounds(split));
             }
-            if ui.button("Show all").on_hover_text("the whole extent of all curves").clicked() {
+            if ui.button("Full view").on_hover_text("the whole domain").clicked() {
                 self.pending = Some(all_bounds(split));
             }
             ui.weak("wheel: zoom   left drag: zoom box   right drag: pan   double-click: reset");
@@ -157,6 +180,9 @@ impl ReturnView {
                 );
             }
         });
+
+        let b = resp.transform.bounds();
+        self.bounds = Some([b.min()[0], b.max()[0], b.min()[1], b.max()[1]]);
 
         let entries: Vec<LegendEntry> = split
             .profiles
@@ -239,6 +265,46 @@ mod tests {
         let single = CurrentProfile { x: vec![1.0], j: vec![5.0], ..profile(false) };
         assert_eq!(profile_value(&single, 1.0), Some(5.0));
         assert_eq!(profile_value(&single, 1.1), None);
+    }
+
+    #[test]
+    fn fit_scales_y_to_the_curves_inside_the_visible_x_range() {
+        let mut split = SplitSummary { profiles: vec![profile(false)], ..Default::default() };
+        // profile: x [-2, -1, 1, 2], j [1, 2, 4, 1]
+        assert_eq!(y_fit(&split, -2.0, 2.0), 1.15 * 4.0);
+        // only the left part: peak 2 at x = -1
+        // (the profile is continuous across the gap, so the value at the edge x = -0.5 is 2.5)
+        assert_eq!(y_fit(&split, -2.0, -0.5), 1.15 * 2.5);
+        assert_eq!(y_fit(&split, -2.0, -1.0), 1.15 * 2.0);
+        // edges count even without a data point: at x = 0 the profile is 3, at x = 1.5 it is 2.5
+        assert!(
+            (y_fit(&split, -0.5, 0.5) - 1.15 * 3.5).abs() < 1e-12,
+            "values at 0.5 and -0.5 are 3.25 .. no: {}",
+            y_fit(&split, -0.5, 0.5)
+        );
+        // nothing visible -> a sane default
+        split.profiles.clear();
+        assert_eq!(y_fit(&split, 0.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn the_plot_reports_its_bounds_so_fit_can_use_them() {
+        use eframe::egui::{Pos2, Rect, vec2};
+        let ctx = egui::Context::default();
+        let mut split = SplitSummary { profiles: vec![profile(false)], ..Default::default() };
+        split.plot.half_width = 1.5;
+        let mut view = ReturnView::default();
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &split, 0));
+            });
+        }
+        let b = view.bounds.expect("bounds are stored after drawing");
+        assert!(b[0] <= -1.5 + 1e-9 && b[1] >= 1.5 - 1e-9, "the signal region is visible: {b:?}");
     }
 
     #[test]

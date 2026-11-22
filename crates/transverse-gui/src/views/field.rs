@@ -11,9 +11,10 @@ use eframe::egui::{
     self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, TextureHandle,
     TextureOptions, Vec2, vec2,
 };
-use egui_plot::{Plot, PlotBounds, PlotImage, PlotPoint};
+use egui_plot::{Plot, PlotBounds, PlotImage, PlotPoint, uniform_grid_spacer};
 use transverse_core::postproc::EField;
 use transverse_core::quasistatic::Accuracy;
+use transverse_core::units::{UnitSystem, auto_length_unit, format_sig, grid_steps_mm};
 use transverse_gui::raster::{FieldMode, Legend, RasterSpec, nice_ticks, probe, render};
 use transverse_lines::model::{Bounds, FieldData};
 
@@ -52,6 +53,8 @@ pub struct FieldView {
     pub show_eq: bool,
     pub show_mesh: bool,
     pub db_range: f64,
+    /// Metric or imperial lengths on the axes and in the readout (prefix chosen automatically).
+    pub units: UnitSystem,
     generation: u64,
     /// Visible bounds of the plot as of the last frame.
     plot_bounds: Option<Bounds>,
@@ -71,6 +74,7 @@ impl Default for FieldView {
             show_eq: true,
             show_mesh: false,
             db_range: 40.0,
+            units: UnitSystem::Metric,
             generation: 0,
             plot_bounds: None,
             pending_view: None,
@@ -124,6 +128,9 @@ impl FieldView {
         let flag = |k: &str, d: bool| ui.get(k).and_then(|v| v.as_bool()).unwrap_or(d);
         self.show_eq = flag("show_eq", self.show_eq);
         self.show_mesh = flag("show_mesh", self.show_mesh);
+        if let Some(u) = ui.get("length_system").and_then(|v| v.as_str()).and_then(UnitSystem::from_key) {
+            self.units = u;
+        }
         if let Some(d) = ui.get("db_range").and_then(|v| v.as_f64()).filter(|d| (5.0..=200.0).contains(d)) {
             self.db_range = d;
         }
@@ -134,6 +141,13 @@ impl FieldView {
         ui.insert("show_eq".into(), self.show_eq.into());
         ui.insert("show_mesh".into(), self.show_mesh.into());
         ui.insert("db_range".into(), self.db_range.into());
+        ui.insert("length_system".into(), self.units.key().into());
+    }
+
+    /// Unit (symbol, factor to mm) for lengths, chosen from the size of the visible region.
+    fn length_unit(&self, f: &FieldData) -> (&'static str, f64) {
+        let b = self.plot_bounds.unwrap_or(f.view_zoom);
+        auto_length_unit(self.units, (b[1] - b[0]).max(b[3] - b[2]))
     }
 
     fn needs_render(&self, key: (u64, FieldMode, u64), visible: Bounds) -> bool {
@@ -230,6 +244,14 @@ impl FieldView {
                 ui.label("Range");
                 ui.add(egui::DragValue::new(&mut self.db_range).range(5.0..=200.0).speed(0.5).suffix(" dB"));
             }
+            egui::ComboBox::from_id_salt("length_system")
+                .selected_text(self.units.label())
+                .width(80.0)
+                .show_ui(ui, |ui| {
+                    for u in [UnitSystem::Metric, UnitSystem::Imperial] {
+                        ui.selectable_value(&mut self.units, u, u.label());
+                    }
+                });
             if ui.button("Signal region").clicked() {
                 self.pending_view = Some(f.view_zoom);
             }
@@ -238,17 +260,19 @@ impl FieldView {
             }
         });
         let show_mesh = self.show_mesh || self.mode == FieldMode::Mesh;
+        let (unit, unit_f) = self.length_unit(f);
 
         // title: always two lines, so showing the mesh info does not resize the plot
         let mut title = format!("{}  -  1 V on signal, Z0 = {:.2} Ohm\n", self.mode.label(), f.z0);
         match (show_mesh, acc) {
             (true, Some(a)) => {
                 title += &format!(
-                    "mesh {} x {} = {} nodes (finest level), min. cell {:.2} um",
+                    "mesh {} x {} = {} nodes (finest level), min. cell {} {}",
                     a.nx,
                     a.ny,
                     a.nodes,
-                    a.dmin_actual * 1e3
+                    format_sig(a.dmin_actual / unit_f, 3),
+                    unit
                 );
             }
             _ => title.push('\u{a0}'),
@@ -280,8 +304,18 @@ impl FieldView {
                 .height(plot_h)
                 .data_aspect(1.0)
                 .show_grid(false)
-                .x_axis_label("x [mm]")
-                .y_axis_label("y [mm]  (0 = signal layer)")
+                .x_axis_label(format!("x [{unit}]"))
+                .y_axis_label(format!("y [{unit}]  (0 = signal layer)"))
+                .x_axis_formatter(move |mark, _| {
+                    format_sig(mark.value / unit_f, 6).trim_end_matches('0').trim_end_matches('.').to_string()
+                })
+                .y_axis_formatter(move |mark, _| {
+                    format_sig(mark.value / unit_f, 6).trim_end_matches('0').trim_end_matches('.').to_string()
+                })
+                // fixed axis width: the plot frame must not depend on the label text (which changes with the unit)
+                .y_axis_min_width(60.0)
+                .x_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, unit_f)))
+                .y_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, unit_f)))
                 .default_x_bounds(initial[0], initial[1])
                 .default_y_bounds(initial[2], initial[3])
                 // right drag pans, the wheel zooms and the left-drag zoom box is handled below, because the
@@ -407,7 +441,11 @@ impl FieldView {
             // cursor readout
             if let Some(pos) = resp.response.hover_pos().filter(|p| frame_rect.contains(*p)) {
                 let v = tr.value_from_position(pos);
-                readout = format!("x = {:.4} mm   y = {:.4} mm", v.x, v.y);
+                readout = format!(
+                    "x = {} {unit}   y = {} {unit}",
+                    format_sig(v.x / unit_f, 5),
+                    format_sig(v.y / unit_f, 5)
+                );
                 match probe(f, e, v.x, v.y) {
                     Some(p) if p.in_conductor => readout += "   (conductor)",
                     Some(p) => {
@@ -742,12 +780,59 @@ mod tests {
     }
 
     #[test]
+    fn length_unit_follows_the_visible_size_and_the_unit_system() {
+        let ctx = egui::Context::default();
+        let (f, acc) = analysis(false);
+        let mut view = FieldView::default();
+        view.new_result();
+        frames(&ctx, &mut view, &f, &acc, 3);
+        // the signal region is about 1.3 mm wide
+        assert_eq!(view.length_unit(&f).0, "mm");
+        view.units = UnitSystem::Imperial;
+        assert_eq!(view.length_unit(&f).0, "mil");
+        // zooming in changes the prefix, in both systems
+        for (b, metric, imperial) in [
+            ([-0.02, 0.02, -0.01, 0.01], "µm", "mil"),
+            ([-0.001, 0.001, -0.0005, 0.0005], "µm", "µin"),
+            ([-5.0, 5.0, -3.0, 3.0], "cm", "mil"),
+            ([-40.0, 40.0, -20.0, 20.0], "cm", "in"),
+            ([-500.0, 500.0, -300.0, 300.0], "m", "ft"),
+        ] {
+            view.plot_bounds = Some(b);
+            view.units = UnitSystem::Metric;
+            assert_eq!(view.length_unit(&f).0, metric, "{b:?}");
+            view.units = UnitSystem::Imperial;
+            assert_eq!(view.length_unit(&f).0, imperial, "{b:?}");
+        }
+    }
+
+    #[test]
+    fn switching_the_unit_system_does_not_move_the_view() {
+        let ctx = egui::Context::default();
+        let (f, acc) = analysis(false);
+        let mut view = FieldView::default();
+        view.new_result();
+        frames(&ctx, &mut view, &f, &acc, 4);
+        let before = view.plot_bounds.unwrap();
+        for k in 0..6 {
+            view.units = if k % 2 == 0 { UnitSystem::Imperial } else { UnitSystem::Metric };
+            frames(&ctx, &mut view, &f, &acc, 2);
+            assert!(
+                close(view.plot_bounds.unwrap(), before),
+                "switch {k}: {:?} vs {before:?}",
+                view.plot_bounds
+            );
+        }
+    }
+
+    #[test]
     fn options_round_trip_through_settings() {
         let mut v = FieldView {
             mode: FieldMode::Potential,
             show_eq: false,
             show_mesh: true,
             db_range: 55.0,
+            units: UnitSystem::Imperial,
             ..Default::default()
         };
         let mut ui = BTreeMap::new();
@@ -755,10 +840,12 @@ mod tests {
         let mut w = FieldView::default();
         w.load(&ui);
         assert_eq!((w.mode, w.show_eq, w.show_mesh, w.db_range), (FieldMode::Potential, false, true, 55.0));
+        assert_eq!(w.units, UnitSystem::Imperial);
         // garbage is ignored
         ui.insert("field_mode".into(), "nonsense".into());
         ui.insert("db_range".into(), 1e9.into());
+        ui.insert("length_system".into(), "furlong".into());
         v.load(&ui);
-        assert_eq!((v.mode, v.db_range), (FieldMode::Potential, 55.0));
+        assert_eq!((v.mode, v.db_range, v.units), (FieldMode::Potential, 55.0, UnitSystem::Imperial));
     }
 }
