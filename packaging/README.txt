@@ -19,3 +19,4 @@ License
 -------
 Transverse is free software: GNU General Public License, version 3 only (see LICENSE).
 Source code: https://github.com/JPWiedemann/Transverse
+Licenses of the bundled third-party libraries: THIRD_PARTY_LICENSES.txt

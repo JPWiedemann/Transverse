@@ -1,0 +1,26 @@
+THIRD-PARTY LICENSES
+====================
+
+Transverse is licensed under the GNU General Public License, version 3 only (see LICENSE).
+It includes the following third-party software, under the licenses listed below.
+This file is generated (cargo about generate about.hbs); do not edit it.
+
+Licenses
+--------
+{{#each overview}}
+  {{name}} ({{count}} crates)
+{{/each}}
+
+{{#each licenses}}
+================================================================================
+{{name}}
+================================================================================
+
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}
