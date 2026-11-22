@@ -8,7 +8,7 @@ import json
 import sys
 from dataclasses import asdict, replace
 
-from cpwg_solver import Params, analytic, solve
+from cpwg_solver import Params, analytic, ground_split, solve, synthesize
 
 BASE = Params()
 CASES = {
@@ -29,11 +29,54 @@ CASES = {
     ),
     "tight_tolerance": replace(BASE, tol=0.1),
     "explicit_margin": replace(BASE, plane1=False, fence1=False, margin=3.0),
+    "rough_copper_5ghz": replace(BASE, rq=0.0012, f=5e9, sigma=4.5e7),
 }
+
+
+SYNTH_CASES = {
+    "synth_35_w": (BASE, 35.0, "w"),
+    "synth_35_w_s0.11": (replace(BASE, w=0.5), 35.0, "w"),
+    "synth_s_for_35": (replace(BASE, s=0.2), 35.0, "s"),
+    "synth_35_w_total": (BASE, 35.0, "w_total"),
+    "synth_open_50_w": (replace(BASE, plane1=False, fence1=False), 50.0, "w"),
+}
+
+
+def split_entry(sol) -> dict:
+    gs = ground_split(sol)
+    return {
+        "field": gs["field"],
+        "current": gs["current"],
+        "x90_planes": gs["x90_planes"],
+        "x90_cop": gs["x90_cop"],
+        "profiles": {
+            c: {
+                "n": len(x),
+                "max": float(j.max()),
+                "x_at_max": float(x[j.argmax()]),
+                "sum": float(j.sum()),
+            }
+            for c, (x, j) in gs["profiles"].items()
+        },
+    }
 
 
 def main() -> None:
     out = []
+    synth = []
+    for name, (p, target, var) in SYNTH_CASES.items():
+        pp, sol = synthesize(p, target, var)
+        synth.append(
+            {
+                "name": name,
+                "params": asdict(p),
+                "target": target,
+                "var": var,
+                "result": {"w": pp.w, "s": pp.s},
+                "z0": sol.z0,
+            }
+        )
+        print(f"{name}: w={pp.w:.6f} s={pp.s:.6f} z0={sol.z0:.4f}", file=sys.stderr)
     for name, p in CASES.items():
         sol = solve(p)
         entry = {
@@ -48,6 +91,9 @@ def main() -> None:
             "nodes": sol.info["nodes"],
             "margin": sol.info["margin"],
             "est_err": sol.info.get("est_err"),
+            "dzdn": sol.dzdn(),
+            "loss": sol.losses(p.f),
+            "split": split_entry(sol),
         }
         if p.t == 0 and p.closed():
             z0, eeff, _ = analytic(p)
@@ -60,7 +106,7 @@ def main() -> None:
                 entry["analytic_eeff"] = eeff
         out.append(entry)
         print(f"{name}: z0={sol.z0:.4f} nodes={sol.info['nodes']}", file=sys.stderr)
-    json.dump({"cases": out}, sys.stdout, indent=1)
+    json.dump({"cases": out, "synthesis": synth}, sys.stdout, indent=1)
     print()
 
 
