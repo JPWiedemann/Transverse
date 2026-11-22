@@ -2734,7 +2734,7 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 
 [[package]]
 name = "transverse-cli"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "transverse-core"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "faer",
  "serde",
@@ -2753,7 +2753,7 @@ dependencies = [
 
 [[package]]
 name = "transverse-gui"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "eframe",
  "egui_plot",
@@ -2765,7 +2765,7 @@ dependencies = [
 
 [[package]]
 name = "transverse-lines"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",

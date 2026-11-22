@@ -6,7 +6,7 @@ mod views;
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Transverse")
+            .with_title(concat!("Transverse v", env!("CARGO_PKG_VERSION")))
             .with_inner_size([1280.0, 780.0])
             .with_min_inner_size([900.0, 560.0]),
         ..Default::default()

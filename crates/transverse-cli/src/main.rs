@@ -18,7 +18,8 @@ use transverse_lines::cpwg_inner::{self, CpwgParams, SynthVar, full_analysis};
 const USAGE: &str = "usage:
   transverse analyze [params.json|-] [--json]
   transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--json]
-  transverse selftest [cases.json]";
+  transverse selftest [cases.json]
+  transverse --version";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -26,6 +27,10 @@ fn main() -> ExitCode {
         Some("analyze") => cmd_analyze(&args[1..]),
         Some("synth") => cmd_synth(&args[1..]),
         Some("selftest") => selftest::run(args.get(1).map(String::as_str)),
+        Some("--version" | "-V" | "version") => {
+            println!("transverse {}", env!("CARGO_PKG_VERSION"));
+            Ok(ExitCode::SUCCESS)
+        }
         _ => Err(USAGE.to_string()),
     };
     match result {
