@@ -3,9 +3,7 @@
 use std::collections::BTreeMap;
 
 use eframe::egui::{self, Color32, vec2};
-use egui_plot::{
-    AxisHints, HPlacement, Line, LineStyle, Plot, PlotBounds, PlotPoints, VLine, uniform_grid_spacer,
-};
+use egui_plot::{Line, LineStyle, Plot, PlotBounds, PlotPoints, VLine, uniform_grid_spacer};
 use transverse_core::NP2DB;
 use transverse_core::losses::{FreqResponse, sweep};
 use transverse_core::units::{FREQ_UNITS, UnitSystem, factor, format_g, grid_steps_mm, parse_number};
@@ -15,6 +13,9 @@ use super::nav;
 
 const POINTS: usize = 400;
 const DEFAULT_FMAX_HZ: f64 = 20e9;
+/// Extra room to the right when the set frequency is at or above f max, so its marker is not on the
+/// edge of the plot.
+const RANGE_MARGIN: f64 = 1.02;
 /// Two lines of values under the plot.
 const READOUT_HEIGHT: f32 = 44.0;
 /// Curve colours (matplotlib C0, C1; the total uses the text colour).
@@ -113,10 +114,22 @@ impl LossView {
         v.filter(|v| *v > 0.0).unwrap_or(DEFAULT_FMAX_HZ)
     }
 
-    /// Upper end of the plot: the entry, but never below `floor_hz` (the analysis frequency and the
-    /// frequency typed in the parameter form), so that frequency is always inside the plot.
+    /// Upper end of the plot: the entry, unless the set frequency (the analysis frequency and the
+    /// frequency typed in the parameter form, `floor_hz`) is at or above it. Then the plot extends 2 %
+    /// past that frequency, so its marker is never exactly on the edge.
     pub fn effective_fmax_hz(&self, floor_hz: f64) -> f64 {
-        self.fmax_hz().max(if floor_hz.is_finite() { floor_hz } else { 0.0 })
+        let entry = self.fmax_hz();
+        if floor_hz.is_finite() && floor_hz > 0.0 && floor_hz >= entry {
+            floor_hz * RANGE_MARGIN
+        } else {
+            entry
+        }
+    }
+
+    /// View of the "Full range" button: from 0 to the end of the plot (including the extra margin).
+    pub fn full_range_bounds(&self, freq: &dyn FreqResponse, floor_hz: f64) -> [f64; 4] {
+        let x1 = self.effective_fmax_hz(floor_hz) / 1e9;
+        [0.0, x1, 0.0, y_fit(freq, 0.0, x1)]
     }
 
     pub fn load(&mut self, ui: &BTreeMap<String, serde_json::Value>) {
@@ -155,7 +168,7 @@ impl LossView {
                 },
             );
             if fmax > self.fmax_hz() {
-                ui.weak(format!("plot extended to {} GHz, the set frequency", format_g(fmax / 1e9)));
+                ui.weak(format!("plot extended past the set frequency ({} GHz)", format_g(floor / 1e9)));
             }
             if ui
                 .button("Fit")
@@ -166,7 +179,7 @@ impl LossView {
                 self.pending = Some([x0, x1, 0.0, y_fit(freq, x0, x1)]);
             }
             if ui.button("Full range").on_hover_text("0 to f max").clicked() {
-                self.pending = Some([0.0, fmax / 1e9, 0.0, y_fit(freq, 0.0, fmax / 1e9)]);
+                self.pending = Some(self.full_range_bounds(freq, floor));
             }
         });
         ui.label(format!("Loss vs frequency (Z0 = {z0:.2} Ohm; er, tan d constant)"));
@@ -178,18 +191,14 @@ impl LossView {
         };
         let total_colour = ui.visuals().text_color();
         // the primary (left) axis follows the unit system, the other one shows the second unit
-        let (left_label, k_left, right_label, k_right) = loss_axes(units);
+        let (axis_label, k_axis, _, _) = loss_axes(units);
         let plot = Plot::new(("loss", generation, fmax.to_bits()))
             .height((ui.available_height() - READOUT_HEIGHT).max(160.0))
             .x_axis_label("Frequency [GHz]")
-            .custom_y_axes(vec![
-                AxisHints::new_y().label(left_label).formatter(move |mark, _| format_g(mark.value * k_left)),
-                AxisHints::new_y()
-                    .label(right_label)
-                    .placement(HPlacement::Right)
-                    .formatter(move |mark, _| format_g(mark.value * k_right)),
-            ])
-            .y_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, 1.0 / k_left)))
+            // a single y axis in the unit of the unit system (the data is dB/mm)
+            .y_axis_label(axis_label)
+            .y_axis_formatter(move |mark, _| format_g(mark.value * k_axis))
+            .y_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, 1.0 / k_axis)))
             .default_x_bounds(0.0, fmax / 1e9)
             .include_y(0.0);
         let resp = nav::configure(plot).show(ui, |pui| {
@@ -338,16 +347,35 @@ mod tests {
     }
 
     #[test]
-    fn plot_range_never_ends_below_the_set_frequency() {
+    fn plot_range_leaves_room_to_the_right_of_the_set_frequency() {
         let v = LossView { fmax_text: "5".into(), ..Default::default() };
-        // entry larger than the set frequency: the entry wins
+        // set frequency below the entry: the entry wins and no margin is added
         assert_eq!(v.effective_fmax_hz(2e9), 5e9);
-        // set frequency larger than the entry: it wins
-        assert_eq!(v.effective_fmax_hz(12e9), 12e9);
-        // exactly equal
-        assert_eq!(v.effective_fmax_hz(5e9), 5e9);
+        assert_eq!(v.effective_fmax_hz(4.9e9), 5e9);
+        // set frequency above the entry: 2 % beyond it
+        assert!((v.effective_fmax_hz(12e9) - 12.24e9).abs() < 1.0);
+        // exactly at the entry the marker would sit on the edge, so it gets the margin as well
+        assert!((v.effective_fmax_hz(5e9) - 5.1e9).abs() < 1.0);
+        // the set frequency is always inside the plot
+        for f in [1e9, 5e9, 5.01e9, 12e9, 1e12] {
+            assert!(v.effective_fmax_hz(f) >= f);
+        }
         // nonsense floors do not break the range
         assert_eq!(v.effective_fmax_hz(f64::NAN), 5e9);
         assert_eq!(v.effective_fmax_hz(-1.0), 5e9);
+        assert_eq!(v.effective_fmax_hz(0.0), 5e9);
+    }
+
+    #[test]
+    fn full_range_includes_the_extra_margin() {
+        let m = LossModel { z0: 50.0, eeff: 3.5, g_over_omega: 1e-12, dzdn: 1e6, sigma: 5.8e7, rq_mm: 0.0 };
+        let v = LossView { fmax_text: "5".into(), ..Default::default() };
+        // set frequency 12 GHz > f max 5 GHz: the range runs to 12.24 GHz
+        let b = v.full_range_bounds(&m, 12e9);
+        assert_eq!((b[0], b[2]), (0.0, 0.0));
+        assert!((b[1] - 12.24).abs() < 1e-9, "{b:?}");
+        assert!((b[3] - y_fit(&m, 0.0, 12.24)).abs() < 1e-15 && b[3] > 0.0);
+        // set frequency below f max: exactly f max
+        assert_eq!(v.full_range_bounds(&m, 1e9)[1], 5.0);
     }
 }
