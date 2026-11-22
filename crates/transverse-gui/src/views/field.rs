@@ -57,8 +57,10 @@ pub struct FieldView {
     generation: u64,
     /// Visible bounds of the plot as of the last frame.
     plot_bounds: Option<Bounds>,
-    /// View requested by a button, applied in the next plot pass.
+    /// View requested by a button or a finished zoom box, applied in the next plot pass.
     pending_view: Option<Bounds>,
+    /// Start of a zoom box being dragged (screen position).
+    box_start: Option<Pos2>,
     render: Option<Render>,
     e: Option<(u64, EField)>,
     eq: Option<(u64, Vec<[[f64; 2]; 2]>)>,
@@ -74,11 +76,27 @@ impl Default for FieldView {
             generation: 0,
             plot_bounds: None,
             pending_view: None,
+            box_start: None,
             render: None,
             e: None,
             eq: None,
         }
     }
+}
+
+/// Bounds for a zoom box dragged from `a` to `b` (data coordinates) in a plot frame of `frame`
+/// points, extended to the aspect of the frame so the result is already what the plot would show
+/// (the plot enforces 1:1 data aspect and would otherwise stretch the view for one frame).
+/// None for boxes smaller than a few points.
+fn box_zoom_bounds(a: [f64; 2], b: [f64; 2], frame: Vec2, points_per_unit: f64) -> Option<Bounds> {
+    let (w, h) = ((a[0] - b[0]).abs(), (a[1] - b[1]).abs());
+    if w * points_per_unit < 4.0 || h * points_per_unit < 4.0 || frame.x <= 0.0 || frame.y <= 0.0 {
+        return None;
+    }
+    let ratio = frame.x as f64 / frame.y as f64;
+    let (bw, bh) = if w / h < ratio { (h * ratio, h) } else { (w, w / ratio) };
+    let (cx, cy) = (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]));
+    Some([cx - 0.5 * bw, cx + 0.5 * bw, cy - 0.5 * bh, cy + 0.5 * bh])
 }
 
 fn expand(b: Bounds, frac: f64) -> Bounds {
@@ -97,6 +115,7 @@ impl FieldView {
         self.generation += 1;
         self.plot_bounds = None;
         self.pending_view = None;
+        self.box_start = None;
         self.render = None;
     }
 
@@ -253,6 +272,9 @@ impl FieldView {
         let e = &self.e.as_ref().unwrap().1;
         let mut readout = String::new();
         let mut new_bounds = None;
+        let box_start = self.box_start;
+        let mut box_next = box_start;
+        let mut zoom_to = None;
 
         ui.horizontal(|ui| {
             let resp = Plot::new(("field", gen_))
@@ -264,11 +286,11 @@ impl FieldView {
                 .y_axis_label("y [mm]  (0 = signal layer)")
                 .default_x_bounds(initial[0], initial[1])
                 .default_y_bounds(initial[2], initial[3])
-                // left drag draws the zoom box, right drag pans, the wheel zooms (handled below)
+                // right drag pans, the wheel zooms and the left-drag zoom box is handled below, because the
+                // built-in one stretches the view for a frame before the 1:1 aspect is restored
                 .allow_zoom(false)
                 .allow_scroll(false)
-                .allow_boxed_zoom(true)
-                .boxed_zoom_pointer_button(PointerButton::Primary)
+                .allow_boxed_zoom(false)
                 .pan_pointer_button(PointerButton::Secondary)
                 .show(ui, |pui| {
                     if let Some(v) = pending {
@@ -286,6 +308,38 @@ impl FieldView {
             let b = tr.bounds();
             new_bounds = Some([b.min()[0], b.max()[0], b.min()[1], b.max()[1]]);
             let painter = ui.painter_at(frame_rect);
+            let rr = &resp.response;
+            if rr.drag_started_by(PointerButton::Primary) {
+                box_next = rr.interact_pointer_pos();
+            }
+            if let (Some(a), Some(b)) = (box_next, rr.interact_pointer_pos().or_else(|| rr.hover_pos())) {
+                if rr.dragged_by(PointerButton::Primary) {
+                    let rect = Rect::from_two_pos(a, b);
+                    painter.rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(4.0, Color32::DARK_BLUE),
+                        egui::StrokeKind::Middle,
+                    );
+                    painter.rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(2.0, Color32::WHITE),
+                        egui::StrokeKind::Middle,
+                    );
+                } else if rr.drag_stopped_by(PointerButton::Primary) {
+                    let (va, vb) = (tr.value_from_position(a), tr.value_from_position(b));
+                    zoom_to = box_zoom_bounds(
+                        [va.x, va.y],
+                        [vb.x, vb.y],
+                        frame_rect.size(),
+                        tr.dpos_dvalue_x().abs(),
+                    );
+                    box_next = None;
+                } else {
+                    box_next = None;
+                }
+            }
             let to_screen = |p: [f64; 2]| tr.position_from_point(&PlotPoint::new(p[0], p[1]));
 
             // field lines with an arrowhead in the middle
@@ -417,6 +471,12 @@ impl FieldView {
                 );
             }
         });
+
+        self.box_start = box_next;
+        if let Some(b) = zoom_to {
+            self.pending_view = Some(b);
+            ui.ctx().request_repaint();
+        }
 
         // the next frame decides from these bounds whether the image must be re-rendered
         if let Some(nb) = new_bounds {
@@ -612,6 +672,79 @@ mod tests {
         // the signal region (default bounds) is visible again; the full domain is not
         assert!(b[0] <= f.view_zoom[0] + 1e-6 && b[1] >= f.view_zoom[1] - 1e-6);
         assert!(b[1] - b[0] < 0.8 * (f.view_full[1] - f.view_full[0]));
+    }
+
+    #[test]
+    fn zoom_box_is_fitted_to_the_plot_aspect() {
+        let frame = vec2(800.0, 400.0); // 2:1
+        // wide box: height grows
+        let b = box_zoom_bounds([0.0, 0.0], [4.0, 1.0], frame, 100.0).unwrap();
+        assert!(((b[1] - b[0]) / (b[3] - b[2]) - 2.0).abs() < 1e-12);
+        assert!((b[0] - 0.0).abs() < 1e-12 && (b[1] - 4.0).abs() < 1e-12, "box width is kept");
+        assert!((0.5 * (b[2] + b[3]) - 0.5).abs() < 1e-12, "box centre is kept");
+        // tall box: width grows
+        let b = box_zoom_bounds([0.0, 0.0], [1.0, 4.0], frame, 100.0).unwrap();
+        assert!(((b[1] - b[0]) / (b[3] - b[2]) - 2.0).abs() < 1e-12);
+        assert!((b[2] - 0.0).abs() < 1e-12 && (b[3] - 4.0).abs() < 1e-12);
+        // the corners may be given in any order; tiny boxes are ignored
+        assert_eq!(
+            box_zoom_bounds([4.0, 1.0], [0.0, 0.0], frame, 100.0),
+            box_zoom_bounds([0.0, 0.0], [4.0, 1.0], frame, 100.0)
+        );
+        assert!(box_zoom_bounds([0.0, 0.0], [0.03, 1.0], frame, 100.0).is_none());
+        assert!(box_zoom_bounds([0.0, 0.0], [1.0, 1.0], vec2(0.0, 10.0), 100.0).is_none());
+    }
+
+    fn pointer(
+        ctx: &egui::Context,
+        view: &mut FieldView,
+        f: &FieldData,
+        acc: &Accuracy,
+        events: Vec<egui::Event>,
+    ) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 700.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| view.ui(ui, f, Some(acc)));
+        });
+    }
+
+    #[test]
+    fn dragging_a_zoom_box_zooms_without_a_stretched_intermediate_view() {
+        use egui::{Event, Modifiers};
+        let ctx = egui::Context::default();
+        let (f, acc) = analysis(false);
+        let mut view = FieldView::default();
+        view.new_result();
+        frames(&ctx, &mut view, &f, &acc, 3);
+        let before = view.plot_bounds.unwrap();
+        let (a, b) = (Pos2::new(400.0, 250.0), Pos2::new(560.0, 330.0));
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        pointer(&ctx, &mut view, &f, &acc, vec![Event::PointerMoved(a)]);
+        pointer(&ctx, &mut view, &f, &acc, vec![button(a, true)]);
+        pointer(&ctx, &mut view, &f, &acc, vec![Event::PointerMoved(Pos2::new(480.0, 290.0))]);
+        pointer(&ctx, &mut view, &f, &acc, vec![Event::PointerMoved(b)]);
+        assert!(view.box_start.is_some(), "the box is being dragged");
+        pointer(&ctx, &mut view, &f, &acc, vec![button(b, false)]);
+        let target = view.pending_view.expect("release requests the zoom");
+        // the requested view has the aspect of the plot, so the plot has nothing left to correct
+        let plot = view.plot_bounds.unwrap();
+        let (ta, pa) =
+            ((target[1] - target[0]) / (target[3] - target[2]), (plot[1] - plot[0]) / (plot[3] - plot[2]));
+        assert!((ta - pa).abs() < 1e-6 * pa, "aspect {ta} vs plot {pa}");
+        assert!(view.box_start.is_none());
+        frames(&ctx, &mut view, &f, &acc, 1);
+        assert!(close(view.plot_bounds.unwrap(), target), "{:?} vs {target:?}", view.plot_bounds);
+        // and it is a real zoom in
+        assert!(view.plot_bounds.unwrap()[1] - view.plot_bounds.unwrap()[0] < 0.5 * (before[1] - before[0]));
     }
 
     #[test]
