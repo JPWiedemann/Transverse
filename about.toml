@@ -1,0 +1,27 @@
+# Third-party license notices (cargo about generate about.hbs), shipped in the release archives.
+# Only what ends up in the binaries: the desktop targets, no build scripts or dev dependencies.
+# The license allowlist for CI is deny.toml; keep both in sync.
+
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "0BSD",
+    "Unlicense",
+]
+
+# the workspace crates are not third-party (publish = false): they are covered by LICENSE
+[private]
+ignore = true

@@ -94,7 +94,7 @@ Rulesets (like branch protection) are only enforced for private repositories on 
 
 ## License
 
-Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to the CLA (`CLA.md`), which lets the project owner relicense contributions later. The release archives contain `LICENSE`. `cargo deny check licenses` fails when a dependency (also after a dependabot update) brings a license that is not on the allowlist in `deny.toml`: check that it is compatible with the GPL-3.0 before adding it there. Note that crates offering a choice (e.g. `Apache-2.0 OR GPL-2.0-only`) are fine as long as an allowed alternative exists; GPL-2.0-only code on its own would not be compatible.
+Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to the CLA (`CLA.md`), which lets the project owner relicense contributions later. The release archives contain `LICENSE` and `THIRD_PARTY_LICENSES.txt`, the notices and license texts of all bundled dependencies, which the release build generates with `cargo about` (`about.toml`, `about.hbs`; keep the accepted licenses in sync with `deny.toml`; the file is not committed, so it never goes stale). `cargo deny check licenses` fails when a dependency (also after a dependabot update) brings a license that is not on the allowlist in `deny.toml`: check that it is compatible with the GPL-3.0 before adding it there. Note that crates offering a choice (e.g. `Apache-2.0 OR GPL-2.0-only`) are fine as long as an allowed alternative exists; GPL-2.0-only code on its own would not be compatible.
 
 ## Workflows
 

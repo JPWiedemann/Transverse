@@ -41,12 +41,15 @@ jobs:
       # std::thread or Instant in them), so the web version stays possible
       - name: WebAssembly portability gate
         run: cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines --locked
-      # all dependencies must have a license that is compatible with the GPL-3.0 (see deny.toml)
+      # all dependencies must have a license that is compatible with the GPL-3.0 (see deny.toml),
+      # and the third-party notices for the release archives must be generatable (about.toml)
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.22.0,cargo-about@0.9.3
       - name: Dependency licenses
         run: cargo deny --locked check licenses
+      - name: Third-party license notices
+        run: cargo about generate about.hbs -o third-party-licenses.txt
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -77,7 +80,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild@0.24.1
+          tool: cargo-zigbuild@0.24.1,cargo-about@0.9.3
       - name: Install zig
         run: |
           python3 -m venv .zigenv
