@@ -10,7 +10,7 @@ members = [
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-license = "UNLICENSED"
+license = "GPL-3.0-only"
 publish = false
 
 [workspace.dependencies]

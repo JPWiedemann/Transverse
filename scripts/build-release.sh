@@ -32,7 +32,7 @@ package_dir() { # <name> <target dir> <exe suffix>
     rm -rf "$dist/$name"
     mkdir -p "$dist/$name"
     cp "$tdir/transverse-gui$suffix" "$tdir/transverse$suffix" "$dist/$name/"
-    cp packaging/README.txt "$dist/$name/"
+    cp packaging/README.txt LICENSE "$dist/$name/"
 }
 
 build_linux() {

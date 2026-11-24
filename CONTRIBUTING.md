@@ -2,6 +2,8 @@
 
 This page explains how pull requests and releases work in this repository.
 
+Transverse is licensed under the [GPL-3.0](LICENSE). By submitting a contribution you agree to the [Contributor License Agreement](CLA.md).
+
 ## Opening a pull request
 
 1. Create a branch (or a fork) from **`dev`**.

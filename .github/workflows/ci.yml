@@ -41,6 +41,12 @@ jobs:
       # std::thread or Instant in them), so the web version stays possible
       - name: WebAssembly portability gate
         run: cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines --locked
+      # all dependencies must have a license that is compatible with the GPL-3.0 (see deny.toml)
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Dependency licenses
+        run: cargo deny --locked check licenses
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc

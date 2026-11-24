@@ -18,7 +18,7 @@ Both branches are protected by rulesets: no direct pushes, no force pushes, no d
 | `pr-title`      | `pr-title.yml`      | `dev`         |
 | `source-branch` | `source-branch.yml` | `main`        |
 
-- `check` runs on every push and pull request: `cargo fmt --check`, clippy with `-D warnings`, the tests (including the parity tests against the Python reference), the WebAssembly portability gate, the tests of the release script and the checks of the Python reference implementation (ruff, pytest).
+- `check` runs on every push and pull request: `cargo fmt --check`, clippy with `-D warnings`, the tests (including the parity tests against the Python reference), the WebAssembly portability gate, the tests of the release script, the dependency license check (`cargo deny`, allowlist in `deny.toml`) and the checks of the Python reference implementation (ruff, pytest).
 - `build` runs for `main`, `dev` and pull requests targeting them: release builds of the desktop app for Linux (glibc 2.28) and Windows with zig, and the core for WebAssembly. The installable packages are only built by the release workflow.
 - `pr-title` validates that the PR title is a conventional commit.
 - `source-branch` fails for pull requests into `main` that don't come from `dev` of this repository.
@@ -91,6 +91,10 @@ Rulesets (like branch protection) are only enforced for private repositories on 
 
 - **GitHub App for the release PR:** the `Release preview` workflow can open and update the release PR with a short-lived token of a GitHub App, so the PR is authored by the app (`<app name>[bot]`), not by a person. PRs opened with the default `GITHUB_TOKEN` don't run the pull request workflows, so the required checks would never report on them (a closed and reopened PR does). The app needs the repository **variable** `RELEASE_APP_CLIENT_ID` (the app's client ID) and the repository **secret** `RELEASE_APP_PRIVATE_KEY` (the full content of a private key generated for the app), with the repository permissions _Pull requests: read and write_ and _Contents: read_ (nothing else), installed on this repository only. Without the variable the workflow falls back to `GITHUB_TOKEN`. The token is created per run and expires after an hour, so there is nothing to renew.
 - **Dependabot** (`.github/dependabot.yml`) opens grouped monthly dependency updates against `dev` for the Rust crates, the Python environment and the GitHub actions. `faer` (pinned, sparse API changes), and `eframe` / `egui_plot` (0.x releases change the API and have to move together) are updated manually.
+
+## License
+
+Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to the CLA (`CLA.md`), which lets the project owner relicense contributions later. The release archives contain `LICENSE`. `cargo deny check licenses` fails when a dependency (also after a dependabot update) brings a license that is not on the allowlist in `deny.toml`: check that it is compatible with the GPL-3.0 before adding it there. Note that crates offering a choice (e.g. `Apache-2.0 OR GPL-2.0-only`) are fine as long as an allowed alternative exists; GPL-2.0-only code on its own would not be compatible.
 
 ## Workflows
 
