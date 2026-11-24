@@ -18,11 +18,12 @@ Both branches are protected by rulesets: no direct pushes, no force pushes, no d
 | `pr-title`      | `pr-title.yml`      | `dev`         |
 | `source-branch` | `source-branch.yml` | `main`        |
 
-- `check` runs on every push and pull request: `cargo fmt --check`, clippy with `-D warnings`, the tests (including the parity tests against the Python reference), the WebAssembly portability gate, the tests of the release script, the dependency license check (`cargo deny`, allowlist in `deny.toml`) and the checks of the Python reference implementation (ruff, pytest).
-- `build` runs for `main`, `dev` and pull requests targeting them: release builds of the desktop app for Linux (glibc 2.28) and Windows with zig, and the core for WebAssembly. The installable packages are only built by the release workflow.
+- `check` runs on every pull request and on pushes to `dev` and `main` (feature branches are only built through their pull request, so open it early, as a draft): `cargo fmt --check`, clippy with `-D warnings`, the tests (including the parity tests against the Python reference), the WebAssembly portability gate, the tests of the release script, the dependency license check (`cargo deny`, allowlist in `deny.toml`) and the checks of the Python reference implementation (ruff, pytest).
+- `build` runs for `main`, `dev` and pull requests targeting them. It is a small job that waits for three parallel build jobs: `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the core for WebAssembly). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
 - `pr-title` validates that the PR title is a conventional commit.
 - `source-branch` fails for pull requests into `main` that don't come from `dev` of this repository.
 - Require the `(pull_request)` runs, not the `(push)` runs, where a check exists for both.
+- The Rust build cache is only written by runs on `dev` (`save-if` in `ci.yml`); pull requests and `main` read it. This keeps the repository's cache quota free for the cache that is actually reused.
 - Do not enable "Require branches to be up to date" for `main`. After a release, `dev` is one merge commit behind `main`, and that setting would force a back-merge each time.
 
 ## Reviewing and merging a pull request
@@ -100,7 +101,7 @@ Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to
 
 | File                  | Trigger                          | Purpose                                                          |
 | --------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `ci.yml`              | every push, pull requests        | format, lints, tests, wasm gate, Python checks, builds           |
+| `ci.yml`              | pull requests, push to dev/main  | format, lints, tests, wasm gate, Python checks, builds           |
 | `pr-title.yml`        | pull requests                    | conventional commit check for the PR title                       |
 | `source-branch.yml`   | pull requests into `main`        | only `dev` may be merged into `main`                             |
 | `release-preview.yml` | push to `dev`, release PR events | opens/updates the draft release PR                               |

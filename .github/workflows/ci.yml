@@ -1,10 +1,11 @@
 name: CI
 
 on:
-  # every branch push (but not tags, the release workflow handles those)
+  # after merges: dev and main are checked again (tags are handled by the release workflow)
   push:
-    branches: ["**"]
-  # PRs from forks don't trigger a push run in this repo
+    branches: [main, dev]
+  # everything else runs for pull requests, from this repository and from forks. A branch without a
+  # pull request is not built, so open the PR early (as a draft) to get feedback.
   pull_request:
 
 permissions:
@@ -28,6 +29,8 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
       # headers some windowing / GL crates look for while building
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev
       - name: Check formatting
@@ -64,9 +67,42 @@ jobs:
           uv run --group dev ruff format --check .
           uv run --group dev pytest -q
 
-  build:
-    name: build
+  # The release builds run in parallel, one job each: the desktop app for Linux (glibc 2.28) and
+  # Windows, and the core for WebAssembly. They catch linker and cross-compilation problems before a
+  # release; the packages are only published by the release workflow. The `build` job at the end is
+  # the single required check that waits for all of them.
+  build-desktop:
+    name: build (${{ matrix.target }})
     # only build for main and dev: on pushes to them and on pull requests targeting them
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
+    needs: check
+    strategy:
+      fail-fast: false # a failure on one platform does not hide the result of the other
+      matrix:
+        target: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }} # matrix jobs share the job name, so they need separate caches
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild@0.24.1,cargo-about@0.9.3
+      - name: Install zig
+        run: |
+          python3 -m venv .zigenv
+          .zigenv/bin/pip install ziglang==0.17.1
+          echo "$PWD/.zigenv/bin" >> "$GITHUB_PATH"
+      - name: Build desktop app
+        run: scripts/build-release.sh ${{ matrix.target }}
+
+  build-web:
+    name: build (web)
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
       (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
@@ -78,18 +114,23 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild@0.24.1,cargo-about@0.9.3
-      - name: Install zig
-        run: |
-          python3 -m venv .zigenv
-          .zigenv/bin/pip install ziglang==0.17.1
-          echo "$PWD/.zigenv/bin" >> "$GITHUB_PATH"
-      # the release builds of the desktop app for Linux (glibc 2.28) and Windows; catches linker and
-      # cross-compilation problems before a release. The packages are only published by the release
-      # workflow.
-      - name: Build desktop app (Linux and Windows)
-        run: scripts/build-release.sh all
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
       - name: Build the core for WebAssembly
         run: cargo build --release --target wasm32-unknown-unknown -p transverse-core -p transverse-lines
+
+  # The one required check named "build" (see .github/rulesets). It must not be skipped when a build
+  # failed, hence always(); it only runs where the builds run.
+  build:
+    name: build
+    if: >-
+      always() && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev')))
+    needs: [build-desktop, build-web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All builds succeeded
+        run: |
+          echo "desktop: ${{ needs.build-desktop.result }}, web: ${{ needs.build-web.result }}"
+          test "${{ needs.build-desktop.result }}" = success
+          test "${{ needs.build-web.result }}" = success
