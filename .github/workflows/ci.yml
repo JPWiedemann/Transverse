@@ -69,7 +69,8 @@ jobs:
 
   # The release builds run in parallel, one job each: the desktop app for Linux (glibc 2.28) and
   # Windows, and the core for WebAssembly. They catch linker and cross-compilation problems before a
-  # release; the packages are only published by the release workflow. The `build` job at the end is
+  # release; the packages are only published by the release workflow. They start together with `check`
+  # (no `needs`), so the wall time is the longest job. The `build` job at the end is
   # the single required check that waits for all of them.
   build-desktop:
     name: build (${{ matrix.target }})
@@ -77,7 +78,6 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
       (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
-    needs: check
     strategy:
       fail-fast: false # a failure on one platform does not hide the result of the other
       matrix:
@@ -106,7 +106,6 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
       (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
-    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

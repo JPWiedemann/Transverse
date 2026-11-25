@@ -19,7 +19,7 @@ Both branches are protected by rulesets: no direct pushes, no force pushes, no d
 | `source-branch` | `source-branch.yml` | `main`        |
 
 - `check` runs on every pull request and on pushes to `dev` and `main` (feature branches are only built through their pull request, so open it early, as a draft): `cargo fmt --check`, clippy with `-D warnings`, the tests (including the parity tests against the Python reference), the WebAssembly portability gate, the tests of the release script, the dependency license check (`cargo deny`, allowlist in `deny.toml`) and the checks of the Python reference implementation (ruff, pytest).
-- `build` runs for `main`, `dev` and pull requests targeting them. It is a small job that waits for three parallel build jobs: `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the core for WebAssembly). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
+- `build` runs for `main`, `dev` and pull requests targeting them. It is a small job that waits for three build jobs that run in parallel with `check` (not after it): `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the core for WebAssembly). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
 - `pr-title` validates that the PR title is a conventional commit.
 - `source-branch` fails for pull requests into `main` that don't come from `dev` of this repository.
 - Require the `(pull_request)` runs, not the `(push)` runs, where a check exists for both.
