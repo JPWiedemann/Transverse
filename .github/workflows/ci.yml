@@ -27,7 +27,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
@@ -40,10 +39,6 @@ jobs:
       # includes the parity tests against the Python reference cases in tests/reference
       - name: Tests
         run: cargo test --release --locked
-      # the numerical core and the line types must stay buildable for WebAssembly (no std::fs,
-      # std::thread or Instant in them), so the web version stays possible
-      - name: WebAssembly portability gate
-        run: cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines --locked
       # all dependencies must have a license that is compatible with the GPL-3.0 (see deny.toml),
       # and the third-party notices for the release archives must be generatable (about.toml)
       - uses: taiki-e/install-action@v2
@@ -115,6 +110,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
+      # the core and the line types must stay buildable for WebAssembly (no std::fs, std::thread or
+      # Instant in them), so the web version stays possible
       - name: Build the core for WebAssembly
         run: cargo build --release --target wasm32-unknown-unknown -p transverse-core -p transverse-lines
 

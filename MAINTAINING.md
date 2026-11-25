@@ -101,7 +101,7 @@ Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to
 
 | File                  | Trigger                          | Purpose                                                          |
 | --------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `ci.yml`              | pull requests, push to dev/main  | format, lints, tests, wasm gate, Python checks, builds           |
+| `ci.yml`              | pull requests, push to dev/main  | format, lints, tests, Python checks, builds (incl. wasm) |
 | `pr-title.yml`        | pull requests                    | conventional commit check for the PR title                       |
 | `source-branch.yml`   | pull requests into `main`        | only `dev` may be merged into `main`                             |
 | `release-preview.yml` | push to `dev`, release PR events | opens/updates the draft release PR                               |
