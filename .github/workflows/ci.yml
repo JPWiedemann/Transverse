@@ -19,8 +19,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: check
+  # The checks run as parallel jobs; the `check` job at the end is the single required check that
+  # waits for all of them (see .github/rulesets).
+  rust:
+    name: rust (fmt, lints, tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -39,6 +41,13 @@ jobs:
       # includes the parity tests against the Python reference cases in tests/reference
       - name: Tests
         run: cargo test --release --locked
+
+  licenses:
+    name: licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
       # all dependencies must have a license that is compatible with the GPL-3.0 (see deny.toml),
       # and the third-party notices for the release archives must be generatable (about.toml)
       - uses: taiki-e/install-action@v2
@@ -48,6 +57,12 @@ jobs:
         run: cargo deny --locked check licenses
       - name: Third-party license notices
         run: cargo about generate about.hbs -o third-party-licenses.txt
+
+  scripts:
+    name: scripts (release script, Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -61,6 +76,20 @@ jobs:
           uv run --group dev ruff check .
           uv run --group dev ruff format --check .
           uv run --group dev pytest -q
+
+  # The one required check named "check". It must not be skipped when a job failed, hence always().
+  check:
+    name: check
+    if: always()
+    needs: [rust, licenses, scripts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All checks succeeded
+        run: |
+          echo "rust: ${{ needs.rust.result }}, licenses: ${{ needs.licenses.result }}, scripts: ${{ needs.scripts.result }}"
+          test "${{ needs.rust.result }}" = success
+          test "${{ needs.licenses.result }}" = success
+          test "${{ needs.scripts.result }}" = success
 
   # The release builds run in parallel, one job each: the desktop app for Linux (glibc 2.28) and
   # Windows, and the core for WebAssembly. They catch linker and cross-compilation problems before a
