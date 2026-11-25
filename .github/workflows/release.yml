@@ -112,17 +112,20 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Build the core for WebAssembly
-        run: cargo build --release --target wasm32-unknown-unknown -p transverse-core -p transverse-lines
-      # Phase W: build the wasm-bindgen layer and the Svelte frontend, run the reference cases
-      # through Node, and upload the website as the "web" artifact (the release job picks up
-      # *.zip files), for example:
-      #   - run: scripts/set-version.sh "$VERSION"
-      #   - run: cargo install wasm-bindgen-cli --locked --version <pinned>
-      #   - run: cargo build --release --target wasm32-unknown-unknown -p transverse-wasm
-      #   - run: wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/transverse_wasm.wasm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.130 # the version of the wasm-bindgen crate in Cargo.lock
+      - name: Build the WebAssembly module
+        run: scripts/build-web.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Reference cases through WebAssembly
+        run: node web/tests/reference.mjs
+      # Phase W, still to do: build the Svelte frontend and upload the website as the "web" artifact
+      # (the release job picks up *.zip files), for example:
+      #   - run: scripts/set-version.sh "$VERSION"   (before the wasm build above)
       #   - run: npm ci && npm run build   (in web/)
-      #   - run: node web/tests/reference.mjs
       #   - run: (cd web/dist && zip -r "../../transverse-web-v$VERSION.zip" .)
       #   - uses: actions/upload-artifact@v7
       #     with: { name: web, path: transverse-web-v*.zip, if-no-files-found: error }

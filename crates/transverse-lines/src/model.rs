@@ -63,7 +63,7 @@ impl ParamSet {
 }
 
 /// What kind of input a parameter is, with its default and display hints.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub enum ParamKind {
     /// Length in mm; `unit` is the initial display unit, `lambda` allows "relative to wavelength".
     Length {
@@ -88,13 +88,13 @@ pub enum ParamKind {
 }
 
 /// A parameter is only editable while another one has a given value (choice index, or 0/1 for a bool).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct EnableWhen {
     pub key: &'static str,
     pub value: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct ParamSpec {
     pub key: &'static str,
     pub label: &'static str,
@@ -126,7 +126,7 @@ pub fn is_enabled(spec: &ParamSpec, set: &ParamSet) -> bool {
 }
 
 /// One way of solving for a dimension (synthesis).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct SynthTarget {
     pub id: &'static str,
     pub label: &'static str,
