@@ -53,7 +53,7 @@ Before pushing, run what every pull request has to pass:
 cargo fmt --all                                        # formatting (CI: cargo fmt --all --check)
 cargo clippy --release --all-targets -- -D warnings    # lints
 cargo test --release                                   # includes the parity tests against the Python reference
-cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines   # web portability gate
+cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines   # web portability (CI builds and tests the whole module)
 node --test scripts/release.test.mjs                                   # release script tests (only if you touched scripts/)
 cd python && uv run --group dev ruff check . && uv run --group dev ruff format --check . && uv run --group dev pytest   # only for Python changes
 ```

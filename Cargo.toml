@@ -5,6 +5,7 @@ members = [
     "crates/transverse-lines",
     "crates/transverse-gui",
     "crates/transverse-cli",
+    "crates/transverse-wasm",
 ]
 
 [workspace.package]
