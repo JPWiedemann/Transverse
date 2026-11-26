@@ -18,6 +18,11 @@ export interface ParamSpec {
 export interface SynthTarget {
   id: string;
   label: string;
+  /** what the value to reach is called ("Z0", "phase") */
+  goal: string;
+  /** its unit ("Ohm", "deg") */
+  unit: string;
+  default: number;
 }
 
 export interface LineInfo {
@@ -87,6 +92,10 @@ export interface ModeResult {
   l: number;
   c: number;
   f_hz: number;
+  /** guided wavelength at f [mm] */
+  wavelength_mm: number;
+  /** electrical length of the line for the entered length [deg] */
+  phase_deg: number;
   at_f: LossPoint;
   split: SplitSummary | null;
 }

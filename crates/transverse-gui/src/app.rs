@@ -8,7 +8,7 @@ use crate::views::field::FieldView;
 use crate::views::loss::{LossData, LossView};
 use crate::views::return_current::ReturnView;
 use eframe::egui::{self, Color32, RichText};
-use transverse_core::units::{UnitSystem, parse_number};
+use transverse_core::units::{self, UnitSystem, parse_number};
 use transverse_gui::form::{FieldState, FormState, unit_options};
 use transverse_gui::prefs::{Prefs, ThemeChoice};
 use transverse_gui::settings::{self, LineSettings, Settings};
@@ -47,7 +47,8 @@ pub struct App {
     model: Arc<dyn LineModel>,
     form: FormState,
     synth_target: usize,
-    z_target: String,
+    /// Value to reach, as typed, for every synthesis target (Z0 in Ohm, phase in degrees).
+    synth_values: Vec<String>,
     settings: Settings,
     settings_path: PathBuf,
     worker: Option<Worker>,
@@ -86,21 +87,32 @@ impl App {
         let mut loss_view = LossView::default();
         loss_view.load(&settings.ui);
         let mut synth_target = 0;
-        let mut z_target = "35".to_string();
+        let mut synth_values: Vec<String> =
+            model.synth_targets().iter().map(|t| units::format_g(t.default)).collect();
         if let Some(ls) = settings.lines.get(model.id()) {
             form.load_saved(&*model, &ls.fields);
             if let Some(id) = ls.extra.get("synth_target").and_then(|v| v.as_str()) {
                 synth_target = model.synth_targets().iter().position(|t| t.id == id).unwrap_or(0);
             }
+            for (t, v) in model.synth_targets().iter().zip(&mut synth_values) {
+                if let Some(s) = ls.extra.get(&format!("synth_value_{}", t.id)).and_then(|s| s.as_str()) {
+                    *v = s.to_string();
+                }
+            }
+            // settings of older versions: one Z0 for all targets
             if let Some(z) = ls.extra.get("z_target").and_then(|v| v.as_str()) {
-                z_target = z.to_string();
+                for (t, v) in model.synth_targets().iter().zip(&mut synth_values) {
+                    if t.unit == "Ohm" && !ls.extra.contains_key(&format!("synth_value_{}", t.id)) {
+                        *v = z.to_string();
+                    }
+                }
             }
         }
         Self {
             model,
             form,
             synth_target,
-            z_target,
+            synth_values,
             settings,
             settings_path,
             worker: None,
@@ -167,7 +179,9 @@ impl App {
         let mut ls = LineSettings { fields: self.form.to_saved(), ..Default::default() };
         let target = self.model.synth_targets()[self.synth_target].id;
         ls.extra.insert("synth_target".into(), target.into());
-        ls.extra.insert("z_target".into(), self.z_target.clone().into());
+        for (t, v) in self.model.synth_targets().iter().zip(&self.synth_values) {
+            ls.extra.insert(format!("synth_value_{}", t.id), v.clone().into());
+        }
         self.field_view.save(&mut self.settings.ui);
         self.prefs.save(&mut self.settings.ui);
         self.loss_view.save(&mut self.settings.ui);
@@ -187,12 +201,12 @@ impl App {
             }
         };
         let job = if synth {
-            let Some(z0) = parse_number(&self.z_target).filter(|z| *z > 0.0) else {
-                self.error = Some("Target Z0: enter a positive number".into());
+            let t = &self.model.synth_targets()[self.synth_target];
+            let Some(value) = parse_number(&self.synth_values[self.synth_target]).filter(|v| *v > 0.0) else {
+                self.error = Some(format!("Target {}: enter a positive number", t.goal));
                 return;
             };
-            let target_id = self.model.synth_targets()[self.synth_target].id.to_string();
-            Job::Synthesize { params, target_id, z0 }
+            Job::Synthesize { params, target_id: t.id.to_string(), value }
         } else {
             Job::Analyze { params }
         };
@@ -340,9 +354,10 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new("Synthesis").strong());
                 egui::Grid::new("synthesis").num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
-                    ui.label("Target Z0");
-                    entry(ui, &mut self.z_target, true);
-                    ui.label("Ohm");
+                    // the value to reach follows the target: Z0 for a width or gap, phase for the length
+                    ui.label(format!("Target {}", targets[self.synth_target].goal));
+                    entry(ui, &mut self.synth_values[self.synth_target], true);
+                    ui.label(targets[self.synth_target].unit);
                     ui.end_row();
                     ui.label("Vary");
                     egui::ComboBox::from_id_salt("synth_target")

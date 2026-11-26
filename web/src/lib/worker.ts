@@ -43,7 +43,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
     const handle =
       req.op === 'analyze'
         ? analyze(req.line, req.params, progress)
-        : synthesize(req.line, req.params, req.target, req.z0, progress);
+        : synthesize(req.line, req.params, req.target, req.value, progress);
     last?.free();
     last = handle;
     send({ id: req.id, type: 'done', summary: handle.summary(), params: handle.params() ?? null });

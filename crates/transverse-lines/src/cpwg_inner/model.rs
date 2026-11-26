@@ -1,11 +1,11 @@
 //! CPWG inner-layer line as a [`LineModel`]: parameter form, conversion and generic results.
 
 use transverse_core::units::format_g;
-use transverse_core::{Ctl, TvError, TvResult};
+use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, phase_deg};
 
 use super::{
     CpwgAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SchematicFlags, SynthVar,
-    analysis_from_solution, field_data, full_analysis, report, schematic, synthesize,
+    analysis_from_solution, field_data, full_analysis, report, schematic, synthesize, synthesize_length,
 };
 use crate::model::*;
 
@@ -91,10 +91,25 @@ static SPECS: [ParamSpec; 28] = [
     spec("margin", "Domain margin (0=auto)", MESH, len(0.0, "mm")),
 ];
 
-static SYNTH: [SynthTarget; 3] = [
-    SynthTarget { id: "w", label: "w (s fixed)" },
-    SynthTarget { id: "s", label: "s (w fixed)" },
-    SynthTarget { id: "w_total", label: "w (2s+w fixed)" },
+const Z0_GOAL: (&str, &str, f64) = ("Z0", "Ohm", 50.0);
+
+static SYNTH: [SynthTarget; 4] = [
+    SynthTarget { id: "w", label: "w (s fixed)", goal: Z0_GOAL.0, unit: Z0_GOAL.1, default: Z0_GOAL.2 },
+    SynthTarget { id: "s", label: "s (w fixed)", goal: Z0_GOAL.0, unit: Z0_GOAL.1, default: Z0_GOAL.2 },
+    SynthTarget {
+        id: "w_total",
+        label: "w (2s+w fixed)",
+        goal: Z0_GOAL.0,
+        unit: Z0_GOAL.1,
+        default: Z0_GOAL.2,
+    },
+    SynthTarget {
+        id: "length",
+        label: "line length (for a phase)",
+        goal: "phase",
+        unit: "deg",
+        default: 90.0,
+    },
 ];
 
 fn get_num(s: &ParamSet, k: &str, d: f64) -> TvResult<f64> {
@@ -295,6 +310,7 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
 }
 
 fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
+    let wavelength_mm = guided_wavelength_mm(p.f, a.sol.eeff);
     let mode = ModeResult {
         name: "single".into(),
         z0: a.sol.z0,
@@ -302,6 +318,8 @@ fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
         l: a.sol.l,
         c: a.sol.c,
         f_hz: p.f,
+        wavelength_mm,
+        phase_deg: phase_deg(p.length, wavelength_mm),
         at_f: a.loss.at(p.f),
         split: Some(split_summary(p, &a)),
     };
@@ -360,22 +378,32 @@ impl LineModel for CpwgInner {
         &self,
         p: &ParamSet,
         target_id: &str,
-        z0_target: f64,
+        target_value: f64,
         ctl: &Ctl,
     ) -> TvResult<(ParamSet, Analysis)> {
         let t = SYNTH
             .iter()
             .find(|t| t.id == target_id)
             .ok_or_else(|| TvError::InvalidParam(format!("unknown synthesis target {target_id}")))?;
+        let p = CpwgParams::from_set(p)?;
+        if t.id == "length" {
+            let (pp, a) = synthesize_length(&p, target_value, ctl)?;
+            let title = format!(
+                "Synthesis: phase = {} deg at {} GHz, vary {}",
+                format_g(target_value),
+                format_g(p.f / 1e9),
+                t.label
+            );
+            return Ok((pp.to_set(), to_analysis(&title, &pp, a)));
+        }
         let var = match t.id {
             "w" => SynthVar::W,
             "s" => SynthVar::S,
             _ => SynthVar::WTotal,
         };
-        let p = CpwgParams::from_set(p)?;
-        let (pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+        let (pp, sol) = synthesize(&p, target_value, var, DEFAULT_RTOL, ctl)?;
         let a = analysis_from_solution(&pp, sol, ctl)?;
-        let title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(z0_target), t.label);
+        let title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(target_value), t.label);
         let analysis = to_analysis(&title, &pp, a);
         // only the dimensions change; the domain margin found during synthesis stays internal
         let out = CpwgParams { w: pp.w, s: pp.s, ..p };

@@ -124,6 +124,63 @@ fn synthesis_through_the_trait_keeps_other_parameters() {
     assert!(m.synthesize(&set, "nonsense", 50.0, &Ctl::new()).is_err());
 }
 
+#[test]
+fn analysis_reports_wavelength_and_phase_of_the_entered_length() {
+    let m = CpwgInner;
+    let mut set = m.defaults();
+    set.set("length", ParamValue::Num(50.0));
+    let a = m.analyze(&set, &Ctl::new()).unwrap();
+    let mode = &a.modes[0];
+    let lambda = transverse_core::C_LIGHT / (1e9 * mode.eps_eff.sqrt()) * 1e3;
+    assert!(rel(mode.wavelength_mm, lambda) < 1e-12);
+    assert!(rel(mode.phase_deg, 360.0 * 50.0 / lambda) < 1e-12);
+    // the report shows both, and the free-space wavelength for reference
+    assert!(
+        a.report.contains(&format!("Wavelength      = {lambda:8.3} mm  (free space 299.792 mm)")),
+        "{}",
+        a.report
+    );
+    assert!(a.report.contains(&format!("phase {:.2} deg", mode.phase_deg)), "{}", a.report);
+}
+
+#[test]
+fn synthesis_target_metadata_says_what_value_to_enter() {
+    let m = CpwgInner;
+    let t = m.synth_targets();
+    let goals: Vec<_> = t.iter().map(|t| (t.id, t.goal, t.unit)).collect();
+    assert_eq!(
+        goals,
+        [("w", "Z0", "Ohm"), ("s", "Z0", "Ohm"), ("w_total", "Z0", "Ohm"), ("length", "phase", "deg")]
+    );
+    assert_eq!(t[3].default, 90.0);
+}
+
+#[test]
+fn length_synthesis_gives_the_requested_phase_and_changes_only_the_length() {
+    let m = CpwgInner;
+    let mut set = m.defaults();
+    set.set("f", ParamValue::Num(2.4e9));
+    let (out, a) = m.synthesize(&set, "length", 90.0, &Ctl::new()).unwrap();
+    let mode = &a.modes[0];
+    // a quarter wavelength of the guided wave at 2.4 GHz
+    let lambda = transverse_core::C_LIGHT / (2.4e9 * mode.eps_eff.sqrt()) * 1e3;
+    assert!(rel(out.num("length").unwrap(), lambda / 4.0) < 1e-12);
+    assert!(rel(mode.phase_deg, 90.0) < 1e-12);
+    let mut expect = set.clone();
+    expect.set("length", out.get("length").unwrap());
+    assert_eq!(out, expect);
+    assert!(
+        a.report.starts_with("=== Synthesis: phase = 90 deg at 2.4 GHz, vary line length (for a phase) ===")
+    );
+    // more phase needs more length, linearly
+    let (out2, _) = m.synthesize(&set, "length", 360.0, &Ctl::new()).unwrap();
+    assert!(rel(out2.num("length").unwrap(), lambda) < 1e-12);
+    // nonsense targets are rejected
+    for bad in [0.0, -10.0, f64::NAN] {
+        assert!(m.synthesize(&set, "length", bad, &Ctl::new()).is_err(), "{bad}");
+    }
+}
+
 // ---- field data ------------------------------------------------------------------------------
 
 #[derive(Deserialize)]

@@ -60,7 +60,7 @@ struct LineInfo {
     synth_targets: &'static [transverse_lines::model::SynthTarget],
 }
 
-/// `[{id, name, synth_targets: [{id, label}]}]` for all line types.
+/// `[{id, name, synth_targets: [{id, label, goal, unit, default}]}]` for all line types.
 #[wasm_bindgen]
 pub fn line_types() -> Result<String, JsError> {
     let list: Vec<LineInfo> = registry()
@@ -106,18 +106,19 @@ pub fn analyze(
     Ok(AnalysisHandle { analysis, params: None, e: OnceCell::new() })
 }
 
-/// Find the dimension `target_id` that gives `z0_target` Ohm. The handle carries the new parameters.
+/// Find the dimension `target_id` that reaches `target_value` (Ohm for a width or gap, degrees for
+/// the line length; see `synth_targets` of `line_types`). The handle carries the new parameters.
 #[wasm_bindgen]
 pub fn synthesize(
     line_id: &str,
     params_json: &str,
     target_id: &str,
-    z0_target: f64,
+    target_value: f64,
     on_progress: Option<js_sys::Function>,
 ) -> Result<AnalysisHandle, JsError> {
     let p = param_set(params_json)?;
     let (new_p, analysis) =
-        model(line_id)?.synthesize(&p, target_id, z0_target, &ctl(on_progress)).map_err(js_err)?;
+        model(line_id)?.synthesize(&p, target_id, target_value, &ctl(on_progress)).map_err(js_err)?;
     Ok(AnalysisHandle { analysis, params: Some(new_p), e: OnceCell::new() })
 }
 

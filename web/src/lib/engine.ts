@@ -91,9 +91,9 @@ export class Engine {
     return this.run((id) => ({ id, op: 'analyze', line, params: JSON.stringify(params) }), onProgress);
   }
 
-  synthesize(line: string, params: ParamSet, target: string, z0: number, onProgress: (text: string) => void) {
+  synthesize(line: string, params: ParamSet, target: string, value: number, onProgress: (text: string) => void) {
     return this.run(
-      (id) => ({ id, op: 'synthesize', line, params: JSON.stringify(params), target, z0 }),
+      (id) => ({ id, op: 'synthesize', line, params: JSON.stringify(params), target, value }),
       onProgress,
     );
   }

@@ -11,6 +11,7 @@ transverse       (transverse.exe on Windows)
         transverse selftest
         echo {} | transverse analyze
         echo {} | transverse synth w 35
+        echo {"f":2.4e9} | transverse synth length 90
 
 Linux: needs a desktop with OpenGL (Mesa is fine) and X11 or Wayland.
 Windows: needs nothing besides OpenGL 2.0 or newer (any normal graphics driver).

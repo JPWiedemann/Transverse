@@ -15,11 +15,11 @@ pub enum Job {
     Analyze {
         params: ParamSet,
     },
-    /// Find dimension `target_id` that gives `z0` Ohm.
+    /// Find dimension `target_id` that reaches `value` (Ohm or degrees, see `SynthTarget`).
     Synthesize {
         params: ParamSet,
         target_id: String,
-        z0: f64,
+        value: f64,
     },
 }
 
@@ -61,8 +61,8 @@ impl Worker {
                 Job::Analyze { params } => {
                     model.analyze(&params, &run_ctl).map(|analysis| JobOutput { analysis, new_params: None })
                 }
-                Job::Synthesize { params, target_id, z0 } => model
-                    .synthesize(&params, &target_id, z0, &run_ctl)
+                Job::Synthesize { params, target_id, value } => model
+                    .synthesize(&params, &target_id, value, &run_ctl)
                     .map(|(p, analysis)| JobOutput { analysis, new_params: Some(p) }),
             };
             let msg = match result {
@@ -190,8 +190,11 @@ mod tests {
         // a long synthesis is stopped at the next linear solve
         let mut set = m.defaults();
         set.set("tol", ParamValue::Num(0.001));
-        let mut w =
-            Worker::start(m.clone(), Job::Synthesize { params: set, target_id: "w".into(), z0: 50.0 }, || {});
+        let mut w = Worker::start(
+            m.clone(),
+            Job::Synthesize { params: set, target_id: "w".into(), value: 50.0 },
+            || {},
+        );
         loop {
             match w.recv().unwrap() {
                 Msg::Progress(_) => w.cancel(),
@@ -205,7 +208,7 @@ mod tests {
     #[test]
     fn synthesis_returns_new_parameters() {
         let m: Arc<dyn LineModel> = Arc::new(CpwgInner);
-        let job = Job::Synthesize { params: m.defaults(), target_id: "w".into(), z0: 35.0 };
+        let job = Job::Synthesize { params: m.defaults(), target_id: "w".into(), value: 35.0 };
         let mut w = Worker::start(m, job, || {});
         let (_, end) = run_to_end(&mut w);
         let Msg::Done(out) = end else { panic!("not done") };

@@ -70,11 +70,25 @@ test('every tab shows its view', async ({ page }) => {
 
 test('synthesizes the trace width for 35 ohm', async ({ page }) => {
   await page.locator('#p-w').fill('0.5');
-  await page.locator('input.z0').fill('35');
+  await page.getByLabel('Target Z0').fill('35');
   await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
   await expect(status(page)).toContainText('Synthesis done', { timeout: 60_000 });
   const w = Number(await page.locator('#p-w').inputValue());
   expect(Math.abs(w / 0.3605 - 1)).toBeLessThan(5e-4);
+});
+
+test('synthesizes the line length for a phase', async ({ page }) => {
+  await page.getByLabel('Frequency', { exact: true }).fill('2.4');
+  await page.getByRole('combobox').filter({ hasText: 'line length (for a phase)' }).selectOption('length');
+  // the value to reach follows the target: a phase in degrees, 90 by default
+  await expect(page.getByLabel('Target phase')).toHaveValue('90');
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('Synthesis done', { timeout: 60_000 });
+  // a quarter wavelength: 66.004 / 4 mm for the default stack-up at 2.4 GHz
+  const length = Number(await page.locator('#p-length').inputValue());
+  expect(Math.abs(length / (66.0036 / 4) - 1)).toBeLessThan(1e-4);
+  await expect(page.locator('.card', { hasText: 'Electrical length' })).toContainText('90.00');
+  await expect(page.locator('.card', { hasText: 'Wavelength' })).toContainText('66.00');
 });
 
 test('cancel stops a long solve and the page keeps working', async ({ page }) => {
