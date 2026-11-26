@@ -1,0 +1,12 @@
+[package]
+name = "transverse-mesh"
+description = "Generic 2D triangle mesher for Transverse: constrained Delaunay with a size field and quality refinement"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+transverse-core.workspace = true
+transverse-geom.workspace = true
+spade.workspace = true

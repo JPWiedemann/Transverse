@@ -6,6 +6,8 @@ members = [
     "crates/transverse-gui",
     "crates/transverse-cli",
     "crates/transverse-wasm",
+    "crates/transverse-geom",
+    "crates/transverse-mesh",
 ]
 
 [workspace.package]
@@ -22,6 +24,10 @@ serde_json = "1"
 thiserror = "2"
 transverse-core = { path = "crates/transverse-core" }
 transverse-lines = { path = "crates/transverse-lines" }
+transverse-geom = { path = "crates/transverse-geom" }
+transverse-mesh = { path = "crates/transverse-mesh" }
+# spade: constrained Delaunay triangulation (pure Rust, MIT/Apache-2.0, builds for wasm32); pinned
+spade = "=2.15.1"
 
 [profile.release]
 opt-level = 3
