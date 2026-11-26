@@ -106,6 +106,7 @@
 
 <style>
   .split {
+    align-self: flex-start;
     border-collapse: collapse;
     background: var(--panel);
     border: 1px solid var(--border);

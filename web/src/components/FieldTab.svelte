@@ -77,7 +77,8 @@
   // ---- view
   let boxW = $state(700);
   const W = $derived(Math.max(boxW, 300));
-  const H = $derived(Math.min(Math.max(Math.round(W * 0.5), 360), 620));
+  let boxH = $state(420);
+  const H = $derived(Math.max(boxH, 300));
   const PW = $derived(W - M.l - M.r);
   const PH = $derived(H - M.t - M.b);
   let view = $state<View>({ cx: 0, cy: 0, ppm: 1 });
@@ -337,7 +338,7 @@
   <p class="hint">Loading the field…</p>
 {:else}
   <div class="row">
-    <div class="box" bind:clientWidth={boxW} style:height="{H}px">
+    <div class="box" bind:clientWidth={boxW} bind:clientHeight={boxH}>
       <canvas bind:this={canvasEl} style:left="{M.l}px" style:top="{M.t}px" style:width="{PW}px" style:height="{PH}px"></canvas>
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <svg
@@ -450,8 +451,10 @@
     color: var(--danger);
   }
   .row {
+    flex: 1 1 380px;
+    min-height: 380px;
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
   }
   .nobar {
     flex: none;

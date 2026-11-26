@@ -192,6 +192,7 @@
 {:else if !ready || !line}
   <main class="fatal"><p>Loading…</p></main>
 {:else}
+  <div class="app">
   <header>
     <h1>Transverse</h1>
     <span class="line">{line.name}</span>
@@ -241,6 +242,7 @@
           <button role="tab" aria-selected={tab === id} class="tab" class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
         {/each}
       </div>
+      <div class="tabbody">
       {#if tab === 'results'}
         {#if result}
           <Results {result} />
@@ -298,6 +300,7 @@
       {:else}
         <p class="hint">Press Analyze to see the loss over frequency.</p>
       {/if}
+      </div>
     </section>
   </div>
 
@@ -305,6 +308,7 @@
     {#if busy}<span class="spinner" aria-hidden="true"></span>{/if}
     {status}
   </footer>
+  </div>
 {/if}
 
 <style>
@@ -354,16 +358,37 @@
   .z0 {
     width: 5rem;
   }
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
   .layout {
+    flex: 1;
+    min-height: 0;
     display: grid;
     grid-template-columns: minmax(22rem, 30rem) 1fr;
     gap: 16px;
     padding: 16px;
-    padding-bottom: 56px;
-    align-items: start;
+  }
+  .form {
+    overflow-y: auto;
+    min-height: 0;
+    padding-right: 4px;
   }
   .output {
     min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* the plots take the height that is left */
+  .tabbody {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
   .tabs {
     display: flex;
@@ -381,8 +406,7 @@
     color: var(--muted);
   }
   .status {
-    position: fixed;
-    inset: auto 0 0 0;
+    flex: none;
     padding: 6px 16px;
     background: var(--panel);
     border-top: 1px solid var(--border);
@@ -413,8 +437,15 @@
     padding: 24px;
   }
   @media (max-width: 800px) {
+    .app {
+      height: auto;
+      min-height: 100dvh;
+    }
     .layout {
       grid-template-columns: 1fr;
+    }
+    .form {
+      overflow: visible;
     }
   }
 </style>
