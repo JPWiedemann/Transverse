@@ -4,11 +4,12 @@
 //! transverse analyze [params.json|-] [--solver fd|fem] [--json]   analyse one geometry (missing fields use defaults)
 //! transverse compare [params.json|-]                         finite difference vs finite elements on one geometry
 //! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
-//! transverse selftest [cases.json]                            compare against the Python reference cases
+//! transverse selftest [--solver fd|fem] [cases.json]          compare against the Python reference cases
 //! ```
 
 mod fem_cmd;
 mod selftest;
+mod selftest_fem;
 
 use std::io::Read;
 use std::process::ExitCode;
@@ -21,7 +22,7 @@ const USAGE: &str = "usage:
   transverse analyze [params.json|-] [--solver fd|fem] [--json]
   transverse compare [params.json|-]
   transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
-  transverse selftest [cases.json]
+  transverse selftest [--solver fd|fem] [cases.json]
   transverse --version";
 
 fn main() -> ExitCode {
@@ -30,7 +31,7 @@ fn main() -> ExitCode {
         Some("analyze") => cmd_analyze(&args[1..]),
         Some("synth") => cmd_synth(&args[1..]),
         Some("compare") => cmd_compare(&args[1..]),
-        Some("selftest") => selftest::run(args.get(1).map(String::as_str)),
+        Some("selftest") => cmd_selftest(&args[1..]),
         Some("--version" | "-V" | "version") => {
             println!("transverse {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
@@ -81,6 +82,23 @@ fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::CpwgAnalysis, sec
         print!("{}", cpwg_inner::report(title, p, a));
         println!("Time            : {secs:.2} s");
     }
+}
+
+fn cmd_selftest(args: &[String]) -> Result<ExitCode, String> {
+    let mut fem = false;
+    let mut path: Option<&str> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--solver" => match it.next().map(String::as_str) {
+                Some("fd") => fem = false,
+                Some("fem") => fem = true,
+                _ => return Err("--solver needs fd or fem".to_string()),
+            },
+            _ => path = Some(a),
+        }
+    }
+    if fem { selftest_fem::run(path) } else { selftest::run(path) }
 }
 
 fn cmd_compare(args: &[String]) -> Result<ExitCode, String> {
