@@ -2,6 +2,7 @@
 
 pub mod cpwg_inner;
 pub mod model;
+pub mod render;
 
 use std::sync::Arc;
 

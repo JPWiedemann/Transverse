@@ -1,12 +1,12 @@
 //! Field views as pixel images: colour-mapped |E|, potential, permittivity and mesh, plus a
 //! probe for the cursor readout. Pure functions on [`FieldData`], so they are testable without a window.
 
+use serde::Serialize;
 use transverse_core::postproc::{EField, percentile};
-use transverse_lines::model::{Bounds, FieldData};
-
 use transverse_core::units::UnitSystem;
 
-use crate::colormap::Cmap;
+use super::colormap::Cmap;
+use crate::model::{Bounds, FieldData};
 
 /// The solver works in V/mm (lengths in mm); fields are converted to V/m (SI) here and to the unit
 /// system's base unit (V/m or V/mil) where they are drawn.
@@ -69,7 +69,7 @@ impl FieldMode {
 }
 
 /// Colour bar description.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Legend {
     pub label: String,
     pub vmin: f64,
@@ -237,7 +237,7 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
 }
 
 /// Values under the cursor.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct Probe {
     pub v: f64,
     /// |E| [V/m] (NaN inside a conductor).
@@ -277,8 +277,8 @@ pub fn nice_ticks(lo: f64, hi: f64, n: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{DrawRect, ShapeKind};
     use transverse_core::postproc::e_field;
-    use transverse_lines::model::{DrawRect, ShapeKind};
 
     /// 3 x 3 nodes, x = 0, 1, 3 / y = 0, 2, 3; V = x / 3 (a uniform field in x); the cell between nodes (1..2, 1..2) lies inside a conductor.
     fn tiny() -> (FieldData, EField) {
