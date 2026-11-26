@@ -1,11 +1,11 @@
-//! Synthesis: find a dimension that gives a target Z0, or the length that gives a target phase.
+//! Synthesis: find a dimension that gives a target Z0.
 
 use serde::{Deserialize, Serialize};
 use transverse_core::quasistatic::{self, Solution};
 use transverse_core::synthesis::{self as root, SynthSpec};
-use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm};
+use transverse_core::{Ctl, TvResult};
 
-use super::{CpwgAnalysis, CpwgParams, analyze, full_analysis};
+use super::{CpwgParams, analyze};
 
 /// Which dimension is varied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,18 +23,6 @@ pub enum SynthVar {
 
 /// Default relative stopping tolerance of the varied dimension (0.01 %).
 pub const DEFAULT_RTOL: f64 = 1e-4;
-
-/// The line length that has an electrical length of `phase_deg` degrees at the analysis frequency,
-/// with the analysis of the (unchanged) cross-section. The solution does not depend on the length,
-/// so this is one analysis and no iteration: `length = phase / 360 * lambda_guided`.
-pub fn synthesize_length(p: &CpwgParams, phase_deg: f64, ctl: &Ctl) -> TvResult<(CpwgParams, CpwgAnalysis)> {
-    if !(phase_deg.is_finite() && phase_deg > 0.0) {
-        return Err(TvError::Synthesis("the target phase must be a positive number of degrees".into()));
-    }
-    let a = full_analysis(p, ctl)?;
-    let length = phase_deg / 360.0 * guided_wavelength_mm(p.f, a.sol.eeff);
-    Ok((CpwgParams { length, ..p.clone() }, a))
-}
 
 /// Returns the geometry that gives `target` Ohm and its solution.
 pub fn synthesize(

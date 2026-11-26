@@ -11,10 +11,9 @@
   import { lineTypes, loadMeta, paramDefaults, paramSpecs, schematicOf, wavelengthOf } from './lib/meta';
   import { applyTheme, loadSettings, saveSettings, type FieldMode, type Settings, type Tab, type Theme } from './lib/settings';
   import type { AnalysisResult, LineInfo, ParamSet, ParamSpec } from './lib/types';
-  import { formatG, parseNumber, type UnitSystem } from './lib/units';
+  import { parseNumber, type UnitSystem } from './lib/units';
 
   const engine = new Engine();
-  const UNIT_LABEL: Record<string, string> = { Ohm: 'Ω', deg: '°' };
   const tabs: [Tab, string][] = [
     ['results', 'Results'],
     ['cross-section', 'Cross-section'],
@@ -32,9 +31,9 @@
   let form = $state<F.FormState>({});
   let wavelength: F.Wavelength = () => undefined;
   let synthTarget = $state('');
-  // value to reach per synthesis target (Z0 in Ohm, phase in degrees), as typed
-  let synthValues = $state<Record<string, string>>({});
-  const synth = $derived(line?.synth_targets.find((t) => t.id === synthTarget));
+  let synthZ0 = $state('50');
+  // electrical length to reach in degrees; empty keeps the line length
+  let synthPhase = $state('');
   let theme = $state<Theme>(settings.theme);
   let units = $state<UnitSystem>(settings.units);
   let tab = $state<Tab>(settings.tab);
@@ -111,18 +110,13 @@
     f = F.loadSaved(specs, f, saved?.form);
     form = f;
     synthTarget = l.synth_targets.some((t) => t.id === saved?.synthTarget) ? saved!.synthTarget! : (l.synth_targets[0]?.id ?? '');
-    const legacyZ0 = (saved as { synthZ0?: string } | undefined)?.synthZ0; // settings of older versions
-    synthValues = Object.fromEntries(
-      l.synth_targets.map((t) => [
-        t.id,
-        saved?.synthValues?.[t.id] ?? (t.unit === 'Ohm' && legacyZ0 ? legacyZ0 : formatG(t.default)),
-      ]),
-    );
+    synthZ0 = saved?.synthZ0 ?? '50';
+    synthPhase = saved?.synthPhase ?? '';
   }
 
   function persist() {
     if (!line) return;
-    settings.lines[line.id] = { form: F.toSaved(form), synthTarget, synthValues: { ...synthValues } };
+    settings.lines[line.id] = { form: F.toSaved(form), synthTarget, synthZ0, synthPhase };
     saveSettings(settings);
   }
 
@@ -182,15 +176,22 @@
   const analyze = () => run((p) => engine.analyze(line!.id, p, (t) => setStatus(t)), 'Analysis');
 
   function synthesize() {
-    if (!synth) return;
-    const text = synthValues[synth.id] ?? '';
-    const value = parseNumber(text);
-    if (value === undefined || value <= 0) {
-      setStatus(`Target ${synth.goal}: '${text.trim()}' is not a positive number`, 'error');
+    const z0 = parseNumber(synthZ0);
+    if (z0 === undefined || z0 <= 0) {
+      setStatus(`Target impedance: '${synthZ0.trim()}' is not a positive number`, 'error');
       return;
     }
+    // the phase is optional: the line length follows from it (and eps_eff) after the Z0 synthesis
+    let phase: number | undefined;
+    if (synthPhase.trim() !== '') {
+      phase = parseNumber(synthPhase);
+      if (phase === undefined || phase <= 0) {
+        setStatus(`Target phase: '${synthPhase.trim()}' is not a positive number of degrees (leave it empty to keep the length)`, 'error');
+        return;
+      }
+    }
     persist();
-    return run((p) => engine.synthesize(line!.id, p, synth.id, value, (t) => setStatus(t)), 'Synthesis');
+    return run((p) => engine.synthesize(line!.id, p, synthTarget, z0, phase, (t) => setStatus(t)), 'Synthesis');
   }
 </script>
 
@@ -235,12 +236,12 @@
         {/each}
       </select>
     </label>
-    {#if synth}
-      <label>for {synth.goal} =
-        <input type="text" inputmode="decimal" class="value" aria-label="Target {synth.goal}" bind:value={synthValues[synth.id]} disabled={busy} onchange={persist} />
-        {UNIT_LABEL[synth.unit] ?? synth.unit}
-      </label>
-    {/if}
+    <label>for Z0 =
+      <input type="text" inputmode="decimal" class="value" aria-label="Target Z0" bind:value={synthZ0} disabled={busy} onchange={persist} /> Ω
+    </label>
+    <label title="electrical length at the analysis frequency; the line length is set from it. Empty keeps the line length.">phase =
+      <input type="text" inputmode="decimal" class="value" aria-label="Target phase" placeholder="keep length" bind:value={synthPhase} disabled={busy} onchange={persist} /> °
+    </label>
     <button disabled={busy} onclick={synthesize}>Synthesize</button>
     <span class="sep"></span>
     <button disabled={!busy} onclick={() => engine.cancel()}>Cancel</button>

@@ -12,8 +12,9 @@ export const FIELD_MODES: FieldMode[] = ['e_db_lines', 'e_db', 'e_linear', 'pote
 export interface LineSettings {
   form?: SavedForm;
   synthTarget?: string;
-  /** value to reach, as typed, per synthesis target id */
-  synthValues?: Record<string, string>;
+  synthZ0?: string;
+  /** electrical length to reach in degrees, as typed; empty keeps the line length */
+  synthPhase?: string;
 }
 
 export interface Settings {

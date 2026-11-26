@@ -15,11 +15,13 @@ pub enum Job {
     Analyze {
         params: ParamSet,
     },
-    /// Find dimension `target_id` that reaches `value` (Ohm or degrees, see `SynthTarget`).
+    /// Find dimension `target_id` that gives `z0` Ohm; with `phase_deg` the line length is set for
+    /// that electrical length as well.
     Synthesize {
         params: ParamSet,
         target_id: String,
-        value: f64,
+        z0: f64,
+        phase_deg: Option<f64>,
     },
 }
 
@@ -61,8 +63,8 @@ impl Worker {
                 Job::Analyze { params } => {
                     model.analyze(&params, &run_ctl).map(|analysis| JobOutput { analysis, new_params: None })
                 }
-                Job::Synthesize { params, target_id, value } => model
-                    .synthesize(&params, &target_id, value, &run_ctl)
+                Job::Synthesize { params, target_id, z0, phase_deg } => model
+                    .synthesize(&params, &target_id, z0, phase_deg, &run_ctl)
                     .map(|(p, analysis)| JobOutput { analysis, new_params: Some(p) }),
             };
             let msg = match result {
@@ -192,7 +194,7 @@ mod tests {
         set.set("tol", ParamValue::Num(0.001));
         let mut w = Worker::start(
             m.clone(),
-            Job::Synthesize { params: set, target_id: "w".into(), value: 50.0 },
+            Job::Synthesize { params: set, target_id: "w".into(), z0: 50.0, phase_deg: None },
             || {},
         );
         loop {
@@ -208,13 +210,18 @@ mod tests {
     #[test]
     fn synthesis_returns_new_parameters() {
         let m: Arc<dyn LineModel> = Arc::new(CpwgInner);
-        let job = Job::Synthesize { params: m.defaults(), target_id: "w".into(), value: 35.0 };
+        let job =
+            Job::Synthesize { params: m.defaults(), target_id: "w".into(), z0: 35.0, phase_deg: Some(90.0) };
         let mut w = Worker::start(m, job, || {});
         let (_, end) = run_to_end(&mut w);
         let Msg::Done(out) = end else { panic!("not done") };
         let p = out.new_params.unwrap();
         assert!((p.num("w").unwrap() / 0.3605 - 1.0).abs() < 5e-4);
         assert!(out.analysis.report.contains("Synthesis: Z0 = 35 Ohm"));
+        // the length follows from the 90 degrees (a quarter wavelength), not from the old 100 mm
+        let mode = &out.analysis.modes[0];
+        assert!((mode.phase_deg - 90.0).abs() < 1e-9);
+        assert!((p.num("length").unwrap() - mode.wavelength_mm / 4.0).abs() < 1e-9);
     }
 
     #[test]

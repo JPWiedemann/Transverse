@@ -130,12 +130,6 @@ pub fn is_enabled(spec: &ParamSpec, set: &ParamSet) -> bool {
 pub struct SynthTarget {
     pub id: &'static str,
     pub label: &'static str,
-    /// What the value to reach is called ("Z0", "phase") ...
-    pub goal: &'static str,
-    /// ... in which unit ("Ohm", "deg") ...
-    pub unit: &'static str,
-    /// ... and the value a frontend offers first.
-    pub default: f64,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -362,14 +356,16 @@ pub trait LineModel: Send + Sync {
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis>;
 
-    /// Find the dimension `target_id` that reaches `target_value` (in the unit of the target:
-    /// Ohm for a width or gap, degrees for the line length); returns the new parameters and the
-    /// analysis at that point.
+    /// Find the dimension `target_id` that gives `z0_target` Ohm; returns the new parameters and the
+    /// analysis at that point. With `phase_deg` the line length is set as well, so that the line has
+    /// that electrical length at the analysis frequency: the length follows from the solution
+    /// (through eps_eff), it is never a search variable of its own.
     fn synthesize(
         &self,
         p: &ParamSet,
         target_id: &str,
-        target_value: f64,
+        z0_target: f64,
+        phase_deg: Option<f64>,
         ctl: &Ctl,
     ) -> TvResult<(ParamSet, Analysis)>;
 }

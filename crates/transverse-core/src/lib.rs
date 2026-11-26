@@ -25,6 +25,11 @@ pub fn guided_wavelength_mm(f_hz: f64, eps_eff: f64) -> f64 {
     C_LIGHT / (f_hz * eps_eff.sqrt()) * 1e3
 }
 
+/// Physical length [mm] that has an electrical length of `phase_deg` degrees at `f_hz`.
+pub fn length_for_phase_mm(f_hz: f64, eps_eff: f64, phase_deg: f64) -> f64 {
+    phase_deg / 360.0 * guided_wavelength_mm(f_hz, eps_eff)
+}
+
 /// Electrical length [deg] of a line of `length_mm` for a wavelength of `wavelength_mm`.
 pub fn phase_deg(length_mm: f64, wavelength_mm: f64) -> f64 {
     360.0 * length_mm / wavelength_mm
@@ -43,5 +48,12 @@ mod tests {
         // a quarter wavelength is 90 degrees, and phase grows linearly with length
         assert!((phase_deg(l / 4.0, l) - 90.0).abs() < 1e-12);
         assert!((phase_deg(2.0 * l, l) - 720.0).abs() < 1e-12);
+        // and back: the length for a phase has that phase
+        assert!((length_for_phase_mm(1e9, 4.0, 90.0) - l / 4.0).abs() < 1e-12);
+        assert!(
+            (phase_deg(length_for_phase_mm(2.4e9, 3.58, 37.0), guided_wavelength_mm(2.4e9, 3.58)) - 37.0)
+                .abs()
+                < 1e-12
+        );
     }
 }

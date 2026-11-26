@@ -8,7 +8,7 @@ use crate::views::field::FieldView;
 use crate::views::loss::{LossData, LossView};
 use crate::views::return_current::ReturnView;
 use eframe::egui::{self, Color32, RichText};
-use transverse_core::units::{self, UnitSystem, parse_number};
+use transverse_core::units::{UnitSystem, parse_number};
 use transverse_gui::form::{FieldState, FormState, unit_options};
 use transverse_gui::prefs::{Prefs, ThemeChoice};
 use transverse_gui::settings::{self, LineSettings, Settings};
@@ -47,8 +47,9 @@ pub struct App {
     model: Arc<dyn LineModel>,
     form: FormState,
     synth_target: usize,
-    /// Value to reach, as typed, for every synthesis target (Z0 in Ohm, phase in degrees).
-    synth_values: Vec<String>,
+    z_target: String,
+    /// Electrical length to reach in degrees; empty keeps the line length.
+    phase_target: String,
     settings: Settings,
     settings_path: PathBuf,
     worker: Option<Worker>,
@@ -66,6 +67,13 @@ pub struct App {
 }
 
 /// Fixed-size entry box (red text while the content is not a number).
+/// Like [`entry`], but an empty text is fine.
+fn entry_optional(ui: &mut egui::Ui, text: &mut String) {
+    let bad = !text.trim().is_empty() && parse_number(text).is_none();
+    let edit = egui::TextEdit::singleline(text).text_color_opt(bad.then_some(Color32::RED));
+    ui.add_sized([ENTRY_WIDTH, ui.spacing().interact_size.y], edit);
+}
+
 fn entry(ui: &mut egui::Ui, text: &mut String, enabled: bool) {
     let bad = parse_number(text).is_none();
     let edit = egui::TextEdit::singleline(text).text_color_opt(bad.then_some(Color32::RED));
@@ -87,32 +95,26 @@ impl App {
         let mut loss_view = LossView::default();
         loss_view.load(&settings.ui);
         let mut synth_target = 0;
-        let mut synth_values: Vec<String> =
-            model.synth_targets().iter().map(|t| units::format_g(t.default)).collect();
+        let mut z_target = "35".to_string();
+        let mut phase_target = String::new();
         if let Some(ls) = settings.lines.get(model.id()) {
             form.load_saved(&*model, &ls.fields);
             if let Some(id) = ls.extra.get("synth_target").and_then(|v| v.as_str()) {
                 synth_target = model.synth_targets().iter().position(|t| t.id == id).unwrap_or(0);
             }
-            for (t, v) in model.synth_targets().iter().zip(&mut synth_values) {
-                if let Some(s) = ls.extra.get(&format!("synth_value_{}", t.id)).and_then(|s| s.as_str()) {
-                    *v = s.to_string();
-                }
-            }
-            // settings of older versions: one Z0 for all targets
             if let Some(z) = ls.extra.get("z_target").and_then(|v| v.as_str()) {
-                for (t, v) in model.synth_targets().iter().zip(&mut synth_values) {
-                    if t.unit == "Ohm" && !ls.extra.contains_key(&format!("synth_value_{}", t.id)) {
-                        *v = z.to_string();
-                    }
-                }
+                z_target = z.to_string();
+            }
+            if let Some(p) = ls.extra.get("phase_target").and_then(|v| v.as_str()) {
+                phase_target = p.to_string();
             }
         }
         Self {
             model,
             form,
             synth_target,
-            synth_values,
+            z_target,
+            phase_target,
             settings,
             settings_path,
             worker: None,
@@ -179,9 +181,8 @@ impl App {
         let mut ls = LineSettings { fields: self.form.to_saved(), ..Default::default() };
         let target = self.model.synth_targets()[self.synth_target].id;
         ls.extra.insert("synth_target".into(), target.into());
-        for (t, v) in self.model.synth_targets().iter().zip(&self.synth_values) {
-            ls.extra.insert(format!("synth_value_{}", t.id), v.clone().into());
-        }
+        ls.extra.insert("z_target".into(), self.z_target.clone().into());
+        ls.extra.insert("phase_target".into(), self.phase_target.clone().into());
         self.field_view.save(&mut self.settings.ui);
         self.prefs.save(&mut self.settings.ui);
         self.loss_view.save(&mut self.settings.ui);
@@ -201,12 +202,23 @@ impl App {
             }
         };
         let job = if synth {
-            let t = &self.model.synth_targets()[self.synth_target];
-            let Some(value) = parse_number(&self.synth_values[self.synth_target]).filter(|v| *v > 0.0) else {
-                self.error = Some(format!("Target {}: enter a positive number", t.goal));
+            let Some(z0) = parse_number(&self.z_target).filter(|z| *z > 0.0) else {
+                self.error = Some("Target Z0: enter a positive number".into());
                 return;
             };
-            Job::Synthesize { params, target_id: t.id.to_string(), value }
+            // the phase is optional: the line length follows from it (and eps_eff) after the Z0 synthesis
+            let phase_deg = if self.phase_target.trim().is_empty() {
+                None
+            } else {
+                let Some(ph) = parse_number(&self.phase_target).filter(|v| *v > 0.0) else {
+                    self.error =
+                        Some("Target phase: enter a positive number of degrees or leave it empty".into());
+                    return;
+                };
+                Some(ph)
+            };
+            let target_id = self.model.synth_targets()[self.synth_target].id.to_string();
+            Job::Synthesize { params, target_id, z0, phase_deg }
         } else {
             Job::Analyze { params }
         };
@@ -354,10 +366,14 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new("Synthesis").strong());
                 egui::Grid::new("synthesis").num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
-                    // the value to reach follows the target: Z0 for a width or gap, phase for the length
-                    ui.label(format!("Target {}", targets[self.synth_target].goal));
-                    entry(ui, &mut self.synth_values[self.synth_target], true);
-                    ui.label(targets[self.synth_target].unit);
+                    ui.label("Target Z0");
+                    entry(ui, &mut self.z_target, true);
+                    ui.label("Ohm");
+                    ui.end_row();
+                    // optional: the line length is set from the phase, it does not change the search
+                    ui.label("Phase");
+                    entry_optional(ui, &mut self.phase_target);
+                    ui.label("deg (empty: keep length)");
                     ui.end_row();
                     ui.label("Vary");
                     egui::ComboBox::from_id_salt("synth_target")

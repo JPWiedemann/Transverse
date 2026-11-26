@@ -1,11 +1,11 @@
 //! CPWG inner-layer line as a [`LineModel`]: parameter form, conversion and generic results.
 
 use transverse_core::units::format_g;
-use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, phase_deg};
+use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
     CpwgAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SchematicFlags, SynthVar,
-    analysis_from_solution, field_data, full_analysis, report, schematic, synthesize, synthesize_length,
+    analysis_from_solution, field_data, full_analysis, report, schematic, synthesize,
 };
 use crate::model::*;
 
@@ -91,25 +91,10 @@ static SPECS: [ParamSpec; 28] = [
     spec("margin", "Domain margin (0=auto)", MESH, len(0.0, "mm")),
 ];
 
-const Z0_GOAL: (&str, &str, f64) = ("Z0", "Ohm", 50.0);
-
-static SYNTH: [SynthTarget; 4] = [
-    SynthTarget { id: "w", label: "w (s fixed)", goal: Z0_GOAL.0, unit: Z0_GOAL.1, default: Z0_GOAL.2 },
-    SynthTarget { id: "s", label: "s (w fixed)", goal: Z0_GOAL.0, unit: Z0_GOAL.1, default: Z0_GOAL.2 },
-    SynthTarget {
-        id: "w_total",
-        label: "w (2s+w fixed)",
-        goal: Z0_GOAL.0,
-        unit: Z0_GOAL.1,
-        default: Z0_GOAL.2,
-    },
-    SynthTarget {
-        id: "length",
-        label: "line length (for a phase)",
-        goal: "phase",
-        unit: "deg",
-        default: 90.0,
-    },
+static SYNTH: [SynthTarget; 3] = [
+    SynthTarget { id: "w", label: "w (s fixed)" },
+    SynthTarget { id: "s", label: "s (w fixed)" },
+    SynthTarget { id: "w_total", label: "w (2s+w fixed)" },
 ];
 
 fn get_num(s: &ParamSet, k: &str, d: f64) -> TvResult<f64> {
@@ -378,35 +363,35 @@ impl LineModel for CpwgInner {
         &self,
         p: &ParamSet,
         target_id: &str,
-        target_value: f64,
+        z0_target: f64,
+        phase_deg: Option<f64>,
         ctl: &Ctl,
     ) -> TvResult<(ParamSet, Analysis)> {
         let t = SYNTH
             .iter()
             .find(|t| t.id == target_id)
             .ok_or_else(|| TvError::InvalidParam(format!("unknown synthesis target {target_id}")))?;
-        let p = CpwgParams::from_set(p)?;
-        if t.id == "length" {
-            let (pp, a) = synthesize_length(&p, target_value, ctl)?;
-            let title = format!(
-                "Synthesis: phase = {} deg at {} GHz, vary {}",
-                format_g(target_value),
-                format_g(p.f / 1e9),
-                t.label
-            );
-            return Ok((pp.to_set(), to_analysis(&title, &pp, a)));
+        if phase_deg.is_some_and(|ph| !(ph.is_finite() && ph > 0.0)) {
+            return Err(TvError::Synthesis("the target phase must be a positive number of degrees".into()));
         }
         let var = match t.id {
             "w" => SynthVar::W,
             "s" => SynthVar::S,
             _ => SynthVar::WTotal,
         };
-        let (pp, sol) = synthesize(&p, target_value, var, DEFAULT_RTOL, ctl)?;
+        let p = CpwgParams::from_set(p)?;
+        let (mut pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+        // the length follows from the solution: eps_eff does not depend on it
+        let mut title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(z0_target), t.label);
+        if let Some(ph) = phase_deg {
+            pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
+            title += &format!(", phase = {} deg at {} GHz -> length", format_g(ph), format_g(pp.f / 1e9));
+        }
         let a = analysis_from_solution(&pp, sol, ctl)?;
-        let title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(target_value), t.label);
         let analysis = to_analysis(&title, &pp, a);
-        // only the dimensions change; the domain margin found during synthesis stays internal
-        let out = CpwgParams { w: pp.w, s: pp.s, ..p };
+        // only the dimensions (and the length, if a phase was asked for) change; the domain margin
+        // found during synthesis stays internal
+        let out = CpwgParams { w: pp.w, s: pp.s, length: pp.length, ..p };
         Ok((out.to_set(), analysis))
     }
 }

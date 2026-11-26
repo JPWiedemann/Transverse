@@ -29,7 +29,7 @@ pub use model::CpwgInner;
 pub use params::{CpwgParams, GapMode, MeshMode, analytic};
 pub use report::report;
 pub use schematic::{SchematicFlags, schematic};
-pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize, synthesize_length};
+pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize};
 pub use wheeler::wheeler_dzdn;
 
 use transverse_core::losses::LossModel;

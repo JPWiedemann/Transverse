@@ -18,11 +18,6 @@ export interface ParamSpec {
 export interface SynthTarget {
   id: string;
   label: string;
-  /** what the value to reach is called ("Z0", "phase") */
-  goal: string;
-  /** its unit ("Ohm", "deg") */
-  unit: string;
-  default: number;
 }
 
 export interface LineInfo {

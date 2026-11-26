@@ -2,8 +2,7 @@
 //!
 //! ```text
 //! transverse analyze [params.json|-] [--json]                 analyse one geometry (missing fields use defaults)
-//! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--json]
-//! transverse synth length <target_deg> [params.json|-] [--json]   line length for a phase at f
+//! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
 //! transverse selftest [cases.json]                            compare against the Python reference cases
 //! ```
 
@@ -13,13 +12,12 @@ use std::io::Read;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use transverse_core::{C_LIGHT, Ctl, guided_wavelength_mm, phase_deg};
-use transverse_lines::cpwg_inner::{self, CpwgParams, SynthVar, full_analysis, synthesize_length};
+use transverse_core::{C_LIGHT, Ctl, guided_wavelength_mm, length_for_phase_mm, phase_deg};
+use transverse_lines::cpwg_inner::{self, CpwgParams, SynthVar, full_analysis};
 
 const USAGE: &str = "usage:
   transverse analyze [params.json|-] [--json]
-  transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--json]
-  transverse synth length <target_deg> [params.json|-] [--json]
+  transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
   transverse selftest [cases.json]
   transverse --version";
 
@@ -93,13 +91,31 @@ fn cmd_analyze(args: &[String]) -> Result<ExitCode, String> {
 
 fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
     let json_out = args.iter().any(|a| a == "--json");
-    let pos: Vec<&String> = args.iter().filter(|a| *a != "--json").collect();
-    let what = pos.first().map(|s| s.as_str());
-    let var = match what {
+    // --phase <deg>: also set the line length for that electrical length (it follows from eps_eff)
+    let phase = match args.iter().position(|a| a == "--phase") {
+        Some(i) => Some(
+            args.get(i + 1)
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .ok_or("--phase needs a positive number of degrees")?,
+        ),
+        None => None,
+    };
+    let mut pos: Vec<&String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--json" => {}
+            "--phase" => {
+                it.next();
+            }
+            _ => pos.push(a),
+        }
+    }
+    let var = match pos.first().map(|s| s.as_str()) {
         Some("w") => SynthVar::W,
         Some("s") => SynthVar::S,
         Some("w_total") => SynthVar::WTotal,
-        Some("length") => SynthVar::W, // not used: the length needs no root finding
         _ => return Err(USAGE.to_string()),
     };
     let target: f64 = pos.get(1).and_then(|s| s.parse().ok()).ok_or(USAGE.to_string())?;
@@ -107,17 +123,16 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
 
     let ctl = progress();
     let t0 = Instant::now();
-    if what == Some("length") {
-        let (pp, a) = synthesize_length(&p, target, &ctl).map_err(|e| e.to_string())?;
-        let title = format!("Synthesis: phase = {target} deg at {} GHz, vary line length", pp.f / 1e9);
-        print_analysis(&title, &pp, &a, t0.elapsed().as_secs_f64(), json_out);
-        return Ok(ExitCode::SUCCESS);
-    }
-    let (pp, _) =
+
+    let (mut pp, sol) =
         cpwg_inner::synthesize(&p, target, var, cpwg_inner::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
+    let mut title = format!("Synthesis: Z0 = {target} Ohm");
+    if let Some(ph) = phase {
+        pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
+        title += &format!(", phase = {ph} deg at {} GHz -> length", pp.f / 1e9);
+    }
     eprintln!("Synthesis done, running full analysis ...");
     let a = full_analysis(&pp, &ctl).map_err(|e| e.to_string())?;
-    let title = format!("Synthesis: Z0 = {target} Ohm");
     print_analysis(&title, &pp, &a, t0.elapsed().as_secs_f64(), json_out);
     Ok(ExitCode::SUCCESS)
 }
