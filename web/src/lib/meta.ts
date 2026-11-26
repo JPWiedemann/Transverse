@@ -1,7 +1,7 @@
 // The cheap, synchronous calls of the wasm module (form specs, wavelength) run on the page
 // thread; only the solver runs in the worker. The module is small, so loading it twice is fine.
 
-import init, { defaults, line_types, param_specs, schematic, wavelength_mm } from '../../pkg/transverse_wasm.js';
+import init, { colormap, defaults, line_types, param_specs, schematic, wavelength_mm } from '../../pkg/transverse_wasm.js';
 import type { LineInfo, ParamSet, ParamSpec, Schematic } from './types';
 
 export async function loadMeta(): Promise<void> {
@@ -25,3 +25,6 @@ export function wavelengthOf(line: string): (set: ParamSet) => number | undefine
 /** Sketch of the cross-section for the given parameters (internal units), `null` if there is none. */
 export const schematicOf = (line: string, set: ParamSet): Schematic | null =>
   JSON.parse(schematic(line, JSON.stringify(set))) as Schematic | null;
+
+/** The 256 colours of a colour map ("Inferno", "Viridis", "Greys") as RGB bytes. */
+export const colormapTable = (name: string): Uint8Array => colormap(name);

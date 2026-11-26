@@ -28,7 +28,6 @@
     /** Ticks for the visible range; `approx` is a suggested count. */
     xTicks: (lo: number, hi: number, approx: number) => Tick[];
     yTicks: (lo: number, hi: number, approx: number) => Tick[];
-    height?: number;
     /** Reports the x value [data units] under the cursor, `undefined` outside the plot. */
     onHover?: (x: number | undefined) => void;
     onReset?: () => void;
@@ -37,12 +36,14 @@
     /** Drawn above the curves, not clipped (legend). */
     overlay?: Snippet<[Geometry]>;
   }
-  let { view = $bindable(), xLabel, yLabel, xTicks, yTicks, height = 380, onHover, onReset, ariaLabel, children, overlay }: Props = $props();
+  let { view = $bindable(), xLabel, yLabel, xTicks, yTicks, onHover, onReset, ariaLabel, children, overlay }: Props = $props();
 
   const M = { l: 70, r: 16, t: 14, b: 44 };
   const clipId = `clip-${Math.random().toString(36).slice(2)}`;
 
   let width = $state(700);
+  let measured = $state(380);
+  const height = $derived(Math.max(measured, 200));
   const iw = $derived(Math.max(width - M.l - M.r, 10));
   const ih = $derived(height - M.t - M.b);
   const sx = (x: number) => M.l + ((x - view[0]) / (view[1] - view[0])) * iw;
@@ -98,7 +99,7 @@
   }
 </script>
 
-<div class="plot" bind:clientWidth={width}>
+<div class="plot" bind:clientWidth={width} bind:clientHeight={measured}>
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <svg
     {width}
@@ -133,12 +134,18 @@
 
 <style>
   .plot {
+    position: relative;
+    /* fills the height that is left in the tab, but is never smaller than this */
+    flex: 1 1 340px;
+    min-height: 340px;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
   }
   svg {
+    position: absolute;
+    inset: 0;
     display: block;
     touch-action: none;
     cursor: crosshair;

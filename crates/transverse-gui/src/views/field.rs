@@ -17,8 +17,8 @@ use transverse_core::quasistatic::Accuracy;
 use transverse_core::units::{
     UnitSystem, auto_length_unit, field_prefix, format_field, format_g, format_sig, grid_steps_mm,
 };
-use transverse_gui::raster::{FieldMode, Legend, RasterSpec, nice_ticks, probe, render};
 use transverse_lines::model::{Bounds, FieldData};
+use transverse_lines::render::raster::{FieldMode, Legend, RasterSpec, nice_ticks, probe, render};
 
 /// Copper colour of the conductors (same as the Python plots).
 const COPPER: Color32 = Color32::from_rgb(0xc8, 0x75, 0x33);
@@ -899,7 +899,7 @@ mod tests {
             label: label.into(),
             vmin: 0.0,
             vmax,
-            cmap: transverse_gui::colormap::Cmap::Inferno,
+            cmap: transverse_lines::render::colormap::Cmap::Inferno,
             field_base: base,
         };
         assert_eq!(colourbar_scale(&legend("x", 150_000.0, Some("V/m"))), ("|E| [kV/m]".to_string(), 1e-3));

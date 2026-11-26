@@ -79,3 +79,25 @@ export function autoLengthUnit(system: UnitSystem, spanMm: number): [string, num
   if (!Number.isFinite(spanMm) || spanMm <= 0) return units[1]!;
   return [...units].reverse().find(([, f]) => spanMm / f >= 1) ?? units[0]!;
 }
+
+/** Value in the field unit of the unit system per V/m (1 V/mil = 39 370 V/m). */
+export const fieldPerVPerM = (system: UnitSystem): number => (system === 'metric' ? 1 : 0.0254e-3);
+export const fieldUnit = (system: UnitSystem): string => (system === 'metric' ? 'V/m' : 'V/mil');
+export const fieldDbUnit = (system: UnitSystem): string => (system === 'metric' ? 'dBV/m' : 'dBV/mil');
+
+/** SI prefix for a field strength given in the base unit: the largest prefix in which the value is
+ * at least 1 (µ ... G). Returns [prefix, factor from the base unit to the prefixed unit].
+ * Zero and invalid values keep the base unit. */
+export function fieldPrefix(valueInBase: number): [string, number] {
+  const prefixes: [string, number][] = [['G', 1e-9], ['M', 1e-6], ['k', 1e-3], ['', 1], ['m', 1e3], ['µ', 1e6]];
+  const v = Math.abs(valueInBase);
+  if (!Number.isFinite(v) || v === 0) return ['', 1];
+  return prefixes.find(([, m]) => v * m >= 1 - 1e-9) ?? ['µ', 1e6];
+}
+
+/** "15.34 kV/m" for a field strength given in V/m, in the unit system's base unit with a suitable prefix. */
+export function formatField(system: UnitSystem, eVPerM: number): string {
+  const base = eVPerM * fieldPerVPerM(system);
+  const [prefix, mult] = fieldPrefix(base);
+  return `${formatSig(base * mult, 4)} ${prefix}${fieldUnit(system)}`;
+}

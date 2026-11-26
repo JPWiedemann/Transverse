@@ -1,8 +1,10 @@
 //! Colour maps (sampled from matplotlib, see `python/export_colormaps.py`).
 
-use crate::colormap_data::{INFERNO, VIRIDIS};
+use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use super::colormap_data::{INFERNO, VIRIDIS};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Cmap {
     Inferno,
     Viridis,
@@ -11,6 +13,11 @@ pub enum Cmap {
 }
 
 impl Cmap {
+    /// Colour map by its variant name ("Inferno", "Viridis", "Greys").
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Inferno, Self::Viridis, Self::Greys].into_iter().find(|c| format!("{c:?}") == name)
+    }
+
     /// Colour at `t` in 0..=1 (clamped, NaN gives the low end).
     pub fn sample(self, t: f64) -> [u8; 3] {
         let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };

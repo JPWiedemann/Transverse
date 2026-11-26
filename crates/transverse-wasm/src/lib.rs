@@ -6,11 +6,16 @@
 //! are typed arrays. Everything runs single-threaded; cancelling is done by the host terminating the
 //! Web Worker that runs this module.
 
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 use serde::Serialize;
+use transverse_core::postproc::EField;
+use transverse_core::units::UnitSystem;
 use transverse_core::{Ctl, TvError};
 use transverse_lines::model::{Analysis, LineModel, ModeResult, ParamSet};
+use transverse_lines::render::colormap::Cmap;
+use transverse_lines::render::raster::{self, FieldMode, Legend, RasterSpec};
 use transverse_lines::{find_model, registry};
 use wasm_bindgen::prelude::*;
 
@@ -98,7 +103,7 @@ pub fn analyze(
 ) -> Result<AnalysisHandle, JsError> {
     let p = param_set(params_json)?;
     let analysis = model(line_id)?.analyze(&p, &ctl(on_progress)).map_err(js_err)?;
-    Ok(AnalysisHandle { analysis, params: None })
+    Ok(AnalysisHandle { analysis, params: None, e: OnceCell::new() })
 }
 
 /// Find the dimension `target_id` that gives `z0_target` Ohm. The handle carries the new parameters.
@@ -113,7 +118,7 @@ pub fn synthesize(
     let p = param_set(params_json)?;
     let (new_p, analysis) =
         model(line_id)?.synthesize(&p, target_id, z0_target, &ctl(on_progress)).map_err(js_err)?;
-    Ok(AnalysisHandle { analysis, params: Some(new_p) })
+    Ok(AnalysisHandle { analysis, params: Some(new_p), e: OnceCell::new() })
 }
 
 #[derive(Serialize)]
@@ -136,6 +141,43 @@ struct FieldInfo<'a> {
     view_full: [f64; 4],
 }
 
+/// A rendered field image: RGBA pixels, first row = top of the view (largest y).
+#[wasm_bindgen]
+pub struct FieldRaster {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    legend: Option<Legend>,
+}
+
+#[wasm_bindgen]
+impl FieldRaster {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// `width * height * 4` bytes.
+    pub fn rgba(&self) -> Vec<u8> {
+        self.rgba.clone()
+    }
+
+    /// Colour bar (`{label, vmin, vmax, cmap, field_base}`) as JSON, `null` for the mesh view.
+    pub fn legend(&self) -> Result<String, JsError> {
+        json(&self.legend)
+    }
+}
+
+/// The 256 colours of a colour map ("Inferno", "Viridis", "Greys") as RGB bytes, for colour bars.
+#[wasm_bindgen]
+pub fn colormap(name: &str) -> Result<Vec<u8>, JsError> {
+    let cmap = Cmap::from_name(name).ok_or_else(|| js_err(format!("unknown colour map '{name}'")))?;
+    Ok((0..256).flat_map(|i| cmap.sample(f64::from(i) / 255.0)).collect())
+}
+
 /// Column order of [`AnalysisHandle::sample`]; a row is one frequency.
 pub const SAMPLE_COLUMNS: [&str; 9] = ["z0", "beta", "alpha_c", "alpha_d", "r", "g", "rs", "krough", "delta"];
 
@@ -144,6 +186,8 @@ pub const SAMPLE_COLUMNS: [&str; 9] = ["z0", "beta", "alpha_c", "alpha_d", "r", 
 pub struct AnalysisHandle {
     analysis: Analysis,
     params: Option<ParamSet>,
+    /// E field of the dielectric solution, computed on first use.
+    e: OnceCell<EField>,
 }
 
 #[wasm_bindgen]
@@ -223,6 +267,43 @@ impl AnalysisHandle {
     /// 1 for conductor nodes, `nx * ny` values.
     pub fn field_fixed(&self) -> Result<Vec<u8>, JsError> {
         Ok(self.field()?.fixed.iter().map(|&b| u8::from(b)).collect())
+    }
+
+    fn e_field(&self) -> Result<&EField, JsError> {
+        let f = self.field()?;
+        Ok(self.e.get_or_init(|| f.e_field(false)))
+    }
+
+    /// Field image of `mode` (a `FieldMode` key such as "e_db_lines") over `view = [x0, x1, y0, y1]`
+    /// mm, `width` pixels wide. The colour scale comes from `scale_view` (same form), so it stays
+    /// stable while the drawn region changes. `imperial` selects V/mil instead of V/m.
+    pub fn field_raster(
+        &self,
+        mode: &str,
+        view: &[f64],
+        scale_view: &[f64],
+        imperial: bool,
+        db_range: f64,
+        width: u32,
+    ) -> Result<FieldRaster, JsError> {
+        let mode = FieldMode::from_key(mode).ok_or_else(|| js_err(format!("unknown field mode '{mode}'")))?;
+        let bounds = |v: &[f64]| <[f64; 4]>::try_from(v).map_err(|_| js_err("a view needs 4 numbers"));
+        let spec = RasterSpec {
+            mode,
+            view: bounds(view)?,
+            scale_view: bounds(scale_view)?,
+            system: if imperial { UnitSystem::Imperial } else { UnitSystem::Metric },
+            db_range,
+            width: width as usize,
+        };
+        let r = raster::render(self.field()?, self.e_field()?, &spec);
+        Ok(FieldRaster { width: r.width as u32, height: r.height as u32, rgba: r.rgba, legend: r.legend })
+    }
+
+    /// Values at (`x`, `y`) mm as JSON `{v, e, er, in_conductor}` (`e` in V/m, `null` inside a
+    /// conductor), `null` outside the grid.
+    pub fn field_probe(&self, x: f64, y: f64) -> Result<String, JsError> {
+        json(&raster::probe(self.field()?, self.e_field()?, x, y))
     }
 
     /// Field lines inside `view = [x0, x1, y0, y1]` as JSON: a list of polylines of `[x, y]` points.

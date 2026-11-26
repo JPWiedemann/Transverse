@@ -1,6 +1,6 @@
-"""Write the colour maps used by the Rust GUI (256 entries each, sampled from matplotlib).
+"""Write the colour maps of the Rust frontends (256 entries each, sampled from matplotlib).
 
-Usage: uv run export_colormaps.py > ../crates/transverse-gui/src/colormap_data.rs
+Usage: uv run export_colormaps.py > ../crates/transverse-lines/src/render/colormap_data.rs
 """
 
 import sys

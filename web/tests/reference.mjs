@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { initSync, analyze, synthesize, line_types, param_specs, defaults } from '../pkg/transverse_wasm.js';
+import { initSync, analyze, synthesize, line_types, param_specs, defaults, colormap } from '../pkg/transverse_wasm.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 initSync({ module: readFileSync(join(here, '../pkg/transverse_wasm_bg.wasm')) });
@@ -48,6 +48,7 @@ function toSet(p) {
 const types = JSON.parse(line_types());
 same('line types', types.map((t) => t.id).join(), LINE);
 const specs = JSON.parse(param_specs(LINE));
+same('colour map size', colormap('Inferno').length, 256 * 3);
 same('form size', specs.length, Object.keys(JSON.parse(defaults(LINE))).length);
 
 for (const c of cases.cases) {
@@ -72,6 +73,15 @@ for (const c of cases.cases) {
   if (s.has_field) {
     const info = JSON.parse(a.field_info());
     same(`${c.name} potential size`, a.field_v().length, info.nx * info.ny);
+    // the field image of the signal region: right size, potential scale 0..1 V, a probe in a gap
+    const r = a.field_raster('potential', info.view_zoom, info.view_zoom, false, 40, 300);
+    same(`${c.name} raster bytes`, r.rgba().length, r.width() * r.height() * 4);
+    const leg = JSON.parse(r.legend());
+    close(`${c.name} potential scale top`, leg.vmax, 1, 1e-9);
+    const [x0, x1, y0, y1] = info.view_zoom;
+    const p = JSON.parse(a.field_probe((x0 + x1) / 2, (y0 + y1) / 2));
+    same(`${c.name} probe finds the grid`, p !== null && typeof p.v === 'number', true);
+    r.free();
   }
   a.free();
 }

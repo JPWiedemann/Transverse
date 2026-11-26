@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import CrossSection from './components/CrossSection.svelte';
+  import FieldTab from './components/FieldTab.svelte';
   import LossTab from './components/LossTab.svelte';
   import ParamForm from './components/ParamForm.svelte';
   import ReturnTab from './components/ReturnTab.svelte';
@@ -8,7 +9,7 @@
   import { Cancelled, Engine } from './lib/engine';
   import * as F from './lib/form';
   import { lineTypes, loadMeta, paramDefaults, paramSpecs, schematicOf, wavelengthOf } from './lib/meta';
-  import { applyTheme, loadSettings, saveSettings, type Settings, type Tab, type Theme } from './lib/settings';
+  import { applyTheme, loadSettings, saveSettings, type FieldMode, type Settings, type Tab, type Theme } from './lib/settings';
   import type { AnalysisResult, LineInfo, ParamSet, ParamSpec } from './lib/types';
   import { parseNumber, type UnitSystem } from './lib/units';
 
@@ -18,6 +19,7 @@
     ['cross-section', 'Cross-section'],
     ['return-current', 'Return current'],
     ['loss', 'Loss vs f'],
+    ['field', 'Field'],
   ];
   const settings: Settings = loadSettings();
 
@@ -35,6 +37,10 @@
   let tab = $state<Tab>(settings.tab);
   let lossFmaxText = $state(settings.lossFmaxText);
   let lossFmaxUnit = $state(settings.lossFmaxUnit);
+  let fieldMode = $state<FieldMode>(settings.fieldMode);
+  let showEq = $state(settings.showEq);
+  let showMesh = $state(settings.showMesh);
+  let dbRange = $state(settings.dbRange);
   // counts results (the loss plot resets its view); false after a cancel threw the result away
   let generation = $state(0);
   let canSample = $state(false);
@@ -85,6 +91,10 @@
     settings.tab = tab;
     settings.lossFmaxText = lossFmaxText;
     settings.lossFmaxUnit = lossFmaxUnit;
+    settings.fieldMode = fieldMode;
+    settings.showEq = showEq;
+    settings.showMesh = showMesh;
+    settings.dbRange = Number.isFinite(dbRange) ? dbRange : 40;
     saveSettings(settings);
   });
 
@@ -182,6 +192,7 @@
 {:else if !ready || !line}
   <main class="fatal"><p>Loading…</p></main>
 {:else}
+  <div class="app">
   <header>
     <h1>Transverse</h1>
     <span class="line">{line.name}</span>
@@ -231,6 +242,7 @@
           <button role="tab" aria-selected={tab === id} class="tab" class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
         {/each}
       </div>
+      <div class="tabbody">
       {#if tab === 'results'}
         {#if result}
           <Results {result} />
@@ -249,6 +261,22 @@
           <ReturnTab {split} {generation} {units} />
         {:else}
           <p class="hint">Press Analyze to see how the return current splits over the ground conductors.</p>
+        {/if}
+      {:else if tab === 'field'}
+        {#if result?.summary.has_field}
+          <FieldTab
+            {engine}
+            {canSample}
+            {generation}
+            {units}
+            accuracy={result.summary.accuracy}
+            bind:mode={fieldMode}
+            bind:showEq
+            bind:showMesh
+            bind:dbRange
+          />
+        {:else}
+          <p class="hint">Press Analyze to see the field.</p>
         {/if}
       {:else if result}
         {@const mode = result.summary.modes[0]}
@@ -272,6 +300,7 @@
       {:else}
         <p class="hint">Press Analyze to see the loss over frequency.</p>
       {/if}
+      </div>
     </section>
   </div>
 
@@ -279,6 +308,7 @@
     {#if busy}<span class="spinner" aria-hidden="true"></span>{/if}
     {status}
   </footer>
+  </div>
 {/if}
 
 <style>
@@ -328,16 +358,37 @@
   .z0 {
     width: 5rem;
   }
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
   .layout {
+    flex: 1;
+    min-height: 0;
     display: grid;
     grid-template-columns: minmax(22rem, 30rem) 1fr;
     gap: 16px;
     padding: 16px;
-    padding-bottom: 56px;
-    align-items: start;
+  }
+  .form {
+    overflow-y: auto;
+    min-height: 0;
+    padding-right: 4px;
   }
   .output {
     min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* the plots take the height that is left */
+  .tabbody {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
   .tabs {
     display: flex;
@@ -355,8 +406,7 @@
     color: var(--muted);
   }
   .status {
-    position: fixed;
-    inset: auto 0 0 0;
+    flex: none;
     padding: 6px 16px;
     background: var(--panel);
     border-top: 1px solid var(--border);
@@ -387,8 +437,15 @@
     padding: 24px;
   }
   @media (max-width: 800px) {
+    .app {
+      height: auto;
+      min-height: 100dvh;
+    }
     .layout {
       grid-template-columns: 1fr;
+    }
+    .form {
+      overflow: visible;
     }
   }
 </style>

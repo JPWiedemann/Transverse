@@ -1,7 +1,7 @@
 // Page side of the worker: one solve at a time, progress texts, cancel by restarting the worker.
-// Loss samples of the last result can be requested at any time (they queue behind a running solve).
+// Calls on the last result (loss samples, field images, ...) can be made at any time; they queue behind a running solve.
 
-import type { Request, Response } from './protocol';
+import type { QueryName, Request, Response } from './protocol';
 import type { AnalysisResult, ParamSet, Summary } from './types';
 
 export class Cancelled extends Error {
@@ -23,7 +23,7 @@ export const SAMPLE_COLUMNS = ['z0', 'beta', 'alpha_c', 'alpha_d', 'r', 'g', 'rs
 export class Engine {
   private worker: Worker;
   private job: Job | undefined;
-  private samples = new Map<number, { resolve: (d: Float64Array) => void; reject: (e: Error) => void }>();
+  private queries = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private nextId = 1;
   private hasResult = false;
 
@@ -42,11 +42,11 @@ export class Engine {
   }
 
   private handle(r: Response) {
-    if (r.type === 'sample' || (r.type === 'error' && this.samples.has(r.id))) {
-      const s = this.samples.get(r.id);
-      this.samples.delete(r.id);
-      if (r.type === 'sample') s?.resolve(r.data);
-      else if (r.type === 'error') s?.reject(new Error(r.message));
+    if (r.type === 'result' || (r.type === 'error' && this.queries.has(r.id))) {
+      const q = this.queries.get(r.id);
+      this.queries.delete(r.id);
+      if (r.type === 'result') q?.resolve(r.value);
+      else if (r.type === 'error') q?.reject(new Error(r.message));
       return;
     }
     const job = this.job;
@@ -98,14 +98,19 @@ export class Engine {
     );
   }
 
+  /** Call a method of the last result (see `QueryName`). Queries queue behind a running solve. */
+  query<T>(name: QueryName, ...args: unknown[]): Promise<T> {
+    if (!this.hasResult) return Promise.reject(new Error('no result to query'));
+    const id = this.nextId++;
+    return new Promise<T>((resolve, reject) => {
+      this.queries.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      this.worker.postMessage({ id, op: 'query', name, args } satisfies Request);
+    });
+  }
+
   /** Loss values of the last result: `SAMPLE_COLUMNS.length` numbers per frequency [Hz]. */
   sample(freqs: number[]): Promise<Float64Array> {
-    if (!this.hasResult) return Promise.reject(new Error('no result to sample'));
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.samples.set(id, { resolve, reject });
-      this.worker.postMessage({ id, op: 'sample', freqs: Float64Array.from(freqs) } satisfies Request);
-    });
+    return this.query<Float64Array>('sample', Float64Array.from(freqs));
   }
 
   /** Stop the running job: the worker is terminated and replaced (no shared memory needed).
@@ -115,8 +120,8 @@ export class Engine {
     this.worker.terminate();
     this.worker = this.spawn();
     this.hasResult = false;
-    for (const s of this.samples.values()) s.reject(new Cancelled());
-    this.samples.clear();
+    for (const q of this.queries.values()) q.reject(new Cancelled());
+    this.queries.clear();
     this.fail(new Cancelled());
   }
 }
