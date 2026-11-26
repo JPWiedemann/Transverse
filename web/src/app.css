@@ -21,6 +21,7 @@
   --sk-signal: #1f5fbf;
   --c-conductor: #1f77b4;
   --c-dielectric: #ff7f0e;
+  --c-third: #2ca02c;
   --mono: ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace;
 }
 
@@ -48,6 +49,7 @@
     --sk-signal: #3f88e8;
     --c-conductor: #5aa9e6;
     --c-dielectric: #ff9a3c;
+  --c-third: #5fd068;
   }
 }
 
@@ -74,6 +76,7 @@
   --sk-signal: #3f88e8;
   --c-conductor: #5aa9e6;
   --c-dielectric: #ff9a3c;
+  --c-third: #5fd068;
 }
 
 * {

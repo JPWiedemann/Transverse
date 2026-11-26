@@ -5,7 +5,7 @@ import type { SavedForm } from './form';
 import type { UnitSystem } from './loss';
 
 export type Theme = 'system' | 'light' | 'dark';
-export type Tab = 'results' | 'cross-section' | 'loss';
+export type Tab = 'results' | 'cross-section' | 'return-current' | 'loss';
 
 export interface LineSettings {
   form?: SavedForm;
@@ -34,7 +34,7 @@ export function loadSettings(): Settings {
         ...defaults(),
         theme,
         units: s.units === 'imperial' ? 'imperial' : 'metric',
-        tab: s.tab === 'cross-section' || s.tab === 'loss' ? s.tab : 'results',
+        tab: s.tab === 'cross-section' || s.tab === 'return-current' || s.tab === 'loss' ? s.tab : 'results',
         lossFmaxText: typeof s.lossFmaxText === 'string' ? s.lossFmaxText : '20',
         lossFmaxUnit: typeof s.lossFmaxUnit === 'string' ? s.lossFmaxUnit : 'GHz',
         lines: typeof s.lines === 'object' && s.lines !== null ? s.lines : {},

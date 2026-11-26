@@ -51,3 +51,31 @@ export function formatG(v: number): string {
   }
   return strip(v.toFixed(Math.max(5 - exp, 0)));
 }
+
+/** `v` with `digits` significant digits (fixed notation, no exponent; large values keep all integer digits). */
+export function formatSig(v: number, digits: number): string {
+  if (v === 0 || !Number.isFinite(v)) return String(v);
+  if (Math.abs(v) >= 10 ** (digits - 1)) return v.toFixed(0);
+  // round to the significant digits first: 0.99999999 must read "1.000", not "1.0000"
+  const r = Number(v.toExponential(digits - 1));
+  const decimals = Math.min(Math.max(digits - 1 - Math.floor(Math.log10(Math.abs(r))), 0), 12);
+  return r.toFixed(decimals);
+}
+
+/** Unit system for lengths shown on plots. */
+export type UnitSystem = 'metric' | 'imperial';
+
+/** [symbol, factor to mm] the automatic choice picks from, smallest first. */
+export function autoUnits(system: UnitSystem): [string, number][] {
+  return system === 'metric'
+    ? [['µm', 1e-3], ['mm', 1], ['cm', 10], ['m', 1000]]
+    : [['µin', 2.54e-5], ['mil', 0.0254], ['in', 25.4], ['ft', 304.8]];
+}
+
+/** The unit that suits a quantity of size `spanMm`: the largest one in which the span is at least 1.
+ * Falls back to the smallest unit for tiny spans and to mm / in for invalid ones. */
+export function autoLengthUnit(system: UnitSystem, spanMm: number): [string, number] {
+  const units = autoUnits(system);
+  if (!Number.isFinite(spanMm) || spanMm <= 0) return units[1]!;
+  return [...units].reverse().find(([, f]) => spanMm / f >= 1) ?? units[0]!;
+}

@@ -2,7 +2,9 @@
 // transverse-gui/views/loss.rs; the numbers come from the wasm module (`sample`).
 
 import { SAMPLE_COLUMNS } from './engine';
-import { FREQ_UNITS, factor, formatG, parseNumber } from './units';
+import { FREQ_UNITS, factor, formatG, parseNumber, type UnitSystem } from './units';
+
+export type { UnitSystem };
 
 export const POINTS = 400;
 export const DEFAULT_FMAX_HZ = 20e9;
@@ -11,8 +13,6 @@ export const RANGE_MARGIN = 1.02;
 /** Np/m -> dB/m is 20 / ln(10) (same as transverse_core::NP2DB). */
 export const NP2DB = 20 / Math.LN10;
 export const MM_PER_INCH = 25.4;
-
-export type UnitSystem = 'metric' | 'imperial';
 
 /** `n` frequencies from `fmax / n` to `fmax`. */
 export function sweep(fmaxHz: number, n: number): number[] {

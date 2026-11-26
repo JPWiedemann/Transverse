@@ -3,19 +3,20 @@
   import CrossSection from './components/CrossSection.svelte';
   import LossTab from './components/LossTab.svelte';
   import ParamForm from './components/ParamForm.svelte';
+  import ReturnTab from './components/ReturnTab.svelte';
   import Results from './components/Results.svelte';
   import { Cancelled, Engine } from './lib/engine';
   import * as F from './lib/form';
   import { lineTypes, loadMeta, paramDefaults, paramSpecs, schematicOf, wavelengthOf } from './lib/meta';
-  import type { UnitSystem } from './lib/loss';
   import { applyTheme, loadSettings, saveSettings, type Settings, type Tab, type Theme } from './lib/settings';
   import type { AnalysisResult, LineInfo, ParamSet, ParamSpec } from './lib/types';
-  import { parseNumber } from './lib/units';
+  import { parseNumber, type UnitSystem } from './lib/units';
 
   const engine = new Engine();
   const tabs: [Tab, string][] = [
     ['results', 'Results'],
     ['cross-section', 'Cross-section'],
+    ['return-current', 'Return current'],
     ['loss', 'Loss vs f'],
   ];
   const settings: Settings = loadSettings();
@@ -241,6 +242,13 @@
           <CrossSection {sketch} />
         {:else}
           <p class="hint">{current ? 'This line type has no cross-section sketch.' : 'Fix the invalid parameter to see the sketch.'}</p>
+        {/if}
+      {:else if tab === 'return-current'}
+        {@const split = result?.summary.modes[0]?.split}
+        {#if split}
+          <ReturnTab {split} {generation} {units} />
+        {:else}
+          <p class="hint">Press Analyze to see how the return current splits over the ground conductors.</p>
         {/if}
       {:else if result}
         {@const mode = result.summary.modes[0]}

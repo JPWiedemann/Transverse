@@ -49,6 +49,37 @@ export interface SplitRow {
   current_pct: number;
 }
 
+export interface CurrentProfile {
+  key: string;
+  label: string;
+  share_pct: number;
+  /** mm */
+  x: number[];
+  /** J_s / I [1/mm] */
+  j: number[];
+  /** index into the colour cycle */
+  color: number;
+  dashed: boolean;
+  /** draw the left and right halves as separate lines */
+  break_at_zero: boolean;
+}
+
+export interface ProfilePlot {
+  title: string;
+  half_width: number;
+  signal: [number, number] | null;
+  markers: number[];
+  labels: [number, string][];
+}
+
+export interface SplitSummary {
+  rows: SplitRow[];
+  x90: [string, number][];
+  profiles: CurrentProfile[];
+  plot: ProfilePlot;
+  info: string;
+}
+
 export interface ModeResult {
   name: string;
   z0: number;
@@ -57,7 +88,7 @@ export interface ModeResult {
   c: number;
   f_hz: number;
   at_f: LossPoint;
-  split: { rows: SplitRow[]; x90: [string, number][]; info: string } | null;
+  split: SplitSummary | null;
 }
 
 export interface Accuracy {

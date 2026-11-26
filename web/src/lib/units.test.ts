@@ -28,3 +28,29 @@ describe('units', () => {
     expect(formatG(123456)).toBe('123456');
   });
 });
+
+import { autoLengthUnit, formatSig } from './units';
+
+describe('plot units', () => {
+  it('picks the largest unit the span fills', () => {
+    const m = (mm: number) => autoLengthUnit('metric', mm)[0];
+    expect([0.001, 0.04, 0.999, 1, 1.28, 9.9, 10, 250, 1000, 5000].map(m)).toEqual(
+      ['µm', 'µm', 'µm', 'mm', 'mm', 'mm', 'cm', 'cm', 'm', 'm'],
+    );
+    const i = (mm: number) => autoLengthUnit('imperial', mm)[0];
+    expect([0.0005, 0.04, 1.28, 30, 400].map(i)).toEqual(['µin', 'mil', 'mil', 'in', 'ft']);
+    expect(m(1e-9)).toBe('µm');
+    expect(autoLengthUnit('metric', Number.NaN)).toEqual(['mm', 1]);
+    expect(autoLengthUnit('imperial', -1)[0]).toBe('mil');
+    expect(autoLengthUnit('imperial', 100)).toEqual(['in', 25.4]);
+  });
+
+  it('formats significant digits', () => {
+    expect(formatSig(1.5, 4)).toBe('1.500');
+    expect(formatSig(0.99999999, 4)).toBe('1.000');
+    expect(formatSig(-59.0551, 5)).toBe('-59.055');
+    expect(formatSig(0.0381, 4)).toBe('0.03810');
+    expect(formatSig(12345.6, 4)).toBe('12346');
+    expect(formatSig(0, 4)).toBe('0');
+  });
+});
