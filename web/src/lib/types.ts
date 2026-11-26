@@ -133,3 +133,41 @@ export interface Schematic {
   height: number;
   items: SchemItem[];
 }
+
+// Field views (serde output of the wasm layer).
+export interface DrawRect {
+  kind: 'Signal' | 'Ground';
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface FieldInfo {
+  nx: number;
+  ny: number;
+  z0: number;
+  conductors: DrawRect[];
+  dashed_y: number[];
+  dotted_y: number[];
+  /** [x0, x1, y0, y1] in mm */
+  view_zoom: [number, number, number, number];
+  view_full: [number, number, number, number];
+}
+
+export interface Legend {
+  label: string;
+  vmin: number;
+  vmax: number;
+  cmap: 'Inferno' | 'Viridis' | 'Greys';
+  /** base unit of a linear field scale ("V/m", "V/mil"), `null` for the other scales */
+  field_base: string | null;
+}
+
+export interface Probe {
+  v: number;
+  /** |E| in V/m, `null` inside a conductor */
+  e: number | null;
+  er: number;
+  in_conductor: boolean;
+}

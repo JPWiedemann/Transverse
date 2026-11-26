@@ -54,3 +54,26 @@ describe('plot units', () => {
     expect(formatSig(0, 4)).toBe('0');
   });
 });
+
+import { fieldDbUnit, fieldPerVPerM, fieldPrefix, formatField } from './units';
+
+describe('field units', () => {
+  it('uses V/m and V/mil', () => {
+    expect(fieldPerVPerM('imperial') * 39_370.07874).toBeCloseTo(1, 6);
+    expect(fieldDbUnit('imperial')).toBe('dBV/mil');
+  });
+
+  it('picks the largest SI prefix that keeps the value at least 1', () => {
+    for (const [v, want] of [[3e9, 'G'], [3e6, 'M'], [3e3, 'k'], [3, ''], [0.3, 'm'], [3e-4, 'µ'], [3e-9, 'µ']] as const) {
+      expect(fieldPrefix(v)[0]).toBe(want);
+    }
+    expect(fieldPrefix(0)).toEqual(['', 1]);
+    expect(fieldPrefix(Number.NaN)).toEqual(['', 1]);
+    expect(fieldPrefix(999.99999999)[0]).toBe('k'); // rounds to 1.000 k
+  });
+
+  it('formats a field strength', () => {
+    expect(formatField('metric', 15340)).toBe('15.34 kV/m');
+    expect(formatField('imperial', 39_370.07874)).toBe('1.000 V/mil');
+  });
+});

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import CrossSection from './components/CrossSection.svelte';
+  import FieldTab from './components/FieldTab.svelte';
   import LossTab from './components/LossTab.svelte';
   import ParamForm from './components/ParamForm.svelte';
   import ReturnTab from './components/ReturnTab.svelte';
@@ -8,7 +9,7 @@
   import { Cancelled, Engine } from './lib/engine';
   import * as F from './lib/form';
   import { lineTypes, loadMeta, paramDefaults, paramSpecs, schematicOf, wavelengthOf } from './lib/meta';
-  import { applyTheme, loadSettings, saveSettings, type Settings, type Tab, type Theme } from './lib/settings';
+  import { applyTheme, loadSettings, saveSettings, type FieldMode, type Settings, type Tab, type Theme } from './lib/settings';
   import type { AnalysisResult, LineInfo, ParamSet, ParamSpec } from './lib/types';
   import { parseNumber, type UnitSystem } from './lib/units';
 
@@ -18,6 +19,7 @@
     ['cross-section', 'Cross-section'],
     ['return-current', 'Return current'],
     ['loss', 'Loss vs f'],
+    ['field', 'Field'],
   ];
   const settings: Settings = loadSettings();
 
@@ -35,6 +37,10 @@
   let tab = $state<Tab>(settings.tab);
   let lossFmaxText = $state(settings.lossFmaxText);
   let lossFmaxUnit = $state(settings.lossFmaxUnit);
+  let fieldMode = $state<FieldMode>(settings.fieldMode);
+  let showEq = $state(settings.showEq);
+  let showMesh = $state(settings.showMesh);
+  let dbRange = $state(settings.dbRange);
   // counts results (the loss plot resets its view); false after a cancel threw the result away
   let generation = $state(0);
   let canSample = $state(false);
@@ -85,6 +91,10 @@
     settings.tab = tab;
     settings.lossFmaxText = lossFmaxText;
     settings.lossFmaxUnit = lossFmaxUnit;
+    settings.fieldMode = fieldMode;
+    settings.showEq = showEq;
+    settings.showMesh = showMesh;
+    settings.dbRange = Number.isFinite(dbRange) ? dbRange : 40;
     saveSettings(settings);
   });
 
@@ -249,6 +259,22 @@
           <ReturnTab {split} {generation} {units} />
         {:else}
           <p class="hint">Press Analyze to see how the return current splits over the ground conductors.</p>
+        {/if}
+      {:else if tab === 'field'}
+        {#if result?.summary.has_field}
+          <FieldTab
+            {engine}
+            {canSample}
+            {generation}
+            {units}
+            accuracy={result.summary.accuracy}
+            bind:mode={fieldMode}
+            bind:showEq
+            bind:showMesh
+            bind:dbRange
+          />
+        {:else}
+          <p class="hint">Press Analyze to see the field.</p>
         {/if}
       {:else if result}
         {@const mode = result.summary.modes[0]}
