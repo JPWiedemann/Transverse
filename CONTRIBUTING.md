@@ -56,6 +56,7 @@ cargo test --release                                   # includes the parity tes
 cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines   # web portability (CI builds and tests the whole module)
 scripts/build-web.sh && node web/tests/reference.mjs    # wasm module and the reference cases through Node (needs wasm-bindgen-cli, see the script)
 (cd web && npm ci && npm run check && npm test)          # web frontend: type check and tests; npm run dev starts it
+(cd web && npx playwright install chromium && npm run build && npm run e2e)   # browser tests of the built site (first time: install the browser)
 node --test scripts/release.test.mjs                                   # release script tests (only if you touched scripts/)
 cd python && uv run --group dev ruff check . && uv run --group dev ruff format --check . && uv run --group dev pytest   # only for Python changes
 ```

@@ -1,0 +1,118 @@
+import { expect, test, type Page } from '@playwright/test';
+
+// The built site in a real browser: wasm module, Web Worker, form, all tabs. The numbers are the
+// reference values of the project (default stack-up: Z0 = 35.001 ohm, synthesis 35 ohm -> w = 0.3605 mm).
+
+/** Fail a test on errors in the page (uncaught exceptions, console errors). */
+function watchErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  return errors;
+}
+
+const status = (page: Page) => page.getByRole('status');
+const tab = (page: Page, name: string) => page.getByRole('tab', { name, exact: true });
+
+async function analyze(page: Page) {
+  await page.getByRole('button', { name: 'Analyze', exact: true }).click();
+  await expect(status(page)).toContainText('Analysis done', { timeout: 60_000 });
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeVisible({ timeout: 30_000 });
+});
+
+test('analyzes the default stack-up', async ({ page }) => {
+  const errors = watchErrors(page);
+  await analyze(page);
+  await expect(status(page)).toContainText('Z0 = 35.001');
+  await expect(page.locator('.card', { hasText: 'Z0' }).first()).toContainText('35.001');
+  await expect(page.locator('.report')).toContainText('Ground split');
+  expect(errors).toEqual([]);
+});
+
+test('every tab shows its view', async ({ page }) => {
+  const errors = watchErrors(page);
+  await analyze(page);
+
+  await tab(page, 'Cross-section').click();
+  await expect(page.getByRole('img', { name: /Cross-section of the line/ })).toBeVisible();
+
+  await tab(page, 'Return current').click();
+  await expect(page.getByRole('img', { name: /Return current density/ })).toBeVisible();
+  await expect(page.locator('table.split')).toContainText('Ground plane 1');
+
+  await tab(page, 'Loss vs f').click();
+  const loss = page.getByRole('img', { name: /loss versus frequency/ });
+  await expect(loss).toBeVisible();
+  await expect(loss.locator('path.total')).toHaveAttribute('d', /^M/);
+  // the readout at the cursor comes from the module
+  const box = (await loss.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('.readout')).toContainText('Total:');
+
+  await tab(page, 'Field').click();
+  await expect(page.getByRole('img', { name: 'Field in the cross-section' })).toBeVisible();
+  // the colour bar appears once the image is rendered
+  await expect(page.locator('.bar canvas')).toBeVisible({ timeout: 20_000 });
+  for (const mode of ['potential', 'permittivity', 'mesh', 'e_linear']) {
+    await page.getByLabel('Field view').selectOption(mode);
+  }
+  await page.getByLabel('Field view').selectOption('e_db_lines');
+  const field = page.getByRole('img', { name: 'Field in the cross-section' });
+  const fbox = (await field.boundingBox())!;
+  await page.mouse.move(fbox.x + fbox.width / 2, fbox.y + fbox.height / 2);
+  await expect(page.locator('.readout')).toContainText('V =');
+  expect(errors).toEqual([]);
+});
+
+test('synthesizes the trace width for 35 ohm', async ({ page }) => {
+  await page.locator('#p-w').fill('0.5');
+  await page.locator('input.z0').fill('35');
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('Synthesis done', { timeout: 60_000 });
+  const w = Number(await page.locator('#p-w').inputValue());
+  expect(Math.abs(w / 0.3605 - 1)).toBeLessThan(5e-4);
+});
+
+test('cancel stops a long solve and the page keeps working', async ({ page }) => {
+  await page.locator('#p-tol').fill('0.0001'); // a very tight target error makes the solve long
+  await page.getByRole('button', { name: 'Analyze', exact: true }).click();
+  await expect(status(page)).toContainText('Refining', { timeout: 30_000 });
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(status(page)).toContainText('Cancelled');
+  await page.locator('#p-tol').fill('0.5');
+  await analyze(page);
+  await expect(status(page)).toContainText('Z0 = 35.001');
+  // the cancel threw the old result away only until the new analysis finished
+  await tab(page, 'Loss vs f').click();
+  await expect(page.getByRole('img', { name: /loss versus frequency/ })).toBeVisible();
+});
+
+test('shows invalid input at the field and does not start', async ({ page }) => {
+  await page.locator('#p-w').fill('abc');
+  await page.getByRole('button', { name: 'Analyze', exact: true }).click();
+  await expect(status(page)).toContainText("Trace width w: 'abc' is not a number");
+  await expect(page.locator('#p-w')).toHaveClass(/invalid/);
+});
+
+test('remembers the form, unit, tab and theme after a reload', async ({ page }) => {
+  await page.locator('#p-w').fill('0.42');
+  await page.getByLabel('Trace width w unit').selectOption('mil');
+  await tab(page, 'Loss vs f').click();
+  await page.getByLabel('Theme').selectOption('dark');
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel('Trace width w unit')).toHaveValue('mil');
+  expect(Number(await page.locator('#p-w').inputValue())).toBeGreaterThan(0);
+  await expect(tab(page, 'Loss vs f')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
+
+test('grayed fields follow their switch', async ({ page }) => {
+  await expect(page.locator('#p-dmin')).toBeDisabled();
+  await page.getByLabel('Mode', { exact: true }).selectOption({ label: 'Manual' });
+  await expect(page.locator('#p-dmin')).toBeEnabled();
+});

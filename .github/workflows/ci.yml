@@ -161,6 +161,20 @@ jobs:
           npm run check
           npm test
           npx vite build
+      # the built site in a real browser (wasm, Web Worker, all tabs); needs the site built above
+      - name: Browser tests
+        working-directory: web
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e
+      - name: Keep the traces of failed browser tests
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces
+          path: web/test-results
+          if-no-files-found: ignore
+          retention-days: 3
 
   # The one required check named "build" (see .github/rulesets). It must not be skipped when a build
   # failed, hence always(); it only runs where the builds run.
