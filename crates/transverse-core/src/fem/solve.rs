@@ -75,13 +75,13 @@ pub struct Solved {
 
 /// Gradient coefficients and area of a triangle: `grad lambda_i = (b_i, c_i) / (2 A)`.
 #[derive(Clone, Copy)]
-struct Tri {
+pub(super) struct Tri {
     b: [f64; 3],
     c: [f64; 3],
     area: f64,
 }
 
-fn tri(pts: &[[f64; 2]], t: [u32; 3]) -> Tri {
+pub(super) fn tri(pts: &[[f64; 2]], t: [u32; 3]) -> Tri {
     let p = [pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]];
     let b = [p[1][1] - p[2][1], p[2][1] - p[0][1], p[0][1] - p[1][1]];
     let c = [p[2][0] - p[1][0], p[0][0] - p[2][0], p[1][0] - p[0][0]];
@@ -119,7 +119,7 @@ const QP: [[f64; 3]; 3] = [[0.0, 0.5, 0.5], [0.5, 0.0, 0.5], [0.5, 0.5, 0.0]];
 
 /// Gradients of the six quadratic shape functions at barycentric point `l`: vertices 0..2, then the edge
 /// functions opposite to vertex 0..2.
-fn p2_gradients(g: &Tri, l: [f64; 3]) -> [[f64; 2]; 6] {
+pub(super) fn p2_gradients(g: &Tri, l: [f64; 3]) -> [[f64; 2]; 6] {
     let gl: [[f64; 2]; 3] = std::array::from_fn(|p| [g.b[p] / (2.0 * g.area), g.c[p] / (2.0 * g.area)]);
     let comb = |d: [f64; 3]| [0, 1].map(|k| d[0] * gl[0][k] + d[1] * gl[1][k] + d[2] * gl[2][k]);
     let mut out = [[0.0; 2]; 6];

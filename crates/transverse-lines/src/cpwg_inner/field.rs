@@ -5,8 +5,17 @@ use transverse_core::quasistatic::Solution;
 use super::CpwgParams;
 use crate::model::{DrawRect, FieldData, ShapeKind};
 
-pub fn field_data(p: &CpwgParams, sol: &Solution) -> FieldData {
-    let g = p.geometry(sol.accuracy.margin);
+/// Conductor drawing, guide lines and view limits of a CPWG, for a domain extension `margin`.
+pub(super) struct Drawing {
+    pub conductors: Vec<DrawRect>,
+    pub dashed_y: Vec<f64>,
+    pub dotted_y: Vec<f64>,
+    pub view_zoom: [f64; 4],
+    pub view_full: [f64; 4],
+}
+
+pub(super) fn drawing(p: &CpwgParams, margin: f64) -> Drawing {
+    let g = p.geometry(margin);
     let hmax = p.h1.max(p.h2);
 
     // conductors, drawn thick enough to see even for t = 0
@@ -53,6 +62,17 @@ pub fn field_data(p: &CpwgParams, sol: &Solution) -> FieldData {
     let zy1 = g.ytop + if p.plane1 { hmax / 30.0 } else { 0.5 * hmax };
     let pad = hmax / 30.0;
 
+    Drawing {
+        conductors,
+        dashed_y,
+        dotted_y: vec![0.0, p.t],
+        view_zoom: [-xr, xr, zy0, zy1],
+        view_full: [-xd, xd, g.ymin - pad, g.ymax + pad],
+    }
+}
+
+pub fn field_data(p: &CpwgParams, sol: &Solution) -> FieldData {
+    let d = drawing(p, sol.accuracy.margin);
     FieldData {
         x: sol.grid.x.clone(),
         y: sol.grid.y.clone(),
@@ -60,11 +80,11 @@ pub fn field_data(p: &CpwgParams, sol: &Solution) -> FieldData {
         er: sol.grid.er.clone(),
         v: sol.v.clone(),
         v0: sol.v0.clone(),
-        conductors,
-        dashed_y,
-        dotted_y: vec![0.0, p.t],
-        view_zoom: [-xr, xr, zy0, zy1],
-        view_full: [-xd, xd, g.ymin - pad, g.ymax + pad],
+        conductors: d.conductors,
+        dashed_y: d.dashed_y,
+        dotted_y: d.dotted_y,
+        view_zoom: d.view_zoom,
+        view_full: d.view_full,
         z0: sol.z0,
     }
 }

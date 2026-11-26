@@ -1,10 +1,11 @@
 //! Post-processing of nodal fields on the tensor grid: E field, equipotentials, field lines.
 
 mod contour;
+pub mod mesh;
 mod streamline;
 
 pub use contour::contour_segments;
-pub use streamline::{StreamOptions, field_lines};
+pub use streamline::{StreamOptions, field_lines, field_lines_with};
 
 /// Electric field components and magnitude at the grid nodes (V/mm for 1 V on the signal).
 /// NaN inside conductors.

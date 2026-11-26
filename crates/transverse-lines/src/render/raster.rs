@@ -140,6 +140,87 @@ fn bilerp_valid(s: &[f64], nx: usize, i: usize, j: usize, tx: f64, ty: f64) -> f
     }
 }
 
+/// Colour scale of a field view: the value range, the colour map and how a raw value is turned into the
+/// value that is coloured. Shared by the grid and the mesh rasters.
+pub(super) struct Scale {
+    pub vmin: f64,
+    pub vmax: f64,
+    pub cmap: Cmap,
+    pub label: String,
+    kind: Kind,
+}
+
+enum Kind {
+    /// |E| in dB, clamped to `lo..top`.
+    Db { es: f64, lo: f64, top: f64 },
+    /// |E| linear, clamped to `0..hi`.
+    Linear { es: f64, hi: f64 },
+    /// Potential, permittivity and mesh: the raw value.
+    Raw,
+}
+
+impl Scale {
+    /// `e_hi` gives the 99.7 percentile of |E| (V/mm) in the scale region, `v_range` and `er_range` the range of
+    /// the potential and of the permittivity, `er_max` the largest permittivity.
+    pub(super) fn new(
+        spec: &RasterSpec,
+        e_hi: impl FnOnce() -> f64,
+        v_range: (f64, f64),
+        er_range: (f64, f64),
+        er_max: f64,
+    ) -> Self {
+        // |E| values are in the base unit of the unit system
+        let es = V_PER_M * spec.system.field_per_v_per_m();
+        let e_hi = || e_hi() * es;
+        let make = |vmin, vmax, cmap, label: String, kind| Self { vmin, vmax, cmap, label, kind };
+        match spec.mode {
+            FieldMode::EDb | FieldMode::EDbLines => {
+                let top = 20.0 * e_hi().log10();
+                let lo = top - spec.db_range;
+                let label = format!("|E| [{}]", spec.system.field_db_unit());
+                make(lo, top, Cmap::Inferno, label, Kind::Db { es, lo, top })
+            }
+            FieldMode::ELinear => {
+                let hi = e_hi();
+                let label = format!("|E| [{}]", spec.system.field_unit());
+                make(0.0, hi, Cmap::Inferno, label, Kind::Linear { es, hi })
+            }
+            FieldMode::Potential => make(v_range.0, v_range.1, Cmap::Viridis, "V [V]".to_string(), Kind::Raw),
+            FieldMode::Permittivity => {
+                let (lo, hi) = er_range;
+                make(lo, if hi > lo { hi } else { lo + 1.0 }, Cmap::Viridis, "er".to_string(), Kind::Raw)
+            }
+            FieldMode::Mesh => make(0.0, 3.0 * er_max, Cmap::Greys, String::new(), Kind::Raw),
+        }
+    }
+
+    /// The value to colour for a raw one (|E| in V/mm for the E modes); NaN stays NaN.
+    pub(super) fn value(&self, raw: f64) -> f64 {
+        match self.kind {
+            // NaN (conductor nodes) must stay NaN: `f64::max` would turn it into the minimum
+            Kind::Db { es, lo, top } => {
+                if raw.is_nan() {
+                    f64::NAN
+                } else {
+                    (20.0 * (raw * es).max(1e-30).log10()).clamp(lo, top)
+                }
+            }
+            Kind::Linear { es, hi } => (raw * es).clamp(0.0, hi),
+            Kind::Raw => raw,
+        }
+    }
+
+    pub(super) fn legend(&self, spec: &RasterSpec) -> Option<Legend> {
+        (spec.mode != FieldMode::Mesh).then(|| Legend {
+            label: self.label.clone(),
+            vmin: self.vmin,
+            vmax: self.vmax,
+            cmap: self.cmap,
+            field_base: (spec.mode == FieldMode::ELinear).then(|| spec.system.field_unit()),
+        })
+    }
+}
+
 enum Source {
     /// Nodal values, interpolated; cells without any valid corner are transparent.
     Nodes(Vec<f64>),
@@ -159,7 +240,6 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
     let height = ((width as f64 * (y1 - y0) / (x1 - x0)).round() as usize).clamp(8, 4000);
 
     // quantity and colour scale; |E| values are in the base unit of the unit system
-    let es = V_PER_M * spec.system.field_per_v_per_m();
     let [sx0, sx1, sy0, sy1] = spec.scale_view;
     let in_view = |k: usize| {
         let (x, y) = (f.x[k % nx], f.y[k / nx]);
@@ -167,45 +247,19 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
     };
     let e_hi = || {
         let view = percentile((0..e.e.len()).filter(|&k| in_view(k)).map(|k| e.e[k]), 99.7);
-        view.or_else(|| percentile(e.e.iter().copied(), 99.7)).unwrap_or(1.0).max(1e-30) * es
+        view.or_else(|| percentile(e.e.iter().copied(), 99.7)).unwrap_or(1.0).max(1e-30)
     };
-    let (source, vmin, vmax, cmap, label) = match spec.mode {
-        FieldMode::EDb | FieldMode::EDbLines => {
-            let top = 20.0 * e_hi().log10();
-            let lo = top - spec.db_range;
-            // NaN (conductor nodes) must stay NaN: `f64::max` would turn it into the minimum
-            let s =
-                e.e.iter()
-                    .map(|&v| {
-                        if v.is_nan() {
-                            f64::NAN
-                        } else {
-                            (20.0 * (v * es).max(1e-30).log10()).clamp(lo, top)
-                        }
-                    })
-                    .collect();
-            (Source::Nodes(s), lo, top, Cmap::Inferno, format!("|E| [{}]", spec.system.field_db_unit()))
+    let range =
+        |a: &[f64]| a.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |r, &v| (r.0.min(v), r.1.max(v)));
+    let sc = Scale::new(spec, e_hi, range(&f.v), range(&f.er), f.er.iter().fold(0.0f64, |a, &v| a.max(v)));
+    let source = match spec.mode {
+        FieldMode::EDb | FieldMode::EDbLines | FieldMode::ELinear => {
+            Source::Nodes(e.e.iter().map(|&v| sc.value(v)).collect())
         }
-        FieldMode::ELinear => {
-            let hi = e_hi();
-            let s = e.e.iter().map(|&v| (v * es).clamp(0.0, hi)).collect();
-            (Source::Nodes(s), 0.0, hi, Cmap::Inferno, format!("|E| [{}]", spec.system.field_unit()))
-        }
-        FieldMode::Potential => {
-            let (lo, hi) =
-                f.v.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &v| (a.0.min(v), a.1.max(v)));
-            (Source::Nodes(f.v.clone()), lo, hi, Cmap::Viridis, "V [V]".to_string())
-        }
-        FieldMode::Permittivity => {
-            let (lo, hi) =
-                f.er.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, &v| (a.0.min(v), a.1.max(v)));
-            (Source::Cells, lo, if hi > lo { hi } else { lo + 1.0 }, Cmap::Viridis, "er".to_string())
-        }
-        FieldMode::Mesh => {
-            let hi = f.er.iter().fold(0.0f64, |a, &v| a.max(v));
-            (Source::Cells, 0.0, 3.0 * hi, Cmap::Greys, String::new())
-        }
+        FieldMode::Potential => Source::Nodes(f.v.clone()),
+        FieldMode::Permittivity | FieldMode::Mesh => Source::Cells,
     };
+    let (vmin, vmax, cmap) = (sc.vmin, sc.vmax, sc.cmap);
     let span = (vmax - vmin).max(f64::MIN_POSITIVE);
 
     let cols: Vec<(usize, f64)> =
@@ -226,13 +280,7 @@ pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
             rgba[o..o + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
         }
     }
-    let legend = (spec.mode != FieldMode::Mesh).then_some(Legend {
-        label,
-        vmin,
-        vmax,
-        cmap,
-        field_base: (spec.mode == FieldMode::ELinear).then(|| spec.system.field_unit()),
-    });
+    let legend = sc.legend(spec);
     Raster { width, height, rgba, legend }
 }
 

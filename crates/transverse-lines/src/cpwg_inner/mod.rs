@@ -14,6 +14,7 @@
 
 mod fem;
 mod fem_analysis;
+mod fem_field;
 mod fem_loss;
 mod fem_split;
 mod field;
@@ -29,6 +30,7 @@ mod wheeler;
 
 pub use fem::{FemOptions, FemSolution, analyze_fem};
 pub use fem_analysis::{CpwgFemAnalysis, full_analysis_fem};
+pub use fem_field::field_data_fem;
 pub use fem_loss::{loss_model_fem, wheeler_dzdn_fem};
 pub use fem_split::ground_split_fem;
 pub use field::field_data;
