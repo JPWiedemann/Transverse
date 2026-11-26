@@ -254,7 +254,7 @@ fn report_levels() {
 #[test]
 #[ignore]
 fn report_losses() {
-    for case in load().into_iter().filter(|c| converged(c)) {
+    for case in load().into_iter().filter(converged) {
         let tol: f64 = std::env::var("FEM_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
         let p = CpwgParams { tol, ..same_domain(&case) };
         let t0 = std::time::Instant::now();
