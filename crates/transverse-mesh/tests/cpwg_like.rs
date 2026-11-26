@@ -63,7 +63,7 @@ impl Geo {
             core: [-self.xe(), self.xe(), -self.h2, self.t + self.h1],
             dfar: (self.margin / 6.0).max(dmax),
         });
-        SizeSpec { dmin, dmax, growth: 1.25, far }
+        SizeSpec { dmin, dmax, growth: 1.25, power: 1.0, far }
     }
     /// The cross-section like `CpwgParams` would produce it (same domain and painting rules as the FD grid).
     fn section(&self) -> CrossSection {
@@ -276,8 +276,13 @@ fn the_node_limit_and_cancel_are_honoured() {
     bad.domain = [1.0, 1.0, 0.0, 1.0];
     assert!(mesh(&bad, &g.spec(), 1000, &Ctl::new()).is_err());
     assert!(
-        mesh(&g.section(), &SizeSpec { dmin: 0.0, dmax: 1.0, growth: 1.25, far: None }, 1000, &Ctl::new())
-            .is_err()
+        mesh(
+            &g.section(),
+            &SizeSpec { dmin: 0.0, dmax: 1.0, growth: 1.25, power: 1.0, far: None },
+            1000,
+            &Ctl::new()
+        )
+        .is_err()
     );
 }
 
@@ -288,8 +293,9 @@ fn finer_size_specs_give_more_nodes_at_roughly_the_expected_rate() {
     let n2 = mesh(&g.section(), &g.spec().scaled(0.5), 2_000_000, &Ctl::new()).unwrap().pts.len();
     let ratio = n2 as f64 / n1 as f64;
     println!("nodes {n1} -> {n2}, ratio {ratio:.2}");
-    // halving all sizes quadruples the node count in 2D (less where the geometry is fixed by features)
-    assert!((2.5..=5.0).contains(&ratio), "ratio {ratio}");
+    // halving the sizes quadruples the node count in 2D; the smallest size shrinks quadratically and the
+    // growth is halved too, so the graded part towards the conductor edges adds more
+    assert!((4.0..=9.0).contains(&ratio), "ratio {ratio}");
 }
 
 /// Small deterministic generator, so the property test needs no extra crate.

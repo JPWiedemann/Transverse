@@ -21,6 +21,9 @@ pub struct SizeSpec {
     pub dmax: f64,
     /// 1.2 to 1.3 is a good grading; larger values give fewer but worse-shaped elements.
     pub growth: f64,
+    /// Grading exponent: `h = dmin * (1 + (growth - 1) * d / dmin)^power`; 1 is linear in the distance `d`
+    /// from the conductor edge, below 1 refines more strongly towards singular edges and corners.
+    pub power: f64,
     pub far: Option<Far>,
 }
 
@@ -33,21 +36,29 @@ impl SizeSpec {
             && self.dmin > 0.0
             && self.dmax >= self.dmin
             && self.growth > 1.0
-            && self.growth <= 2.0
+            && self.growth <= 4.0
+            && self.power > 0.0
+            && self.power <= 1.0
             && far_ok
         {
             Ok(())
         } else {
-            Err(TvError::InvalidParam("size spec: 0 < dmin <= dmax and 1 < growth <= 2 are required".into()))
+            Err(TvError::InvalidParam(
+                "size spec: 0 < dmin <= dmax and 1 < growth <= 4, 0 < power <= 1 are required".into(),
+            ))
         }
     }
 
-    /// The same grading with every size multiplied by `factor` (used by the accuracy levels).
+    /// The size field refined (`factor` < 1) or coarsened by `factor` (used by the accuracy levels).
     pub fn scaled(&self, factor: f64) -> Self {
+        // the smallest size shrinks quadratically: the error of the singular fields at conductor edges is
+        // dominated by the elements at the edge and falls only linearly with their size, while smooth
+        // regions need only a linear refinement; the growth keeps the node count increase moderate
         Self {
-            dmin: self.dmin * factor,
+            dmin: (self.dmin * factor * factor).min(self.dmax * factor),
             dmax: self.dmax * factor,
-            growth: self.growth,
+            growth: 1.0 + (self.growth - 1.0) * factor,
+            power: self.power,
             far: self.far.map(|f| Far { core: f.core, dfar: f.dfar * factor }),
         }
     }
@@ -59,7 +70,7 @@ impl SizeSpec {
             Some(f) => f.dfar.min(self.dmax + (self.growth - 1.0) * dcore),
             None => self.dmax,
         };
-        (self.dmin + (self.growth - 1.0) * d).min(cap)
+        (self.dmin * (1.0 + (self.growth - 1.0) * d / self.dmin).powf(self.power)).min(cap)
     }
 
     /// Distance from `p` to the core region (0 if there is none or `p` is inside).
@@ -80,16 +91,30 @@ mod tests {
 
     #[test]
     fn grows_with_distance_up_to_dmax_and_scales_as_a_whole() {
-        let s = SizeSpec { dmin: 0.01, dmax: 0.1, growth: 1.25, far: None };
+        let s = SizeSpec { dmin: 0.01, dmax: 0.1, growth: 1.25, power: 1.0, far: None };
         s.validate().unwrap();
         assert_eq!(s.at_distance(0.0, 0.0), 0.01);
         assert!((s.at_distance(0.2, 0.0) - 0.06).abs() < 1e-15);
         assert_eq!(s.at_distance(100.0, 0.0), 0.1);
         let h = s.scaled(0.5);
-        assert_eq!((h.dmin, h.dmax, h.growth), (0.005, 0.05, 1.25));
+        assert_eq!((h.dmin, h.dmax, h.growth), (0.0025, 0.05, 1.125));
         assert!(SizeSpec { dmin: 0.0, ..s }.validate().is_err());
         assert!(SizeSpec { growth: 1.0, ..s }.validate().is_err());
         assert!(SizeSpec { dmax: 0.001, ..s }.validate().is_err());
+    }
+
+    #[test]
+    fn a_power_below_one_refines_more_strongly_towards_the_edge() {
+        let lin = SizeSpec { dmin: 0.01, dmax: 1.0, growth: 1.25, power: 1.0, far: None };
+        let sq = SizeSpec { power: 0.5, ..lin };
+        sq.validate().unwrap();
+        assert_eq!(sq.at_distance(0.0, 0.0), 0.01);
+        assert!(sq.at_distance(0.2, 0.0) < lin.at_distance(0.2, 0.0));
+        assert!((sq.at_distance(0.2, 0.0) - 0.01 * (1.0 + 0.25 * 0.2 / 0.01f64).sqrt()).abs() < 1e-15);
+        assert!(
+            SizeSpec { power: 0.0, ..lin }.validate().is_err()
+                && SizeSpec { power: 1.5, ..lin }.validate().is_err()
+        );
     }
 
     #[test]
@@ -98,6 +123,7 @@ mod tests {
             dmin: 0.01,
             dmax: 0.1,
             growth: 1.25,
+            power: 1.0,
             far: Some(Far { core: [0.0, 1.0, 0.0, 1.0], dfar: 0.5 }),
         };
         s.validate().unwrap();

@@ -1,11 +1,13 @@
 //! Command-line front end: batch analysis, synthesis and self-test.
 //!
 //! ```text
-//! transverse analyze [params.json|-] [--json]                 analyse one geometry (missing fields use defaults)
+//! transverse analyze [params.json|-] [--solver fd|fem] [--json]   analyse one geometry (missing fields use defaults)
+//! transverse compare [params.json|-]                         finite difference vs finite elements on one geometry
 //! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
 //! transverse selftest [cases.json]                            compare against the Python reference cases
 //! ```
 
+mod fem_cmd;
 mod selftest;
 
 use std::io::Read;
@@ -16,7 +18,8 @@ use transverse_core::{C_LIGHT, Ctl, guided_wavelength_mm, length_for_phase_mm, p
 use transverse_lines::cpwg_inner::{self, CpwgParams, SynthVar, full_analysis};
 
 const USAGE: &str = "usage:
-  transverse analyze [params.json|-] [--json]
+  transverse analyze [params.json|-] [--solver fd|fem] [--json]
+  transverse compare [params.json|-]
   transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
   transverse selftest [cases.json]
   transverse --version";
@@ -26,6 +29,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("analyze") => cmd_analyze(&args[1..]),
         Some("synth") => cmd_synth(&args[1..]),
+        Some("compare") => cmd_compare(&args[1..]),
         Some("selftest") => selftest::run(args.get(1).map(String::as_str)),
         Some("--version" | "-V" | "version") => {
             println!("transverse {}", env!("CARGO_PKG_VERSION"));
@@ -79,10 +83,34 @@ fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::CpwgAnalysis, sec
     }
 }
 
+fn cmd_compare(args: &[String]) -> Result<ExitCode, String> {
+    let p = read_params(args.first().map(String::as_str))?;
+    fem_cmd::compare_command(&p)?;
+    Ok(ExitCode::SUCCESS)
+}
+
 fn cmd_analyze(args: &[String]) -> Result<ExitCode, String> {
     let json_out = args.iter().any(|a| a == "--json");
-    let path = args.iter().find(|a| *a != "--json");
+    // --solver fd|fem (default fd)
+    let mut fem = false;
+    let mut path: Option<&String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--json" => {}
+            "--solver" => match it.next().map(String::as_str) {
+                Some("fd") => fem = false,
+                Some("fem") => fem = true,
+                _ => return Err("--solver needs fd or fem".to_string()),
+            },
+            _ => path = Some(a),
+        }
+    }
     let p = read_params(path.map(String::as_str))?;
+    if fem {
+        fem_cmd::analyze_command(&p, json_out)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let t0 = Instant::now();
     let a = full_analysis(&p, &progress()).map_err(|e| e.to_string())?;
     print_analysis("Analysis", &p, &a, t0.elapsed().as_secs_f64(), json_out);

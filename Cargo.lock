@@ -2814,6 +2814,8 @@ dependencies = [
  "serde",
  "serde_json",
  "transverse-core",
+ "transverse-geom",
+ "transverse-mesh",
 ]
 
 [[package]]

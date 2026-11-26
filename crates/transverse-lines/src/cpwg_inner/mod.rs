@@ -12,6 +12,7 @@
 //!
 //! All lengths in mm, frequency in Hz.
 
+mod fem;
 mod field;
 mod grid;
 mod ground_split;
@@ -19,9 +20,11 @@ mod model;
 mod params;
 mod report;
 mod schematic;
+mod section;
 mod synthesis;
 mod wheeler;
 
+pub use fem::{FemOptions, FemSolution, analyze_fem};
 pub use field::field_data;
 pub use grid::*;
 pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
@@ -29,6 +32,7 @@ pub use model::CpwgInner;
 pub use params::{CpwgParams, GapMode, MeshMode, analytic};
 pub use report::report;
 pub use schematic::{SchematicFlags, schematic};
+pub use section::{GROWTH, MAT_AIR, MAT_GAP, MAT_LOWER, MAT_UPPER};
 pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize};
 pub use wheeler::wheeler_dzdn;
 

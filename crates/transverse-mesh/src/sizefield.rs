@@ -47,7 +47,8 @@ mod tests {
                 PEdge { a: 2, b: 3, owner: Some(Owner { rank: -1, id: 0, tag: 9 }) }, // box edge: not counted
             ],
         };
-        let f = SizeField::new(&pslg, SizeSpec { dmin: 0.01, dmax: 0.5, growth: 1.25, far: None });
+        let f =
+            SizeField::new(&pslg, SizeSpec { dmin: 0.01, dmax: 0.5, growth: 1.25, power: 1.0, far: None });
         assert_eq!(f.at([0.5, 0.0]), 0.01);
         assert!((f.distance([0.5, 2.0]) - 2.0).abs() < 1e-15);
         assert!((f.at([0.5, 1.0]) - 0.26).abs() < 1e-12);
