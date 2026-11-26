@@ -80,3 +80,25 @@ export interface AnalysisResult {
   /** Set after a synthesis: the parameters that were found. */
   params: ParamSet | null;
 }
+
+// Cross-section sketch (serde output of `Schematic`); y grows downwards.
+export type SchemColor =
+  | 'UpperDielectric'
+  | 'LowerDielectric'
+  | 'CustomGap'
+  | 'Conductor'
+  | 'ConductorEdge'
+  | 'Signal'
+  | 'Text'
+  | 'Muted';
+
+export type SchemItem =
+  | { Rect: { x0: number; y0: number; x1: number; y1: number; fill: SchemColor; outline: SchemColor | null } }
+  | { Line: { x0: number; y0: number; x1: number; y1: number; color: SchemColor; dashed: boolean; arrows: boolean } }
+  | { Text: { x: number; y: number; text: string; anchor: 'Center' | 'Left' | 'Right'; bold: boolean; color: SchemColor } };
+
+export interface Schematic {
+  width: number;
+  height: number;
+  items: SchemItem[];
+}

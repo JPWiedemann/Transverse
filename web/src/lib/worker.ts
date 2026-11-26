@@ -14,6 +14,12 @@ self.onmessage = async (e: MessageEvent<Request>) => {
   const req = e.data;
   try {
     await ready;
+    if (req.op === 'sample') {
+      if (!last) throw new Error('no result to sample');
+      const data = last.sample(req.freqs);
+      postMessage({ id: req.id, type: 'sample', data } satisfies Response, { transfer: [data.buffer] });
+      return;
+    }
     const progress = (text: string) => send({ id: req.id, type: 'progress', text });
     const handle =
       req.op === 'analyze'

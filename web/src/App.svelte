@@ -1,15 +1,23 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import CrossSection from './components/CrossSection.svelte';
+  import LossTab from './components/LossTab.svelte';
   import ParamForm from './components/ParamForm.svelte';
   import Results from './components/Results.svelte';
   import { Cancelled, Engine } from './lib/engine';
   import * as F from './lib/form';
-  import { lineTypes, loadMeta, paramDefaults, paramSpecs, wavelengthOf } from './lib/meta';
-  import { applyTheme, loadSettings, saveSettings, type Settings, type Theme } from './lib/settings';
+  import { lineTypes, loadMeta, paramDefaults, paramSpecs, schematicOf, wavelengthOf } from './lib/meta';
+  import type { UnitSystem } from './lib/loss';
+  import { applyTheme, loadSettings, saveSettings, type Settings, type Tab, type Theme } from './lib/settings';
   import type { AnalysisResult, LineInfo, ParamSet, ParamSpec } from './lib/types';
   import { parseNumber } from './lib/units';
 
   const engine = new Engine();
+  const tabs: [Tab, string][] = [
+    ['results', 'Results'],
+    ['cross-section', 'Cross-section'],
+    ['loss', 'Loss vs f'],
+  ];
   const settings: Settings = loadSettings();
 
   let ready = $state(false);
@@ -22,6 +30,13 @@
   let synthTarget = $state('');
   let synthZ0 = $state('50');
   let theme = $state<Theme>(settings.theme);
+  let units = $state<UnitSystem>(settings.units);
+  let tab = $state<Tab>(settings.tab);
+  let lossFmaxText = $state(settings.lossFmaxText);
+  let lossFmaxUnit = $state(settings.lossFmaxUnit);
+  // counts results (the loss plot resets its view); false after a cancel threw the result away
+  let generation = $state(0);
+  let canSample = $state(false);
 
   let busy = $state(false);
   let status = $state('Ready');
@@ -30,6 +45,25 @@
   let result = $state<AnalysisResult | undefined>();
 
   const controls = $derived(F.controlSet(defaults, form));
+
+  // the parameters as currently typed, if they are valid (sketch and loss plot follow the form)
+  const current = $derived.by(() => {
+    if (!line) return undefined;
+    try {
+      return F.toParams(specs, defaults, form, wavelength);
+    } catch {
+      return undefined;
+    }
+  });
+  const sketch = $derived.by(() => {
+    if (!line || !current) return undefined;
+    try {
+      return schematicOf(line.id, current);
+    } catch {
+      return undefined;
+    }
+  });
+  const formFHz = $derived(typeof current?.f === 'number' ? current.f : undefined);
 
   onMount(async () => {
     try {
@@ -46,6 +80,10 @@
   $effect(() => {
     applyTheme(theme);
     settings.theme = theme;
+    settings.units = units;
+    settings.tab = tab;
+    settings.lossFmaxText = lossFmaxText;
+    settings.lossFmaxUnit = lossFmaxUnit;
     saveSettings(settings);
   });
 
@@ -106,6 +144,8 @@
     try {
       const r = await start(params);
       result = r;
+      generation += 1;
+      canSample = engine.canSample;
       if (r.params) form = F.setParams(specs, form, r.params, wavelength);
       persist();
       const z0 = r.summary.modes[0]?.z0;
@@ -114,6 +154,7 @@
       if (e instanceof Cancelled) setStatus('Cancelled');
       else setStatus(e instanceof Error ? e.message : String(e), 'error');
     } finally {
+      canSample = engine.canSample;
       busy = false;
     }
   }
@@ -144,6 +185,13 @@
     <h1>Transverse</h1>
     <span class="line">{line.name}</span>
     <span class="spacer"></span>
+    <label class="theme">
+      Units
+      <select bind:value={units}>
+        <option value="metric">Metric</option>
+        <option value="imperial">Imperial</option>
+      </select>
+    </label>
     <label class="theme">
       Theme
       <select bind:value={theme}>
@@ -178,12 +226,43 @@
     </section>
     <section class="output" aria-label="Results">
       <div class="tabs" role="tablist" aria-label="Views">
-        <button role="tab" aria-selected="true" class="tab active">Results</button>
+        {#each tabs as [id, label]}
+          <button role="tab" aria-selected={tab === id} class="tab" class:active={tab === id} onclick={() => (tab = id)}>{label}</button>
+        {/each}
       </div>
-      {#if result}
-        <Results {result} />
+      {#if tab === 'results'}
+        {#if result}
+          <Results {result} />
+        {:else}
+          <p class="hint">Enter the geometry and press Analyze.</p>
+        {/if}
+      {:else if tab === 'cross-section'}
+        {#if sketch}
+          <CrossSection {sketch} />
+        {:else}
+          <p class="hint">{current ? 'This line type has no cross-section sketch.' : 'Fix the invalid parameter to see the sketch.'}</p>
+        {/if}
+      {:else if result}
+        {@const mode = result.summary.modes[0]}
+        {#if mode}
+          <LossTab
+            {engine}
+            {canSample}
+            {generation}
+            z0={mode.z0}
+            fHz={mode.f_hz}
+            {formFHz}
+            {units}
+            fmaxText={lossFmaxText}
+            fmaxUnit={lossFmaxUnit}
+            onFmax={(t, u) => {
+              lossFmaxText = t;
+              lossFmaxUnit = u;
+            }}
+          />
+        {/if}
       {:else}
-        <p class="hint">Enter the geometry and press Analyze.</p>
+        <p class="hint">Press Analyze to see the loss over frequency.</p>
       {/if}
     </section>
   </div>

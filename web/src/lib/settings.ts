@@ -2,8 +2,10 @@
 // target, theme). Everything is optional: with storage blocked the page works without it.
 
 import type { SavedForm } from './form';
+import type { UnitSystem } from './loss';
 
 export type Theme = 'system' | 'light' | 'dark';
+export type Tab = 'results' | 'cross-section' | 'loss';
 
 export interface LineSettings {
   form?: SavedForm;
@@ -13,6 +15,10 @@ export interface LineSettings {
 
 export interface Settings {
   theme: Theme;
+  units: UnitSystem;
+  tab: Tab;
+  lossFmaxText: string;
+  lossFmaxUnit: string;
   lines: Record<string, LineSettings>;
 }
 
@@ -24,12 +30,24 @@ export function loadSettings(): Settings {
     if (raw) {
       const s = JSON.parse(raw) as Partial<Settings>;
       const theme = s.theme === 'light' || s.theme === 'dark' ? s.theme : 'system';
-      return { theme, lines: typeof s.lines === 'object' && s.lines !== null ? s.lines : {} };
+      return {
+        ...defaults(),
+        theme,
+        units: s.units === 'imperial' ? 'imperial' : 'metric',
+        tab: s.tab === 'cross-section' || s.tab === 'loss' ? s.tab : 'results',
+        lossFmaxText: typeof s.lossFmaxText === 'string' ? s.lossFmaxText : '20',
+        lossFmaxUnit: typeof s.lossFmaxUnit === 'string' ? s.lossFmaxUnit : 'GHz',
+        lines: typeof s.lines === 'object' && s.lines !== null ? s.lines : {},
+      };
     }
   } catch {
     // unreadable or blocked: start with defaults
   }
-  return { theme: 'system', lines: {} };
+  return defaults();
+}
+
+function defaults(): Settings {
+  return { theme: 'system', units: 'metric', tab: 'results', lossFmaxText: '20', lossFmaxUnit: 'GHz', lines: {} };
 }
 
 export function saveSettings(s: Settings): void {
