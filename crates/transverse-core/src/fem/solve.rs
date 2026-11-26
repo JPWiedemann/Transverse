@@ -297,7 +297,8 @@ pub fn solve_lumped(inp: &FemInput<'_>, order: Order, ctl: &Ctl) -> TvResult<Sol
     }
     let sys = System::new(inp, order);
     let v = sys.potentials(&|k| inp.er[k], ctl)?;
-    let v0 = sys.potentials(&|_| 1.0, ctl)?;
+    // a structure without dielectrics: the air solution is the same system
+    let v0 = if inp.er.iter().all(|e| *e == 1.0) { v.clone() } else { sys.potentials(&|_| 1.0, ctl)? };
     let c = EPS0 * sys.energy(&v, &|k| inp.er[k]);
     let c0 = EPS0 * sys.energy(&v0, &|_| 1.0);
     let g = EPS0 * sys.energy(&v, &|k| inp.er[k] * inp.tand[k]);

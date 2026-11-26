@@ -5,7 +5,7 @@
 use transverse_core::fem::{self, FemInput, Level, LevelRun, Order};
 use transverse_core::quasistatic::GridSource;
 use transverse_core::{Ctl, TvResult};
-use transverse_geom::{GROUND, SIGNAL};
+use transverse_geom::{GROUND, SIGNAL, SizeSpec};
 use transverse_mesh::Mesh;
 
 use super::{CpwgParams, MeshMode};
@@ -67,27 +67,36 @@ pub struct FemSolution {
     /// Edges whose midpoints carry the extra degrees of freedom of quadratic elements (after the nodes).
     pub edges: Vec<[u32; 2]>,
     pub order: Order,
+    /// Size factor of the finest level relative to the sizes of the grid's first level (1 for a manual mesh);
+    /// together with `manual` this reproduces the finest mesh settings.
+    pub final_scale: f64,
+    pub manual: Option<(f64, f64)>,
+    /// Size field of the finest level.
+    pub spec: SizeSpec,
 }
 
-type Payload = (Mesh, Vec<f64>, Vec<f64>, Vec<[u32; 2]>);
+pub(super) type Payload = (Mesh, Vec<f64>, Vec<f64>, Vec<[u32; 2]>);
 
-/// Mesh and solve one level with the element sizes scaled by `scale`.
-fn solve_level(
+/// Size field of a level: the first-level sizes (or the manual ones) scaled by `scale`.
+fn level_spec(p: &CpwgParams, margin: f64, sizes: Option<(f64, f64)>, scale: f64) -> SizeSpec {
+    match sizes {
+        Some((dmin, dmax)) => p.size_spec_for(margin, dmin, dmax),
+        None => p.size_spec(margin),
+    }
+    .scaled(scale)
+}
+
+/// Mesh and solve one level with the size field `spec`.
+pub(super) fn solve_level(
     p: &CpwgParams,
     margin: f64,
-    sizes: Option<(f64, f64)>,
-    scale: f64,
+    spec: &SizeSpec,
     max_nodes: usize,
     order: Order,
     ctl: &Ctl,
 ) -> TvResult<LevelRun<Payload>> {
     let cs = p.cross_section(margin);
-    let spec = match sizes {
-        Some((dmin, dmax)) => p.size_spec_for(margin, dmin, dmax),
-        None => p.size_spec(margin),
-    }
-    .scaled(scale);
-    let mesh = transverse_mesh::mesh(&cs, &spec, max_nodes, ctl)?;
+    let mesh = transverse_mesh::mesh(&cs, spec, max_nodes, ctl)?;
     let er: Vec<f64> = mesh.tri_mat.iter().map(|m| cs.materials[usize::from(*m)].er).collect();
     let tand: Vec<f64> = mesh.tri_mat.iter().map(|m| cs.materials[usize::from(*m)].tand).collect();
     let fixed: Vec<Option<f64>> = mesh
@@ -130,20 +139,36 @@ pub fn analyze_fem(p: &CpwgParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<FemS
         // a coarse mesh is enough for the domain-size check, as for the grid (twice the base sizes)
         fem::auto_margin_with(p.initial_margin(), opt.tol_pct, ctl, |m| {
             ctl.msg(&format!("Domain size check: margin {m:.3} mm ..."));
-            Ok(solve_level(p, m, opt.manual, 2.0, opt.max_nodes, opt.order, ctl)?.lumped.z0())
+            Ok(solve_level(p, m, &level_spec(p, m, opt.manual, 2.0), opt.max_nodes, opt.order, ctl)?
+                .lumped
+                .z0())
         })?
     };
     let (lumped, (mesh, v, v0, edges), accuracy) = match opt.manual {
         Some(sizes) => {
             ctl.msg("Solving (manual mesh) ...");
-            let r = solve_level(p, margin, Some(sizes), 1.0, opt.max_nodes, opt.order, ctl)?;
-            let acc = Level { nodes: vec![r.nodes], z0: vec![r.lumped.z0()], est_err: 0.0, order: None };
+            let r = solve_level(
+                p,
+                margin,
+                &level_spec(p, margin, Some(sizes), 1.0),
+                opt.max_nodes,
+                opt.order,
+                ctl,
+            )?;
+            let acc = Level {
+                nodes: vec![r.nodes],
+                z0: vec![r.lumped.z0()],
+                scales: vec![1.0],
+                est_err: 0.0,
+                order: None,
+            };
             (r.lumped, r.payload, acc)
         }
         None => fem::converge(opt.tol_pct, opt.max_levels, opt.start_scale, ctl, |scale, _| {
-            solve_level(p, margin, None, scale, opt.max_nodes, opt.order, ctl)
+            solve_level(p, margin, &level_spec(p, margin, None, scale), opt.max_nodes, opt.order, ctl)
         })?,
     };
+    let final_scale = accuracy.scales.last().copied().unwrap_or(1.0);
     Ok(FemSolution {
         c: lumped.c,
         c0: lumped.c0,
@@ -158,5 +183,8 @@ pub fn analyze_fem(p: &CpwgParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<FemS
         v0,
         edges,
         order: opt.order,
+        final_scale,
+        manual: opt.manual,
+        spec: level_spec(p, margin, opt.manual, final_scale),
     })
 }

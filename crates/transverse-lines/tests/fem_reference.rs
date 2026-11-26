@@ -6,7 +6,7 @@
 use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::TvError;
-use transverse_lines::cpwg_inner::{CpwgParams, FemOptions, MeshMode, analyze, analyze_fem};
+use transverse_lines::cpwg_inner::{CpwgParams, FemOptions, MeshMode, analyze, analyze_fem, loss_model_fem};
 
 #[derive(Deserialize)]
 struct Case {
@@ -19,6 +19,14 @@ struct Case {
     g_over_omega: f64,
     analytic_z0: Option<f64>,
     margin: f64,
+    dzdn: f64,
+    loss: Loss,
+}
+
+#[derive(Deserialize)]
+struct Loss {
+    alpha_c: f64,
+    alpha_d: f64,
 }
 
 #[derive(Deserialize)]
@@ -165,6 +173,34 @@ fn limits_cancel_and_manual_meshes_are_honoured() {
     assert!(analyze_fem(&bad, &bad.fem_options(), &Ctl::new()).is_err());
 }
 
+#[test]
+fn fem_losses_match_fd() {
+    // Wheeler conductor loss and dielectric loss at the default tolerance (0.5 %); measured differences:
+    // dZ0/dn below 5e-3, alpha_c below 5.5e-3, alpha_d below 6e-4 (the selftest bar for losses is 1e-2).
+    // cbcpw_air_above (200k nodes) is left out to keep the test short.
+    let names = [
+        "closed_t0_w0.248_s0.15",
+        "closed_t0_w0.2_s0.1",
+        "final_stackup",
+        "open_no_plane1_no_fence1",
+        "no_fences_planes_kept",
+        "gap_custom_air",
+        "rough_copper_5ghz",
+        "explicit_margin",
+    ];
+    for case in load().iter().filter(|c| names.contains(&c.name.as_str())) {
+        let p = same_domain(case);
+        let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
+        let lm = loss_model_fem(&p, &sol, p.max_nodes, &Ctl::new()).unwrap();
+        let at = lm.at(p.f);
+        check(&case.name, "dZ0/dn", lm.dzdn, case.dzdn, 1e-2);
+        check(&case.name, "alpha_c", at.alpha_c, case.loss.alpha_c, 1e-2);
+        check(&case.name, "alpha_d", at.alpha_d, case.loss.alpha_d, 1e-3);
+        // roughness and skin depth are independent of the solver
+        assert_eq!(lm.sigma, p.sigma);
+    }
+}
+
 /// Differences to FD for all cases, for tuning; run with `--ignored --nocapture` (FEM_TOL sets the tolerance in %).
 #[test]
 #[ignore]
@@ -211,5 +247,27 @@ fn report_levels() {
     println!("{name} (reference z0 {})", case.z0);
     for (n, z) in sol.accuracy.nodes.iter().zip(&sol.accuracy.z0) {
         println!("   {n:8} nodes  z0 {z:.5}  rel {:+.2e}", z / case.z0 - 1.0);
+    }
+}
+
+/// Wheeler conductor loss and dielectric loss against FD, for tuning; `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn report_losses() {
+    for case in load().into_iter().filter(|c| converged(c)) {
+        let tol: f64 = std::env::var("FEM_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+        let p = CpwgParams { tol, ..same_domain(&case) };
+        let t0 = std::time::Instant::now();
+        let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
+        let lm = loss_model_fem(&p, &sol, p.max_nodes, &Ctl::new()).unwrap();
+        let at = lm.at(p.f);
+        println!(
+            "{:28} dzdn {:+.2e} alpha_c {:+.2e} alpha_d {:+.2e} | {:.1}s",
+            case.name,
+            lm.dzdn / case.dzdn - 1.0,
+            at.alpha_c / case.loss.alpha_c - 1.0,
+            at.alpha_d / case.loss.alpha_d - 1.0,
+            t0.elapsed().as_secs_f64()
+        );
     }
 }

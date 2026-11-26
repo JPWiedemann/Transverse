@@ -13,6 +13,7 @@
 //! All lengths in mm, frequency in Hz.
 
 mod fem;
+mod fem_loss;
 mod field;
 mod grid;
 mod ground_split;
@@ -25,6 +26,7 @@ mod synthesis;
 mod wheeler;
 
 pub use fem::{FemOptions, FemSolution, analyze_fem};
+pub use fem_loss::{loss_model_fem, wheeler_dzdn_fem};
 pub use field::field_data;
 pub use grid::*;
 pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};

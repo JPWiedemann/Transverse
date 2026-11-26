@@ -23,6 +23,8 @@ pub struct Level {
     pub nodes: Vec<usize>,
     /// Z0 of every level (before extrapolation).
     pub z0: Vec<f64>,
+    /// Size factor of every level (relative to the start of the sequence).
+    pub scales: Vec<f64>,
     /// Estimated relative error of Z0 of the last level: the change between the last two levels divided by
     /// `1 / LEVEL_FACTOR^order - 1`, with the observed order (1 if it cannot be observed).
     pub est_err: f64,
@@ -71,6 +73,7 @@ pub fn converge<T>(
         };
         info.nodes.push(run.nodes);
         info.z0.push(run.lumped.z0());
+        info.scales.push(scale);
         runs.push(run.lumped);
         last = Some(run.payload);
         let k = info.z0.len();
