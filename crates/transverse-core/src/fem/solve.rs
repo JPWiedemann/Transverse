@@ -139,18 +139,18 @@ fn p2_gradients(g: &Tri, l: [f64; 3]) -> [[f64; 2]; 6] {
 }
 
 /// Degrees of freedom of every element and the fixed values.
-struct System<'a> {
+pub(super) struct System<'a> {
     inp: &'a FemInput<'a>,
     order: Order,
     /// Per triangle: dof indices (3 or 6 used).
-    dofs: Vec<[usize; 6]>,
+    pub(super) dofs: Vec<[usize; 6]>,
     ndof: usize,
     fixed: Vec<Option<f64>>,
-    edges: Vec<[u32; 2]>,
+    pub(super) edges: Vec<[u32; 2]>,
 }
 
 impl<'a> System<'a> {
-    fn new(inp: &'a FemInput<'a>, order: Order) -> Self {
+    pub(super) fn new(inp: &'a FemInput<'a>, order: Order) -> Self {
         let n = inp.pts.len();
         let mut fixed: Vec<Option<f64>> = inp.fixed.to_vec();
         let (mut edges, mut dofs) = (Vec::new(), Vec::with_capacity(inp.tris.len()));
@@ -187,7 +187,7 @@ impl<'a> System<'a> {
     }
 
     /// Element matrix for triangle `k` scaled by `w`.
-    fn local(&self, k: usize, w: f64) -> [[f64; 6]; 6] {
+    pub(super) fn local(&self, k: usize, w: f64) -> [[f64; 6]; 6] {
         let g = tri(self.inp.pts, self.inp.tris[k]);
         let mut m = [[0.0; 6]; 6];
         if self.order == Order::P1 {

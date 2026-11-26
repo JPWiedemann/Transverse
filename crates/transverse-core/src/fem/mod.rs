@@ -5,7 +5,9 @@
 //! exactly as in the finite-difference solver.
 
 mod converge;
+mod flux;
 mod solve;
 
 pub use converge::{Level, LevelRun, auto_margin_with, converge};
+pub use flux::{BoundaryFlux, boundary_fluxes};
 pub use solve::{FemInput, Lumped, Order, Solved, solve_lumped};

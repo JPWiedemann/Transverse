@@ -3,13 +3,17 @@
 use std::time::Instant;
 
 use transverse_core::Ctl;
-use transverse_lines::cpwg_inner::{CpwgParams, FemSolution, analyze, analyze_fem};
+use transverse_core::NP2DB;
+use transverse_lines::cpwg_inner::{
+    CpwgFemAnalysis, CpwgParams, GroundCat, analyze, analyze_fem, full_analysis_fem,
+};
 
 fn progress() -> Ctl {
     Ctl::new().with_progress(|m| eprintln!("{m}"))
 }
 
-fn print_fem(s: &FemSolution, secs: f64) {
+fn print_fem(p: &CpwgParams, a: &CpwgFemAnalysis, secs: f64) {
+    let s = &a.sol;
     println!("=== FEM analysis (quadratic elements) ===");
     println!("Z0              = {:8.3} Ohm", s.z0);
     println!("eps_eff         = {:8.4}", s.eeff);
@@ -25,24 +29,38 @@ fn print_fem(s: &FemSolution, secs: f64) {
     if s.margin > 0.0 {
         println!("Domain          : open structure, extension {:.3} mm", s.margin);
     }
+    let lo = a.loss.at(p.f);
+    let (ac, ad) = (lo.alpha_c * NP2DB / 1000.0, lo.alpha_d * NP2DB / 1000.0);
+    println!("@ f = {} GHz", p.f / 1e9);
+    println!("Conductor loss  = {ac:8.5} dB/mm  ({:.4} dB/in)", ac * 25.4);
+    println!("Dielectric loss = {ad:8.5} dB/mm  ({:.4} dB/in)", ad * 25.4);
+    println!("Total loss      = {:8.5} dB/mm  ({:.4} dB/in)", ac + ad, (ac + ad) * 25.4);
+    println!("Ground split                     E-field   Return current (HF)");
+    for c in GroundCat::ALL {
+        let (f, i) = (a.split.field.get(c), a.split.current.get(c));
+        if f.abs() >= 0.05 || i.abs() >= 0.05 {
+            println!("  {:31}{f:6.1} %   {i:6.1} %", c.label());
+        }
+    }
     println!("Time            : {secs:.2} s");
 }
 
 /// `analyze --solver fem`.
 pub fn analyze_command(p: &CpwgParams, json_out: bool) -> Result<(), String> {
     let t0 = Instant::now();
-    let s = analyze_fem(p, &p.fem_options(), &progress()).map_err(|e| e.to_string())?;
-    let secs = t0.elapsed().as_secs_f64();
+    let a = full_analysis_fem(p, &progress()).map_err(|e| e.to_string())?;
+    let (s, secs) = (&a.sol, t0.elapsed().as_secs_f64());
     if json_out {
         let out = serde_json::json!({
             "params": p, "solver": "fem", "z0": s.z0, "eeff": s.eeff, "l": s.l, "c": s.c, "c0": s.c0,
             "g_over_omega": s.g_over_omega, "nodes": s.mesh.pts.len(), "margin": s.margin,
             "levels": { "nodes": s.accuracy.nodes, "z0": s.accuracy.z0 },
             "est_err": s.accuracy.est_err, "order": s.accuracy.order, "seconds": secs,
+            "dzdn": a.loss.dzdn, "loss": a.loss.at(p.f), "split": a.split,
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     } else {
-        print_fem(&s, secs);
+        print_fem(p, &a, secs);
     }
     Ok(())
 }

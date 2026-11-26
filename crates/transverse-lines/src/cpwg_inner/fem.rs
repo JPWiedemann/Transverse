@@ -5,7 +5,7 @@
 use transverse_core::fem::{self, FemInput, Level, LevelRun, Order};
 use transverse_core::quasistatic::GridSource;
 use transverse_core::{Ctl, TvResult};
-use transverse_geom::{GROUND, SIGNAL, SizeSpec};
+use transverse_geom::{SIGNAL, SizeSpec};
 use transverse_mesh::Mesh;
 
 use super::{CpwgParams, MeshMode};
@@ -77,6 +77,38 @@ pub struct FemSolution {
 
 pub(super) type Payload = (Mesh, Vec<f64>, Vec<f64>, Vec<[u32; 2]>);
 
+/// Per-triangle materials and the fixed potentials of a mesh, owned so that [`FemInput`] can borrow them.
+pub(super) struct InputData {
+    pub er: Vec<f64>,
+    pub tand: Vec<f64>,
+    pub fixed: Vec<Option<f64>>,
+    /// Conductor boundary edges: with quadratic elements their midpoints are fixed as well.
+    pub fixed_edges: Vec<([u32; 2], f64)>,
+}
+
+impl InputData {
+    pub fn new(cs: &transverse_geom::CrossSection, mesh: &Mesh) -> Self {
+        let volt = |id: u8| if id == SIGNAL { 1.0 } else { 0.0 };
+        Self {
+            er: mesh.tri_mat.iter().map(|m| cs.materials[usize::from(*m)].er).collect(),
+            tand: mesh.tri_mat.iter().map(|m| cs.materials[usize::from(*m)].tand).collect(),
+            fixed: mesh.node_cond.iter().map(|c| c.map(volt)).collect(),
+            fixed_edges: mesh.edges.iter().map(|e| ([e.a.min(e.b), e.a.max(e.b)], volt(e.id))).collect(),
+        }
+    }
+
+    pub fn input<'a>(&'a self, mesh: &'a Mesh) -> FemInput<'a> {
+        FemInput {
+            pts: &mesh.pts,
+            tris: &mesh.tris,
+            er: &self.er,
+            tand: &self.tand,
+            fixed: &self.fixed,
+            fixed_edges: &self.fixed_edges,
+        }
+    }
+}
+
 /// Size field of a level: the first-level sizes (or the manual ones) scaled by `scale`.
 fn level_spec(p: &CpwgParams, margin: f64, sizes: Option<(f64, f64)>, scale: f64) -> SizeSpec {
     match sizes {
@@ -97,33 +129,8 @@ pub(super) fn solve_level(
 ) -> TvResult<LevelRun<Payload>> {
     let cs = p.cross_section(margin);
     let mesh = transverse_mesh::mesh(&cs, spec, max_nodes, ctl)?;
-    let er: Vec<f64> = mesh.tri_mat.iter().map(|m| cs.materials[usize::from(*m)].er).collect();
-    let tand: Vec<f64> = mesh.tri_mat.iter().map(|m| cs.materials[usize::from(*m)].tand).collect();
-    let fixed: Vec<Option<f64>> = mesh
-        .node_cond
-        .iter()
-        .map(|c| match c {
-            Some(id) if *id == SIGNAL => Some(1.0),
-            Some(id) if *id == GROUND => Some(0.0),
-            Some(_) => Some(0.0),
-            None => None,
-        })
-        .collect();
-    // conductor edges: the midpoints of these edges are fixed as well with quadratic elements
-    let fixed_edges: Vec<([u32; 2], f64)> = mesh
-        .edges
-        .iter()
-        .map(|e| ([e.a.min(e.b), e.a.max(e.b)], if e.id == SIGNAL { 1.0 } else { 0.0 }))
-        .collect();
-    let inp = FemInput {
-        pts: &mesh.pts,
-        tris: &mesh.tris,
-        er: &er,
-        tand: &tand,
-        fixed: &fixed,
-        fixed_edges: &fixed_edges,
-    };
-    let s = fem::solve_lumped(&inp, order, ctl)?;
+    let data = InputData::new(&cs, &mesh);
+    let s = fem::solve_lumped(&data.input(&mesh), order, ctl)?;
     let nodes = mesh.pts.len();
     Ok(LevelRun { lumped: s.lumped, nodes, payload: (mesh, s.v, s.v0, s.edges) })
 }

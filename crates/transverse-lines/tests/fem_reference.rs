@@ -6,7 +6,9 @@
 use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::TvError;
-use transverse_lines::cpwg_inner::{CpwgParams, FemOptions, MeshMode, analyze, analyze_fem, loss_model_fem};
+use transverse_lines::cpwg_inner::{
+    CpwgParams, FemOptions, GroundCat, MeshMode, analyze, analyze_fem, ground_split_fem, loss_model_fem,
+};
 
 #[derive(Deserialize)]
 struct Case {
@@ -21,6 +23,15 @@ struct Case {
     margin: f64,
     dzdn: f64,
     loss: Loss,
+    split: SplitRef,
+}
+
+#[derive(Deserialize)]
+struct SplitRef {
+    field: std::collections::HashMap<String, f64>,
+    current: std::collections::HashMap<String, f64>,
+    x90_planes: Option<f64>,
+    x90_cop: f64,
 }
 
 #[derive(Deserialize)]
@@ -201,6 +212,72 @@ fn fem_losses_match_fd() {
     }
 }
 
+#[test]
+fn fem_ground_split_matches_fd() {
+    // shares in percentage points, x90 widths relative. Measured at the default tolerance: shares within 0.3 pp
+    // for the structures with thick copper and for the t = 0 cases with the narrower gap, within 1.7 pp for the
+    // t = 0 case with w = 0.2 / s = 0.1: for zero-thickness conductors the flank share is the flux around the
+    // tip, which depends on the mesh there; x90 widths within 2 %.
+    let names = [
+        "closed_t0_w0.248_s0.15",
+        "closed_t0_w0.2_s0.1",
+        "cbcpw_air_above",
+        "final_stackup",
+        "open_no_plane1_no_fence1",
+        "open_no_planes",
+        "no_fences_planes_kept",
+        "gap_lower",
+        "explicit_margin",
+    ];
+    for case in load().iter().filter(|c| names.contains(&c.name.as_str())) {
+        let p = same_domain(case);
+        let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
+        let split = ground_split_fem(&p, &sol).unwrap();
+        let t0 = p.t == 0.0;
+        let limit = if t0 { 1.7 } else { 0.35 };
+        for c in GroundCat::ALL {
+            let key = cat_key(c);
+            for (what, fem, fd) in [
+                ("E-field share", split.field.get(c), case.split.field[key]),
+                ("return current share", split.current.get(c), case.split.current[key]),
+            ] {
+                assert!(
+                    (fem - fd).abs() < limit,
+                    "{}: {what} {key}: FEM {fem:.2} % vs FD {fd:.2} % (limit {limit} pp)",
+                    case.name
+                );
+            }
+        }
+        let total: f64 = GroundCat::ALL.iter().map(|&c| split.current.get(c)).sum();
+        assert!((total - 100.0).abs() < 1e-9, "{}: shares add up to {total}", case.name);
+        assert_eq!(split.x90_planes.is_some(), case.split.x90_planes.is_some(), "{}", case.name);
+        if let (Some(a), Some(b)) = (split.x90_planes, case.split.x90_planes) {
+            check(&case.name, "x90 planes", a, b, 2e-2);
+        }
+        check(&case.name, "x90 coplanar", split.x90_cop, case.split.x90_cop, 3e-2);
+        // the plane current profiles integrate to their share (the edges are horizontal, so x is the length)
+        for prof in &split.profiles {
+            if !matches!(prof.cat, GroundCat::Plane1 | GroundCat::Plane2) {
+                continue;
+            }
+            let integral: f64 = prof
+                .x
+                .windows(2)
+                .zip(prof.js.windows(2))
+                .map(|(x, j)| 0.5 * (j[0] + j[1]) * (x[1] - x[0]))
+                .sum();
+            let share = split.current.get(prof.cat) / 100.0;
+            // the trapezoid rule over edge centres misses half an edge at each end
+            assert!(
+                (integral / share - 1.0).abs() < 0.05,
+                "{}: {:?} profile integral {integral} vs share {share}",
+                case.name,
+                prof.cat
+            );
+        }
+    }
+}
+
 /// Differences to FD for all cases, for tuning; run with `--ignored --nocapture` (FEM_TOL sets the tolerance in %).
 #[test]
 #[ignore]
@@ -268,6 +345,43 @@ fn report_losses() {
             at.alpha_c / case.loss.alpha_c - 1.0,
             at.alpha_d / case.loss.alpha_d - 1.0,
             t0.elapsed().as_secs_f64()
+        );
+    }
+}
+
+fn cat_key(c: GroundCat) -> &'static str {
+    c.key()
+}
+
+/// Ground split against FD; `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn report_split() {
+    for case in load().into_iter().filter(converged) {
+        let tol: f64 = std::env::var("FEM_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
+        let p = CpwgParams { tol, ..same_domain(&case) };
+        let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
+        let split = ground_split_fem(&p, &sol).unwrap();
+        let (mut worst_f, mut worst_c) = (0.0f64, 0.0f64);
+        let mut line = String::new();
+        for c in GroundCat::ALL {
+            let (f, cu) = (split.field.get(c), split.current.get(c));
+            let (rf, rc) = (case.split.field[cat_key(c)], case.split.current[cat_key(c)]);
+            worst_f = worst_f.max((f - rf).abs());
+            worst_c = worst_c.max((cu - rc).abs());
+            if (cu - rc).abs() > 0.05 {
+                line += &format!(" {}:{:+.2}", cat_key(c), cu - rc);
+            }
+        }
+        println!(
+            "{:28} worst field {:.3} pp, current {:.3} pp | x90_planes {:?} vs {:?} | x90_cop {:.4} vs {:.4} |{line}",
+            case.name,
+            worst_f,
+            worst_c,
+            split.x90_planes,
+            case.split.x90_planes,
+            split.x90_cop,
+            case.split.x90_cop
         );
     }
 }
