@@ -1,0 +1,140 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #d5d9e0;
+  --text: #1c2330;
+  --muted: #5d6676;
+  --accent: #1f6feb;
+  --accent-text: #ffffff;
+  --danger: #c62828;
+  --ok: #2e7d32;
+  --field: #ffffff;
+  --sk-bg: #fafafa;
+  --sk-text: #222222;
+  --sk-muted: #555555;
+  --sk-upper: #e6c97a;
+  --sk-lower: #7fb0e6;
+  --sk-custom: #93d17f;
+  --sk-conductor: #d9824f;
+  --sk-conductor-edge: #8a4a25;
+  --sk-signal: #1f5fbf;
+  --c-conductor: #1f77b4;
+  --c-dielectric: #ff7f0e;
+  --c-third: #2ca02c;
+  --mono: ui-monospace, 'SFMono-Regular', 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #14181f;
+    --panel: #1b212b;
+    --border: #2f3846;
+    --text: #e3e8f0;
+    --muted: #9aa5b8;
+    --accent: #5b9bff;
+    --accent-text: #0b1220;
+    --danger: #ff7b72;
+    --ok: #6fd07a;
+    --field: #141a23;
+    --sk-bg: #1c1c1c;
+    --sk-text: #e8e8e8;
+    --sk-muted: #c0c0c0;
+    --sk-upper: #6e5c28;
+    --sk-lower: #2d5c91;
+    --sk-custom: #3d6e35;
+    --sk-conductor: #a8582c;
+    --sk-conductor-edge: #f0b088;
+    --sk-signal: #3f88e8;
+    --c-conductor: #5aa9e6;
+    --c-dielectric: #ff9a3c;
+  --c-third: #5fd068;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #14181f;
+  --panel: #1b212b;
+  --border: #2f3846;
+  --text: #e3e8f0;
+  --muted: #9aa5b8;
+  --accent: #5b9bff;
+  --accent-text: #0b1220;
+  --danger: #ff7b72;
+  --ok: #6fd07a;
+  --field: #141a23;
+  --sk-bg: #1c1c1c;
+  --sk-text: #e8e8e8;
+  --sk-muted: #c0c0c0;
+  --sk-upper: #6e5c28;
+  --sk-lower: #2d5c91;
+  --sk-custom: #3d6e35;
+  --sk-conductor: #a8582c;
+  --sk-conductor-edge: #f0b088;
+  --sk-signal: #3f88e8;
+  --c-conductor: #5aa9e6;
+  --c-dielectric: #ff9a3c;
+  --c-third: #5fd068;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input[type='text'],
+select {
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+
+input[type='text']:disabled,
+select:disabled {
+  opacity: 0.5;
+}
+
+input.invalid {
+  border-color: var(--danger);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

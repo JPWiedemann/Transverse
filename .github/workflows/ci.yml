@@ -149,9 +149,18 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       # the reference cases of the Python tool through the wasm module
       - name: Reference cases through WebAssembly
         run: node web/tests/reference.mjs
+      - name: Web frontend (install, type check, tests, build)
+        working-directory: web
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npx vite build
 
   # The one required check named "build" (see .github/rulesets). It must not be skipped when a build
   # failed, hence always(); it only runs where the builds run.
