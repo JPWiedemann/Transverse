@@ -68,6 +68,7 @@ transverse selftest                                  # compare with the Python r
 echo '{}' | transverse analyze                       # default stack-up, full report
 echo '{"w": 0.3, "s": 0.1, "f": 2e9}' | transverse analyze --json
 echo '{}' | transverse synth w 35                    # width for 35 Ohm; also: s, w_total
+echo '{"f":2.4e9}' | transverse synth w 35 --phase 90  # ... and the line length for 90 degrees at 2.4 GHz
 transverse --version
 ```
 

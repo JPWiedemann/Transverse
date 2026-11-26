@@ -106,18 +106,20 @@ pub fn analyze(
     Ok(AnalysisHandle { analysis, params: None, e: OnceCell::new() })
 }
 
-/// Find the dimension `target_id` that gives `z0_target` Ohm. The handle carries the new parameters.
+/// Find the dimension `target_id` that gives `z0_target` Ohm. With `phase_deg` the line length is set
+/// for that electrical length as well (`undefined` keeps it). The handle carries the new parameters.
 #[wasm_bindgen]
 pub fn synthesize(
     line_id: &str,
     params_json: &str,
     target_id: &str,
     z0_target: f64,
+    phase_deg: Option<f64>,
     on_progress: Option<js_sys::Function>,
 ) -> Result<AnalysisHandle, JsError> {
     let p = param_set(params_json)?;
     let (new_p, analysis) =
-        model(line_id)?.synthesize(&p, target_id, z0_target, &ctl(on_progress)).map_err(js_err)?;
+        model(line_id)?.synthesize(&p, target_id, z0_target, phase_deg, &ctl(on_progress)).map_err(js_err)?;
     Ok(AnalysisHandle { analysis, params: Some(new_p), e: OnceCell::new() })
 }
 

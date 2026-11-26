@@ -91,9 +91,17 @@ export class Engine {
     return this.run((id) => ({ id, op: 'analyze', line, params: JSON.stringify(params) }), onProgress);
   }
 
-  synthesize(line: string, params: ParamSet, target: string, z0: number, onProgress: (text: string) => void) {
+  /** Find the dimension `target` for `z0` Ohm; with `phaseDeg` the line length is set for that electrical length. */
+  synthesize(
+    line: string,
+    params: ParamSet,
+    target: string,
+    z0: number,
+    phaseDeg: number | undefined,
+    onProgress: (text: string) => void,
+  ) {
     return this.run(
-      (id) => ({ id, op: 'synthesize', line, params: JSON.stringify(params), target, z0 }),
+      (id) => ({ id, op: 'synthesize', line, params: JSON.stringify(params), target, z0, phaseDeg }),
       onProgress,
     );
   }

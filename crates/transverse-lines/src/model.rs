@@ -198,6 +198,10 @@ pub struct ModeResult {
     pub c: f64,
     /// Analysis frequency [Hz].
     pub f_hz: f64,
+    /// Guided wavelength at the analysis frequency [mm].
+    pub wavelength_mm: f64,
+    /// Electrical length of the line for the entered length [deg].
+    pub phase_deg: f64,
     /// Values at the analysis frequency.
     pub at_f: LossPoint,
     pub split: Option<SplitSummary>,
@@ -352,13 +356,16 @@ pub trait LineModel: Send + Sync {
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis>;
 
-    /// Find the dimension `target_id` that gives `z0_target` Ohm; returns the new parameters
-    /// and the analysis at that point.
+    /// Find the dimension `target_id` that gives `z0_target` Ohm; returns the new parameters and the
+    /// analysis at that point. With `phase_deg` the line length is set as well, so that the line has
+    /// that electrical length at the analysis frequency: the length follows from the solution
+    /// (through eps_eff), it is never a search variable of its own.
     fn synthesize(
         &self,
         p: &ParamSet,
         target_id: &str,
         z0_target: f64,
+        phase_deg: Option<f64>,
         ctl: &Ctl,
     ) -> TvResult<(ParamSet, Analysis)>;
 }

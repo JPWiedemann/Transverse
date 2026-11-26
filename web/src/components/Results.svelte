@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { AnalysisResult } from '../lib/types';
+  import { formatG } from '../lib/units';
 
   let { result }: { result: AnalysisResult } = $props();
 
@@ -14,6 +15,8 @@
     <div class="card"><span>Z0</span><strong>{mode.z0.toFixed(3)} Ω</strong></div>
     <div class="card"><span>ε_eff</span><strong>{mode.eps_eff.toFixed(4)}</strong></div>
     <div class="card"><span>Loss at {(mode.f_hz / 1e9).toPrecision(4)} GHz</span><strong>{lossDbPerMm.toFixed(5)} dB/mm</strong></div>
+    <div class="card"><span>Wavelength at {(mode.f_hz / 1e9).toPrecision(4)} GHz</span><strong>{formatG(mode.wavelength_mm)} mm</strong></div>
+    <div class="card"><span>Electrical length</span><strong>{mode.phase_deg.toFixed(2)}°</strong></div>
   </div>
 {/if}
 <pre class="report">{result.summary.report}</pre>

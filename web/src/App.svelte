@@ -32,6 +32,8 @@
   let wavelength: F.Wavelength = () => undefined;
   let synthTarget = $state('');
   let synthZ0 = $state('50');
+  // electrical length to reach in degrees; empty keeps the line length
+  let synthPhase = $state('');
   let theme = $state<Theme>(settings.theme);
   let units = $state<UnitSystem>(settings.units);
   let tab = $state<Tab>(settings.tab);
@@ -109,11 +111,12 @@
     form = f;
     synthTarget = l.synth_targets.some((t) => t.id === saved?.synthTarget) ? saved!.synthTarget! : (l.synth_targets[0]?.id ?? '');
     synthZ0 = saved?.synthZ0 ?? '50';
+    synthPhase = saved?.synthPhase ?? '';
   }
 
   function persist() {
     if (!line) return;
-    settings.lines[line.id] = { form: F.toSaved(form), synthTarget, synthZ0 };
+    settings.lines[line.id] = { form: F.toSaved(form), synthTarget, synthZ0, synthPhase };
     saveSettings(settings);
   }
 
@@ -178,8 +181,17 @@
       setStatus(`Target impedance: '${synthZ0.trim()}' is not a positive number`, 'error');
       return;
     }
+    // the phase is optional: the line length follows from it (and eps_eff) after the Z0 synthesis
+    let phase: number | undefined;
+    if (synthPhase.trim() !== '') {
+      phase = parseNumber(synthPhase);
+      if (phase === undefined || phase <= 0) {
+        setStatus(`Target phase: '${synthPhase.trim()}' is not a positive number of degrees (leave it empty to keep the length)`, 'error');
+        return;
+      }
+    }
     persist();
-    return run((p) => engine.synthesize(line!.id, p, synthTarget, z0, (t) => setStatus(t)), 'Synthesis');
+    return run((p) => engine.synthesize(line!.id, p, synthTarget, z0, phase, (t) => setStatus(t)), 'Synthesis');
   }
 </script>
 
@@ -225,7 +237,10 @@
       </select>
     </label>
     <label>for Z0 =
-      <input type="text" inputmode="decimal" class="z0" bind:value={synthZ0} disabled={busy} onchange={persist} /> Ω
+      <input type="text" inputmode="decimal" class="value" aria-label="Target Z0" bind:value={synthZ0} disabled={busy} onchange={persist} /> Ω
+    </label>
+    <label title="electrical length at the analysis frequency; the line length is set from it. Empty keeps the line length.">phase =
+      <input type="text" inputmode="decimal" class="value" aria-label="Target phase" placeholder="keep length" bind:value={synthPhase} disabled={busy} onchange={persist} /> °
     </label>
     <button disabled={busy} onclick={synthesize}>Synthesize</button>
     <span class="sep"></span>
@@ -355,7 +370,7 @@
     background: var(--border);
     margin: 0 4px;
   }
-  .z0 {
+  .value {
     width: 5rem;
   }
   .app {

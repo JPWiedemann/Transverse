@@ -13,6 +13,8 @@ export interface LineSettings {
   form?: SavedForm;
   synthTarget?: string;
   synthZ0?: string;
+  /** electrical length to reach in degrees, as typed; empty keeps the line length */
+  synthPhase?: string;
 }
 
 export interface Settings {

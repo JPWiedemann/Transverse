@@ -113,7 +113,7 @@ fn synthesis_through_the_trait_keeps_other_parameters() {
     let mut set = m.defaults();
     set.set("plane1", ParamValue::Bool(false));
     set.set("fence1", ParamValue::Bool(false));
-    let (out, a) = m.synthesize(&set, "w", 50.0, &Ctl::new()).unwrap();
+    let (out, a) = m.synthesize(&set, "w", 50.0, None, &Ctl::new()).unwrap();
     assert!(rel(a.modes[0].z0, 50.0) < 5e-4);
     assert!(a.report.starts_with("=== Synthesis: Z0 = 50 Ohm, vary w (s fixed) ==="));
     // only w changed; in particular the automatically found margin is not written back
@@ -121,7 +121,62 @@ fn synthesis_through_the_trait_keeps_other_parameters() {
     expect.set("w", out.get("w").unwrap());
     assert_eq!(out, expect);
     assert!((out.num("w").unwrap() - 0.2467).abs() < 1e-3);
-    assert!(m.synthesize(&set, "nonsense", 50.0, &Ctl::new()).is_err());
+    assert!(m.synthesize(&set, "nonsense", 50.0, None, &Ctl::new()).is_err());
+}
+
+#[test]
+fn analysis_reports_wavelength_and_phase_of_the_entered_length() {
+    let m = CpwgInner;
+    let mut set = m.defaults();
+    set.set("length", ParamValue::Num(50.0));
+    let a = m.analyze(&set, &Ctl::new()).unwrap();
+    let mode = &a.modes[0];
+    let lambda = transverse_core::C_LIGHT / (1e9 * mode.eps_eff.sqrt()) * 1e3;
+    assert!(rel(mode.wavelength_mm, lambda) < 1e-12);
+    assert!(rel(mode.phase_deg, 360.0 * 50.0 / lambda) < 1e-12);
+    // the report shows both, and the free-space wavelength for reference
+    assert!(
+        a.report.contains(&format!("Wavelength      = {lambda:8.3} mm  (free space 299.792 mm)")),
+        "{}",
+        a.report
+    );
+    assert!(a.report.contains(&format!("phase {:.2} deg", mode.phase_deg)), "{}", a.report);
+}
+
+#[test]
+fn synthesis_with_a_phase_sets_the_length_from_the_solution() {
+    let m = CpwgInner;
+    let mut set = m.defaults();
+    set.set("f", ParamValue::Num(2.4e9));
+    let (out, a) = m.synthesize(&set, "w", 35.0, Some(90.0), &Ctl::new()).unwrap();
+    let mode = &a.modes[0];
+    assert!(rel(mode.z0, 35.0) < 5e-4);
+    // a quarter wavelength of the guided wave at 2.4 GHz, with the eps_eff of the synthesised geometry
+    let lambda = transverse_core::C_LIGHT / (2.4e9 * mode.eps_eff.sqrt()) * 1e3;
+    assert!(rel(out.num("length").unwrap(), lambda / 4.0) < 1e-12);
+    assert!(rel(mode.phase_deg, 90.0) < 1e-12);
+    // only w and the length changed
+    let mut expect = set.clone();
+    expect.set("w", out.get("w").unwrap());
+    expect.set("length", out.get("length").unwrap());
+    assert_eq!(out, expect);
+    assert!(
+        a.report.starts_with(
+            "=== Synthesis: Z0 = 35 Ohm, vary w (s fixed), phase = 90 deg at 2.4 GHz -> length ==="
+        ),
+        "{}",
+        a.report
+    );
+    // without a phase the length stays as entered
+    let (kept, _) = m.synthesize(&set, "w", 35.0, None, &Ctl::new()).unwrap();
+    assert_eq!(kept.num("length").unwrap(), 100.0);
+    // more phase needs more length, linearly
+    let (out2, _) = m.synthesize(&set, "w", 35.0, Some(180.0), &Ctl::new()).unwrap();
+    assert!(rel(out2.num("length").unwrap(), 2.0 * out.num("length").unwrap()) < 1e-12);
+    // nonsense phases are rejected
+    for bad in [0.0, -10.0, f64::NAN] {
+        assert!(m.synthesize(&set, "w", 35.0, Some(bad), &Ctl::new()).is_err(), "{bad}");
+    }
 }
 
 // ---- field data ------------------------------------------------------------------------------

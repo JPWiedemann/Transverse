@@ -87,6 +87,10 @@ export interface ModeResult {
   l: number;
   c: number;
   f_hz: number;
+  /** guided wavelength at f [mm] */
+  wavelength_mm: number;
+  /** electrical length of the line for the entered length [deg] */
+  phase_deg: number;
   at_f: LossPoint;
   split: SplitSummary | null;
 }

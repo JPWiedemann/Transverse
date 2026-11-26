@@ -13,7 +13,7 @@ export type QueryName =
 
 export type Request =
   | { id: number; op: 'analyze'; line: string; params: string }
-  | { id: number; op: 'synthesize'; line: string; params: string; target: string; z0: number }
+  | { id: number; op: 'synthesize'; line: string; params: string; target: string; z0: number; phaseDeg: number | undefined }
   // a call on the last result; typed arrays in `value` come back transferred
   | { id: number; op: 'query'; name: QueryName; args: unknown[] };
 

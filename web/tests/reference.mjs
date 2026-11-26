@@ -46,6 +46,7 @@ function toSet(p) {
 
 // the contract itself
 const types = JSON.parse(line_types());
+same('synthesis targets', types[0].synth_targets.map((t) => t.id).join(), 'w,s,w_total');
 same('line types', types.map((t) => t.id).join(), LINE);
 const specs = JSON.parse(param_specs(LINE));
 same('colour map size', colormap('Inferno').length, 256 * 3);
@@ -87,11 +88,25 @@ for (const c of cases.cases) {
 }
 
 for (const c of cases.synthesis) {
-  const a = synthesize(LINE, JSON.stringify(toSet(c.params)), c.var, c.target, undefined);
+  const a = synthesize(LINE, JSON.stringify(toSet(c.params)), c.var, c.target, undefined, undefined);
   const p = JSON.parse(a.params());
   close(`${c.name} w`, p.w, c.result.w);
   close(`${c.name} s`, p.s, c.result.s);
   close(`${c.name} z0`, JSON.parse(a.summary()).modes[0].z0, c.z0);
+  a.free();
+}
+
+// a synthesis with a phase also sets the line length: a quarter wavelength of the guided wave for
+// 90 degrees, with the eps_eff of the synthesised geometry (the 35 ohm synthesis case)
+{
+  const c = cases.synthesis[0];
+  const a = synthesize(LINE, JSON.stringify(toSet(c.params)), c.var, c.target, 90, undefined);
+  const m = JSON.parse(a.summary()).modes[0];
+  const lambdaMm = (299_792_458 / (c.params.f * Math.sqrt(m.eps_eff))) * 1e3;
+  close('phase synthesis: length', JSON.parse(a.params()).length, lambdaMm / 4);
+  close('phase synthesis: wavelength', m.wavelength_mm, lambdaMm);
+  close('phase synthesis: phase', m.phase_deg, 90);
+  close('phase synthesis: z0 still reached', m.z0, c.z0);
   a.free();
 }
 

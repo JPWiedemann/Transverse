@@ -3,7 +3,8 @@
 use std::fmt::Write;
 
 use super::{CpwgAnalysis, CpwgParams, GroundCat, analytic};
-use transverse_core::{C_LIGHT, NP2DB};
+use transverse_core::units::format_g;
+use transverse_core::{C_LIGHT, NP2DB, guided_wavelength_mm, phase_deg};
 
 pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
     let sol = &a.sol;
@@ -41,6 +42,12 @@ pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
     let _ = writeln!(w, "L'              = {:8.4} nH/mm", sol.l * 1e6);
     let _ = writeln!(w, "C'              = {:8.4} pF/mm\n", sol.c * 1e9);
     let _ = writeln!(w, "@ f = {} GHz", p.f / 1e9);
+    let lambda = guided_wavelength_mm(p.f, sol.eeff);
+    let _ = writeln!(
+        w,
+        "Wavelength      = {lambda:8.3} mm  (free space {:.3} mm)",
+        guided_wavelength_mm(p.f, 1.0)
+    );
     let mut warn = String::new();
     if p.t > 0.0 && p.t * 1e-3 < 3.0 * lo.delta {
         warn.push_str("   (!) t < 3*delta: Rs model inaccurate");
@@ -57,10 +64,12 @@ pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
     let _ = writeln!(w, "Total loss      = {tot:8.5} dB/mm  ({:.4} dB/in)", tot * 25.4);
     let _ = writeln!(
         w,
-        "Length {} mm : {:.3} dB, delay {:.1} ps\n",
-        p.length,
+        "Length {} mm : {:.3} dB, delay {:.1} ps, phase {:.2} deg ({:.4} wavelengths)\n",
+        format_g(p.length),
         tot * p.length,
-        1e12 / vp * p.length * 1e-3
+        1e12 / vp * p.length * 1e-3,
+        phase_deg(p.length, lambda),
+        p.length / lambda
     );
 
     let (fd, cur) = (&a.split.field, &a.split.current);
