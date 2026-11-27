@@ -417,3 +417,28 @@ fn synthesis_with_the_finite_elements_finds_the_reference_width() {
     // the solver choice survives in the returned parameters
     assert_eq!(CpwgParams::from_set(&set).unwrap().solver, transverse_lines::cpwg_inner::Solver::Fem);
 }
+
+/// The drawing must not cover any of the solved region: conductors are drawn where the solution has none.
+#[test]
+fn via_fences_are_drawn_outside_the_wall_they_stand_for() {
+    let p = CpwgParams::default();
+    let wall = p.w / 2.0 + p.s + p.g;
+    for set in [CpwgInner.defaults(), fem_set()] {
+        let f = CpwgInner.analyze(&set, &Ctl::new()).unwrap().field.unwrap();
+        // the fences are the narrow upright rectangles
+        let fences: Vec<_> = f.conductors.iter().filter(|c| c.y1 - c.y0 > 4.0 * (c.x1 - c.x0)).collect();
+        assert_eq!(fences.len(), 4);
+        for c in &fences {
+            let inner = c.x0.abs().min(c.x1.abs());
+            assert!((inner - wall).abs() < 1e-12 * wall && c.x0 < c.x1, "{c:?}, wall at {wall}");
+        }
+        // the closed structure ends at the walls; planes and coplanar ground close the corners, and the full
+        // view shows the fences completely
+        assert!((f.x[f.x.len() - 1] - wall).abs() < 1e-12 * wall);
+        let face = fences.iter().map(|c| c.x1).fold(0.0, f64::max);
+        assert!(face > wall && f.view_full[1] >= face && f.view_full[0] <= -face);
+        let widest = f.conductors.iter().map(|c| c.x1).fold(0.0, f64::max);
+        assert_eq!(widest, face);
+        assert_eq!(f.conductors.iter().filter(|c| c.x1 == face && c.x1 - c.x0 > c.y1 - c.y0).count(), 3);
+    }
+}
