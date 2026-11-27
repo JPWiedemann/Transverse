@@ -135,6 +135,8 @@ struct Summary<'a> {
 struct FieldInfo<'a> {
     nx: usize,
     ny: usize,
+    /// Solution on a triangle mesh (`nx` and `ny` are then 2: only the extent).
+    mesh: bool,
     z0: f64,
     conductors: &'a [transverse_lines::model::DrawRect],
     dashed_y: &'a [f64],
@@ -228,6 +230,7 @@ impl AnalysisHandle {
         json(&self.analysis.field.as_ref().map(|f| FieldInfo {
             nx: f.nx(),
             ny: f.ny(),
+            mesh: f.mesh.is_some(),
             z0: f.z0,
             conductors: &f.conductors,
             dashed_y: &f.dashed_y,
@@ -312,6 +315,13 @@ impl AnalysisHandle {
     pub fn field_lines(&self, view: &[f64], density_x: f64, density_y: f64) -> Result<String, JsError> {
         let view: [f64; 4] = view.try_into().map_err(|_| js_err("view needs 4 numbers"))?;
         json(&self.field()?.field_lines(view, (density_x, density_y)))
+    }
+
+    /// Triangle edges that touch `view = [x0, x1, y0, y1]` as a flat array `x0, y0, x1, y1, ...` (mm): the mesh of
+    /// a finite-element solution. Empty for a grid solution, whose lines are `field_x` and `field_y`.
+    pub fn field_mesh_edges(&self, view: &[f64]) -> Result<Vec<f64>, JsError> {
+        let view: [f64; 4] = view.try_into().map_err(|_| js_err("view needs 4 numbers"))?;
+        Ok(self.field()?.mesh_edges(view).unwrap_or_default().into_iter().flatten().collect())
     }
 
     /// Equipotential lines for the given potentials [V] as JSON: `[[level, [[[x, y], [x, y]], ...]], ...]`.

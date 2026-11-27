@@ -141,3 +141,24 @@ test('grayed fields follow their switch', async ({ page }) => {
   await page.getByLabel('Mode', { exact: true }).selectOption({ label: 'Manual' });
   await expect(page.locator('#p-dmin')).toBeEnabled();
 });
+
+test('the finite-element solver gives the same Z0 and draws the triangle mesh', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.getByLabel('Solver', { exact: true }).selectOption({ label: 'Finite elements' });
+  await analyze(page);
+  await expect(status(page)).toContainText(/Z0 = (34\.9|35\.0)/);
+  await expect(page.locator('.report')).toContainText('finite elements');
+  await tab(page, 'Field').click();
+  await expect(page.locator('.bar canvas')).toBeVisible({ timeout: 20_000 });
+  await page.getByLabel('Mesh overlay').check();
+  await expect(page.locator('path.tri')).toHaveAttribute('d', /^M/, { timeout: 20_000 });
+  await expect(page.locator('p.title')).toContainText('finite elements');
+  // the image, the readout and the grid-less views still work on the mesh
+  const field = page.getByRole('img', { name: 'Field in the cross-section' });
+  const box = (await field.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('.readout')).toContainText('V =');
+  await page.getByLabel('Field view').selectOption('mesh');
+  await expect(page.locator('path.tri')).toHaveAttribute('d', /^M/);
+  expect(errors).toEqual([]);
+});

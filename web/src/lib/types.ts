@@ -150,6 +150,8 @@ export interface DrawRect {
 export interface FieldInfo {
   nx: number;
   ny: number;
+  /** solution on a triangle mesh: `field_mesh_edges` gives the mesh, nx and ny are only the extent */
+  mesh: boolean;
   z0: number;
   conductors: DrawRect[];
   dashed_y: number[];

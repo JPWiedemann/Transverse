@@ -3,6 +3,7 @@
   import {
     MARGIN,
     boundsOf,
+    contains,
     expand,
     fitView,
     needsRender,
@@ -186,6 +187,45 @@
       });
   });
 
+  // ---- triangle mesh of a finite-element solution: the edges around the visible region, asked for again when the
+  // view leaves the region they cover
+  const MESH_EDGE_LIMIT = 60000;
+  let meshEdges = $state<{ covered: Bounds; segs: Float64Array; generation: number } | undefined>();
+  let meshBusy = false;
+  $effect(() => {
+    const i = info;
+    const visible = bounds;
+    const g = generation;
+    if (!i?.mesh || !meshOn || !canSample) return;
+    const have = meshEdges;
+    if (meshBusy || (have && have.generation === g && contains(have.covered, visible))) return;
+    meshBusy = true;
+    const covered = expand(visible, MARGIN);
+    engine
+      .query<Float64Array>('field_mesh_edges', Float64Array.from(covered))
+      .then((segs) => {
+        meshEdges = { covered, segs, generation: g };
+      })
+      .catch((e: unknown) => {
+        error = e instanceof Error ? e.message : String(e);
+        meshEdges = { covered, segs: new Float64Array(), generation: g };
+      })
+      .finally(() => {
+        meshBusy = false;
+      });
+  });
+  const meshTooDense = $derived(!!meshEdges && meshEdges.segs.length / 4 > MESH_EDGE_LIMIT);
+  const meshPath = $derived.by(() => {
+    const m = meshEdges;
+    if (!info?.mesh || !meshOn || !m || m.generation !== generation || meshTooDense) return '';
+    const parts: string[] = [];
+    const a = m.segs;
+    for (let k = 0; k < a.length; k += 4) {
+      parts.push(`M${px(a[k]!).toFixed(1)} ${py(a[k + 1]!).toFixed(1)}L${px(a[k + 2]!).toFixed(1)} ${py(a[k + 3]!).toFixed(1)}`);
+    }
+    return parts.join('');
+  });
+
   // ---- paint the image
   let canvasEl = $state<HTMLCanvasElement | undefined>();
   $effect(() => {
@@ -226,8 +266,8 @@
     return `M${tx - ux * 6 + nx * 2.5} ${ty - uy * 6 + ny * 2.5}L${tx} ${ty}L${tx - ux * 6 - nx * 2.5} ${ty - uy * 6 - ny * 2.5}`;
   }
 
-  const meshX = $derived(meshOn ? Array.from(gx).filter((x) => x >= bounds[0] && x <= bounds[1]) : []);
-  const meshY = $derived(meshOn ? Array.from(gy).filter((y) => y >= bounds[2] && y <= bounds[3]) : []);
+  const meshX = $derived(meshOn && !info?.mesh ? Array.from(gx).filter((x) => x >= bounds[0] && x <= bounds[1]) : []);
+  const meshY = $derived(meshOn && !info?.mesh ? Array.from(gy).filter((y) => y >= bounds[2] && y <= bounds[3]) : []);
   const gridBox = $derived<Bounds>(gx.length > 1 && gy.length > 1
     ? [Math.max(bounds[0], gx[0]!), Math.min(bounds[1], gx[gx.length - 1]!), Math.max(bounds[2], gy[0]!), Math.min(bounds[3], gy[gy.length - 1]!)]
     : bounds);
@@ -305,8 +345,12 @@
   });
 
   const title = $derived(`${LABELS[mode]}  -  1 V on signal, Z0 = ${info ? info.z0.toFixed(2) : '…'} Ω`);
+  /** the shortest edge of a triangle mesh is far below the size of the view: its own unit */
+  const minUnit = $derived(autoLengthUnit(units, accuracy?.dmin_actual ?? 1));
   const meshInfo = $derived(
-    meshOn && accuracy
+    meshOn && accuracy && info?.mesh
+      ? `mesh ${accuracy.nodes} nodes (finite elements), min. edge ${formatSig(accuracy.dmin_actual / minUnit[1], 3)} ${minUnit[0]}${meshTooDense ? ' - zoom in to see the triangles' : ''}`
+      : meshOn && accuracy
       ? `mesh ${accuracy.nx} x ${accuracy.ny} = ${accuracy.nodes} nodes (finest level), min. cell ${formatSig(accuracy.dmin_actual / uf, 3)} ${lengthUnit[0]}`
       : ' ',
   );
@@ -398,6 +442,9 @@
                 {#each meshY as y}
                   <line x1={px(gridBox[0])} x2={px(gridBox[1])} y1={py(y)} y2={py(y)} />
                 {/each}
+                {#if meshPath}
+                  <path d={meshPath} class="tri" />
+                {/if}
               </g>
             {/if}
             {#if hover}
@@ -523,7 +570,15 @@
     stroke: rgb(255 255 255 / 0.5);
     stroke-width: 0.4;
   }
+  .mesh path.tri {
+    fill: none;
+    stroke: rgb(255 255 255 / 0.5);
+    stroke-width: 0.4;
+  }
   .meshdark line {
+    stroke: rgb(0 0 0 / 0.6);
+  }
+  .meshdark path.tri {
     stroke: rgb(0 0 0 / 0.6);
   }
   .cursor {
