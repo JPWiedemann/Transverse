@@ -200,9 +200,9 @@ fn final_stackup_reference_values() {
     assert!((a.split.current.get(GroundCat::Plane1) - 39.2).abs() < 0.1);
     assert!((a.split.current.get(GroundCat::Plane2) - 31.5).abs() < 0.1);
     assert!(rel(a.split.current.coplanar, 29.2) < 0.03);
-    // 1 GHz, tand = 0.02, sigma = 58 MS/m, smooth: about 0.0025 / 0.0035 dB/mm
+    // 1 GHz, tand = 0.02, sigma = 58 MS/m, smooth: about 0.0031 / 0.0035 dB/mm
     let lp = a.loss.at(1e9);
-    assert!((lp.alpha_c * transverse_core::NP2DB / 1000.0 - 0.0025).abs() < 0.0004);
+    assert!((lp.alpha_c * transverse_core::NP2DB / 1000.0 - 0.0031).abs() < 0.0001);
     assert!((lp.alpha_d * transverse_core::NP2DB / 1000.0 - 0.0035).abs() < 0.0004);
 }
 
