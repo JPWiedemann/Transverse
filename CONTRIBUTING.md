@@ -2,6 +2,8 @@
 
 This page explains how pull requests and releases work in this repository.
 
+Transverse is licensed under the [GPL-3.0](LICENSE). By submitting a contribution you agree to the [Contributor License Agreement](CLA.md).
+
 ## Opening a pull request
 
 1. Create a branch (or a fork) from **`dev`**.
@@ -51,8 +53,11 @@ Before pushing, run what every pull request has to pass:
 cargo fmt --all                                        # formatting (CI: cargo fmt --all --check)
 cargo clippy --release --all-targets -- -D warnings    # lints
 cargo test --release                                   # includes the parity tests against the Python reference
-cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines   # web portability gate
-node --test scripts/                                   # release script tests (only if you touched scripts/)
+cargo check --target wasm32-unknown-unknown -p transverse-core -p transverse-lines   # web portability (CI builds and tests the whole module)
+scripts/build-web.sh && node web/tests/reference.mjs    # wasm module and the reference cases through Node (needs wasm-bindgen-cli, see the script)
+(cd web && npm ci && npm run check && npm test)          # web frontend: type check and tests; npm run dev starts it
+(cd web && npx playwright install chromium && npm run build && npm run e2e)   # browser tests of the built site (first time: install the browser)
+node --test scripts/release.test.mjs                                   # release script tests (only if you touched scripts/)
 cd python && uv run --group dev ruff check . && uv run --group dev ruff format --check . && uv run --group dev pytest   # only for Python changes
 ```
 

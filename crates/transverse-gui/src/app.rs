@@ -48,6 +48,8 @@ pub struct App {
     form: FormState,
     synth_target: usize,
     z_target: String,
+    /// Electrical length to reach in degrees; empty keeps the line length.
+    phase_target: String,
     settings: Settings,
     settings_path: PathBuf,
     worker: Option<Worker>,
@@ -65,6 +67,13 @@ pub struct App {
 }
 
 /// Fixed-size entry box (red text while the content is not a number).
+/// Like [`entry`], but an empty text is fine.
+fn entry_optional(ui: &mut egui::Ui, text: &mut String) {
+    let bad = !text.trim().is_empty() && parse_number(text).is_none();
+    let edit = egui::TextEdit::singleline(text).text_color_opt(bad.then_some(Color32::RED));
+    ui.add_sized([ENTRY_WIDTH, ui.spacing().interact_size.y], edit);
+}
+
 fn entry(ui: &mut egui::Ui, text: &mut String, enabled: bool) {
     let bad = parse_number(text).is_none();
     let edit = egui::TextEdit::singleline(text).text_color_opt(bad.then_some(Color32::RED));
@@ -87,6 +96,7 @@ impl App {
         loss_view.load(&settings.ui);
         let mut synth_target = 0;
         let mut z_target = "35".to_string();
+        let mut phase_target = String::new();
         if let Some(ls) = settings.lines.get(model.id()) {
             form.load_saved(&*model, &ls.fields);
             if let Some(id) = ls.extra.get("synth_target").and_then(|v| v.as_str()) {
@@ -95,12 +105,16 @@ impl App {
             if let Some(z) = ls.extra.get("z_target").and_then(|v| v.as_str()) {
                 z_target = z.to_string();
             }
+            if let Some(p) = ls.extra.get("phase_target").and_then(|v| v.as_str()) {
+                phase_target = p.to_string();
+            }
         }
         Self {
             model,
             form,
             synth_target,
             z_target,
+            phase_target,
             settings,
             settings_path,
             worker: None,
@@ -168,6 +182,7 @@ impl App {
         let target = self.model.synth_targets()[self.synth_target].id;
         ls.extra.insert("synth_target".into(), target.into());
         ls.extra.insert("z_target".into(), self.z_target.clone().into());
+        ls.extra.insert("phase_target".into(), self.phase_target.clone().into());
         self.field_view.save(&mut self.settings.ui);
         self.prefs.save(&mut self.settings.ui);
         self.loss_view.save(&mut self.settings.ui);
@@ -191,8 +206,19 @@ impl App {
                 self.error = Some("Target Z0: enter a positive number".into());
                 return;
             };
+            // the phase is optional: the line length follows from it (and eps_eff) after the Z0 synthesis
+            let phase_deg = if self.phase_target.trim().is_empty() {
+                None
+            } else {
+                let Some(ph) = parse_number(&self.phase_target).filter(|v| *v > 0.0) else {
+                    self.error =
+                        Some("Target phase: enter a positive number of degrees or leave it empty".into());
+                    return;
+                };
+                Some(ph)
+            };
             let target_id = self.model.synth_targets()[self.synth_target].id.to_string();
-            Job::Synthesize { params, target_id, z0 }
+            Job::Synthesize { params, target_id, z0, phase_deg }
         } else {
             Job::Analyze { params }
         };
@@ -343,6 +369,11 @@ impl App {
                     ui.label("Target Z0");
                     entry(ui, &mut self.z_target, true);
                     ui.label("Ohm");
+                    ui.end_row();
+                    // optional: the line length is set from the phase, it does not change the search
+                    ui.label("Phase");
+                    entry_optional(ui, &mut self.phase_target);
+                    ui.label("deg (empty: keep length)");
                     ui.end_row();
                     ui.label("Vary");
                     egui::ComboBox::from_id_salt("synth_target")

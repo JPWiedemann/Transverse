@@ -5,12 +5,13 @@ members = [
     "crates/transverse-lines",
     "crates/transverse-gui",
     "crates/transverse-cli",
+    "crates/transverse-wasm",
 ]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-license = "UNLICENSED"
+license = "GPL-3.0-only"
 publish = false
 
 [workspace.dependencies]

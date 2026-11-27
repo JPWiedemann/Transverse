@@ -18,11 +18,12 @@ Both branches are protected by rulesets: no direct pushes, no force pushes, no d
 | `pr-title`      | `pr-title.yml`      | `dev`         |
 | `source-branch` | `source-branch.yml` | `main`        |
 
-- `check` runs on every push and pull request: `cargo fmt --check`, clippy with `-D warnings`, the tests (including the parity tests against the Python reference), the WebAssembly portability gate, the tests of the release script and the checks of the Python reference implementation (ruff, pytest).
-- `build` runs for `main`, `dev` and pull requests targeting them: release builds of the desktop app for Linux (glibc 2.28) and Windows with zig, and the core for WebAssembly. The installable packages are only built by the release workflow.
+- `check` is a small job that waits for three parallel jobs: `rust` (`cargo fmt --check`, clippy with `-D warnings`, the tests including the parity tests against the Python reference), `licenses` (the dependency license check with `cargo deny`, allowlist in `deny.toml`, and the generation of the third-party notices) and `scripts` (the tests of the release script and the checks of the Python reference implementation: ruff, pytest). It runs on every pull request and on pushes to `dev` and `main` (feature branches are only built through their pull request, so open it early, as a draft). Require only `check`, not the individual jobs.
+- `build` runs for `main`, `dev` and pull requests targeting them. It is a small job that waits for three build jobs that run in parallel with `check` (not after it): `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the WebAssembly module with the reference cases run through it in Node, then the web frontend: type check, tests, build, and the browser tests with Playwright in headless Chromium). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
 - `pr-title` validates that the PR title is a conventional commit.
 - `source-branch` fails for pull requests into `main` that don't come from `dev` of this repository.
 - Require the `(pull_request)` runs, not the `(push)` runs, where a check exists for both.
+- The Rust build cache is only written by runs on `dev` (`save-if` in `ci.yml`); pull requests and `main` read it. This keeps the repository's cache quota free for the cache that is actually reused.
 - Do not enable "Require branches to be up to date" for `main`. After a release, `dev` is one merge commit behind `main`, and that setting would force a back-merge each time.
 
 ## Reviewing and merging a pull request
@@ -48,9 +49,10 @@ The release contains:
 | ----------------------------------------- | ------------------------------------------------------ |
 | `transverse-X.Y.Z-linux-x86_64.tar.gz`    | Linux (glibc 2.28 or newer): `transverse-gui`, CLI     |
 | `transverse-X.Y.Z-windows-x86_64.zip`     | Windows: `transverse-gui.exe`, `transverse.exe` (CLI)  |
+| `transverse-web-X.Y.Z.zip`                | Web version: static site, serve it with any web server |
 | `SHA256SUMS.txt`                          | checksums of the files above                           |
 
-The binaries are **not code signed**: Windows shows a SmartScreen warning ("More info", then "Run anyway"). There is no macOS or arm64 build yet. The web version is prepared (`web` job in the release workflow, `deploy-web` in phase W of the plan) but publishes nothing yet.
+The binaries are **not code signed**: Windows shows a SmartScreen warning ("More info", then "Run anyway"). There is no macOS or arm64 build yet. The web version is built by the `web` job of the release workflow; it is not deployed to a host yet (phase W of the plan).
 
 **Dry run:** to test the builds without releasing, run the `Release` workflow manually (Actions tab → Release → Run workflow, optionally with a dummy version). It builds everything with the dummy version and keeps the files as workflow artifacts for 3 days. It creates no tag and no release. Do this after changing the build scripts or the release workflow.
 
@@ -92,17 +94,21 @@ Rulesets (like branch protection) are only enforced for private repositories on 
 - **GitHub App for the release PR:** the `Release preview` workflow can open and update the release PR with a short-lived token of a GitHub App, so the PR is authored by the app (`<app name>[bot]`), not by a person. PRs opened with the default `GITHUB_TOKEN` don't run the pull request workflows, so the required checks would never report on them (a closed and reopened PR does). The app needs the repository **variable** `RELEASE_APP_CLIENT_ID` (the app's client ID) and the repository **secret** `RELEASE_APP_PRIVATE_KEY` (the full content of a private key generated for the app), with the repository permissions _Pull requests: read and write_ and _Contents: read_ (nothing else), installed on this repository only. Without the variable the workflow falls back to `GITHUB_TOKEN`. The token is created per run and expires after an hour, so there is nothing to renew.
 - **Dependabot** (`.github/dependabot.yml`) opens grouped monthly dependency updates against `dev` for the Rust crates, the Python environment and the GitHub actions. `faer` (pinned, sparse API changes), and `eframe` / `egui_plot` (0.x releases change the API and have to move together) are updated manually.
 
+## License
+
+Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to the CLA (`CLA.md`), which lets the project owner relicense contributions later. The release archives contain `LICENSE` and `THIRD_PARTY_LICENSES.txt`, the notices and license texts of all bundled dependencies, which the release build generates with `cargo about` (`about.toml`, `about.hbs`; keep the accepted licenses in sync with `deny.toml`; the file is not committed, so it never goes stale). `cargo deny check licenses` fails when a dependency (also after a dependabot update) brings a license that is not on the allowlist in `deny.toml`: check that it is compatible with the GPL-3.0 before adding it there. Note that crates offering a choice (e.g. `Apache-2.0 OR GPL-2.0-only`) are fine as long as an allowed alternative exists; GPL-2.0-only code on its own would not be compatible.
+
 ## Workflows
 
 | File                  | Trigger                          | Purpose                                                          |
 | --------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `ci.yml`              | every push, pull requests        | format, lints, tests, wasm gate, Python checks, builds           |
+| `ci.yml`              | pull requests, push to dev/main  | format, lints, tests, licenses, Python, builds (incl. wasm) |
 | `pr-title.yml`        | pull requests                    | conventional commit check for the PR title                       |
 | `source-branch.yml`   | pull requests into `main`        | only `dev` may be merged into `main`                             |
 | `release-preview.yml` | push to `dev`, release PR events | opens/updates the draft release PR                               |
 | `release.yml`         | push to `main`                   | version, tag, GitHub release, Linux and Windows builds           |
 
-When changing the release logic, `scripts/release.mjs` can be run locally: `node scripts/release.mjs --ref origin/dev --preview` prints the next version and the notes without changing anything, and `node --test scripts/` runs its tests.
+When changing the release logic, `scripts/release.mjs` can be run locally: `node scripts/release.mjs --ref origin/dev --preview` prints the next version and the notes without changing anything, and `node --test scripts/release.test.mjs` runs its tests.
 
 ## Building a release locally
 

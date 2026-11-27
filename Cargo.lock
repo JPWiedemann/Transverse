@@ -2773,6 +2773,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "transverse-wasm"
+version = "0.0.0"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde_json",
+ "transverse-core",
+ "transverse-lines",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "tree_magic_mini"
 version = "3.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

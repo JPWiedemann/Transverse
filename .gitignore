@@ -19,3 +19,10 @@ target/
 
 # Release builds (scripts/build-release.sh)
 /dist/
+
+# Web version (scripts/build-web.sh)
+/web/pkg/
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/

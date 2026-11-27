@@ -106,26 +106,43 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Build the core for WebAssembly
-        run: cargo build --release --target wasm32-unknown-unknown -p transverse-core -p transverse-lines
-      # Phase W: build the wasm-bindgen layer and the Svelte frontend, run the reference cases
-      # through Node, and upload the website as the "web" artifact (the release job picks up
-      # *.zip files), for example:
-      #   - run: scripts/set-version.sh "$VERSION"
-      #   - run: cargo install wasm-bindgen-cli --locked --version <pinned>
-      #   - run: cargo build --release --target wasm32-unknown-unknown -p transverse-wasm
-      #   - run: wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/transverse_wasm.wasm
-      #   - run: npm ci && npm run build   (in web/)
-      #   - run: node web/tests/reference.mjs
-      #   - run: (cd web/dist && zip -r "../../transverse-web-v$VERSION.zip" .)
-      #   - uses: actions/upload-artifact@v7
-      #     with: { name: web, path: transverse-web-v*.zip, if-no-files-found: error }
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.130 # the version of the wasm-bindgen crate in Cargo.lock
+      - name: Build the WebAssembly module
+        run: scripts/build-web.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Reference cases through WebAssembly
+        run: node web/tests/reference.mjs
+      - name: Build the site
+        working-directory: web
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npx vite build
+      # the static site as a zip (the release job picks up *.zip files); deploying it to a host
+      # is a separate step that is not set up yet
+      - name: Package the site
+        run: (cd web/dist && zip -r "../../transverse-web-$VERSION.zip" .)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web
+          path: transverse-web-*.zip
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && 3 || 1 }}
 
   desktop:
     needs: prepare
@@ -143,7 +160,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild@0.24.1
+          tool: cargo-zigbuild@0.24.1,cargo-about@0.9.3
       - name: Install zig
         run: |
           python3 -m venv .zigenv

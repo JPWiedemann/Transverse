@@ -3,8 +3,9 @@
 #
 #   scripts/build-release.sh [linux|windows|all]      (default: all)
 #
-# Needs: rustup, zig, cargo-zigbuild
+# Needs: rustup, zig, cargo-zigbuild, cargo-about
 #   cargo install cargo-zigbuild --locked
+#   cargo install cargo-about --locked --features cli     (third-party license notices)
 #   zig:  pacman -S zig   or   pip install ziglang
 #
 # The Linux build links against glibc 2.28, so it runs on anything from Debian 10 / Ubuntu 18.04 on.
@@ -22,17 +23,23 @@ need() {
 }
 need rustup "https://rustup.rs"
 need cargo-zigbuild "cargo install cargo-zigbuild --locked"
+need cargo-about "cargo install cargo-about --locked --features cli"
 if ! command -v zig >/dev/null 2>&1 && ! python3 -m ziglang version >/dev/null 2>&1; then
     echo "missing tool: zig  (pacman -S zig   or   pip install ziglang)" >&2
     exit 1
 fi
+
+# license notices of all dependencies that end up in the binaries (about.toml, about.hbs)
+notices=target/THIRD_PARTY_LICENSES.txt
+mkdir -p target
+cargo about generate about.hbs -o "$notices"
 
 package_dir() { # <name> <target dir> <exe suffix>
     local name="$1" tdir="$2" suffix="$3"
     rm -rf "$dist/$name"
     mkdir -p "$dist/$name"
     cp "$tdir/transverse-gui$suffix" "$tdir/transverse$suffix" "$dist/$name/"
-    cp packaging/README.txt "$dist/$name/"
+    cp packaging/README.txt LICENSE "$notices" "$dist/$name/"
 }
 
 build_linux() {

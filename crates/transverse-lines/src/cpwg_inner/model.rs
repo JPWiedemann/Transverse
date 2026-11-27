@@ -1,7 +1,7 @@
 //! CPWG inner-layer line as a [`LineModel`]: parameter form, conversion and generic results.
 
 use transverse_core::units::format_g;
-use transverse_core::{Ctl, TvError, TvResult};
+use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
     CpwgAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SchematicFlags, SynthVar,
@@ -295,6 +295,7 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
 }
 
 fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
+    let wavelength_mm = guided_wavelength_mm(p.f, a.sol.eeff);
     let mode = ModeResult {
         name: "single".into(),
         z0: a.sol.z0,
@@ -302,6 +303,8 @@ fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
         l: a.sol.l,
         c: a.sol.c,
         f_hz: p.f,
+        wavelength_mm,
+        phase_deg: phase_deg(p.length, wavelength_mm),
         at_f: a.loss.at(p.f),
         split: Some(split_summary(p, &a)),
     };
@@ -361,24 +364,34 @@ impl LineModel for CpwgInner {
         p: &ParamSet,
         target_id: &str,
         z0_target: f64,
+        phase_deg: Option<f64>,
         ctl: &Ctl,
     ) -> TvResult<(ParamSet, Analysis)> {
         let t = SYNTH
             .iter()
             .find(|t| t.id == target_id)
             .ok_or_else(|| TvError::InvalidParam(format!("unknown synthesis target {target_id}")))?;
+        if phase_deg.is_some_and(|ph| !(ph.is_finite() && ph > 0.0)) {
+            return Err(TvError::Synthesis("the target phase must be a positive number of degrees".into()));
+        }
         let var = match t.id {
             "w" => SynthVar::W,
             "s" => SynthVar::S,
             _ => SynthVar::WTotal,
         };
         let p = CpwgParams::from_set(p)?;
-        let (pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+        let (mut pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+        // the length follows from the solution: eps_eff does not depend on it
+        let mut title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(z0_target), t.label);
+        if let Some(ph) = phase_deg {
+            pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
+            title += &format!(", phase = {} deg at {} GHz -> length", format_g(ph), format_g(pp.f / 1e9));
+        }
         let a = analysis_from_solution(&pp, sol, ctl)?;
-        let title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(z0_target), t.label);
         let analysis = to_analysis(&title, &pp, a);
-        // only the dimensions change; the domain margin found during synthesis stays internal
-        let out = CpwgParams { w: pp.w, s: pp.s, ..p };
+        // only the dimensions (and the length, if a phase was asked for) change; the domain margin
+        // found during synthesis stays internal
+        let out = CpwgParams { w: pp.w, s: pp.s, length: pp.length, ..p };
         Ok((out.to_set(), analysis))
     }
 }
