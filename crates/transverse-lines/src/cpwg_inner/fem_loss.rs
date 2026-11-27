@@ -28,18 +28,9 @@ pub fn wheeler_dzdn_fem(p: &CpwgParams, sol: &FemSolution, ctl: &Ctl) -> TvResul
         margin: if sol.margin > 0.0 { sol.margin } else { 1.0 },
         ..p.clone()
     };
-    let fence = p.fence1 || p.fence2;
     let z = |d: f64| -> TvResult<f64> {
         ctl.msg(&format!("Conductor loss (Wheeler): wall shift {:+.2} um ...", d * 1e3));
-        let q = CpwgParams {
-            w: p.w - 2.0 * d,
-            s: p.s + d,
-            t: if p.t > 0.0 { (p.t - 2.0 * d).max(0.0) } else { 0.0 },
-            h1: if p.plane1 { p.h1 + d } else { p.h1 },
-            h2: if p.plane2 { p.h2 + d } else { p.h2 },
-            g: if fence { p.g + d } else { p.g },
-            ..pa.clone()
-        };
+        let q = pa.walls_receded(d);
         let mesh = move_mesh(&sol.mesh, p, &q, sol.margin, q.margin);
         let run = solve_mesh(&q.cross_section(q.margin), mesh, sol.order, ctl)?;
         Ok(run.lumped.z0())
