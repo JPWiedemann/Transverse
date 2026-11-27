@@ -7,23 +7,35 @@ export type ParamKind =
   | { Bool: boolean }
   | { Choice: [string[], number] };
 
+/** Applies when all conditions of one of the alternatives hold (no alternatives: always). */
+export type Visibility = { key: string; value: number }[][];
+
 export interface ParamSpec {
   key: string;
   label: string;
   group: string;
   kind: ParamKind;
-  enable_when: { key: string; value: number } | null;
+  visible_when: Visibility;
 }
 
 export interface SynthTarget {
   id: string;
   label: string;
+  visible_when: Visibility;
+}
+
+/** A button that sets some parameters at once. */
+export interface Preset {
+  id: string;
+  label: string;
+  values: [string, number | boolean][];
 }
 
 export interface LineInfo {
   id: string;
   name: string;
   synth_targets: SynthTarget[];
+  presets: Preset[];
 }
 
 /** Parameters in internal units (lengths in mm, frequencies in Hz); choices by index. */

@@ -60,7 +60,7 @@ const fn num(default: f64, unit: &'static str) -> ParamKind {
     ParamKind::Number { default, unit, scale: 1.0 }
 }
 
-const GAP_CHOICES: &[&str] = &["upper", "lower", "custom"];
+const GAP_CHOICES: &[&str] = &["upper (or air)", "lower", "custom"];
 const MESH_CHOICES: &[&str] = &["Auto (target error)", "Manual"];
 
 /// Parameter form of the planar line (defaults equal [`PlanarParams::default`]).

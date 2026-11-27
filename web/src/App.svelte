@@ -54,6 +54,9 @@
   let result = $state<AnalysisResult | undefined>();
 
   const controls = $derived(F.controlSet(defaults, form));
+  // the synthesis targets the structure offers, and the chosen one among them (else the first)
+  const targets = $derived(line ? line.synth_targets.filter((t) => F.isVisible(t.visible_when, controls)) : []);
+  const target = $derived(targets.some((t) => t.id === synthTarget) ? synthTarget : (targets[0]?.id ?? ''));
 
   // the parameters as currently typed, if they are valid (sketch and loss plot follow the form)
   const current = $derived.by(() => {
@@ -191,7 +194,7 @@
       }
     }
     persist();
-    return run((p) => engine.synthesize(line!.id, p, synthTarget, z0, phase, (t) => setStatus(t)), 'Synthesis');
+    return run((p) => engine.synthesize(line!.id, p, target, z0, phase, (t) => setStatus(t)), 'Synthesis');
   }
 </script>
 
@@ -230,8 +233,8 @@
     <button class="primary" disabled={busy} onclick={analyze}>Analyze</button>
     <span class="sep"></span>
     <label>Synthesize
-      <select bind:value={synthTarget} disabled={busy} onchange={persist}>
-        {#each line.synth_targets as t}
+      <select value={target} disabled={busy} onchange={(e) => { synthTarget = e.currentTarget.value; persist(); }}>
+        {#each targets as t (t.id)}
           <option value={t.id}>{t.label}</option>
         {/each}
       </select>
@@ -249,7 +252,7 @@
 
   <div class="layout">
     <section class="form" aria-label="Parameters">
-      <ParamForm {specs} {form} {controls} {invalidKey} {onText} {onUnit} {onFlag} {onChoice} />
+      <ParamForm {specs} {form} {controls} presets={line.presets} onPreset={(p) => edit(F.applyPreset(form, p))} {invalidKey} {onText} {onUnit} {onFlag} {onChoice} />
     </section>
     <section class="output" aria-label="Results">
       <div class="tabs" role="tablist" aria-label="Views">

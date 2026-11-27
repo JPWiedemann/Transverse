@@ -137,10 +137,54 @@ test('remembers the form, unit, tab and theme after a reload', async ({ page }) 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
-test('grayed fields follow their switch', async ({ page }) => {
-  await expect(page.locator('#p-dmin')).toBeDisabled();
+test('fields that do not apply are hidden', async ({ page }) => {
+  await expect(page.locator('#p-dmin')).toHaveCount(0);
   await page.getByLabel('Mode', { exact: true }).selectOption({ label: 'Manual' });
-  await expect(page.locator('#p-dmin')).toBeEnabled();
+  await expect(page.locator('#p-dmin')).toBeVisible();
+
+  // a hidden field with a broken value cannot block the analysis, and gets its text back when it returns
+  await page.locator('#p-s').fill('abc');
+  await page.getByRole('button', { name: 'Analyze', exact: true }).click();
+  await expect(status(page)).toContainText("Gap s: 'abc' is not a number");
+  await page.getByLabel('Mode', { exact: true }).selectOption({ label: 'Auto (target error)' });
+  await page.getByLabel('Coplanar ground').uncheck();
+  await expect(page.locator('#p-s')).toHaveCount(0);
+  await analyze(page);
+  await expect(page.locator('.report')).toContainText('stripline');
+  // the gap cannot be synthesised without a coplanar ground
+  await expect(page.getByLabel('Synthesize', { exact: false }).first().locator('option')).toHaveText(['w']);
+  await page.getByLabel('Coplanar ground').check();
+  await expect(page.locator('#p-s')).toHaveValue('abc');
+
+  await page.getByLabel('Upper half (else air above)').uncheck();
+  await expect(page.locator('#p-h1')).toHaveCount(0);
+  await expect(page.getByText('Upper half', { exact: true })).toHaveCount(0);
+});
+
+test('presets set the structure and keep the dimensions', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.locator('#p-w').fill('0.5');
+  const presets = page.getByRole('group', { name: 'Presets' });
+  for (const [button, name] of [
+    ['Stripline', 'stripline'],
+    ['Microstrip', 'microstrip'],
+    ['Grounded CPW, outer layer', 'grounded coplanar waveguide'],
+    ['CPW, no planes', 'coplanar waveguide'],
+    ['CPWG, inner layer', 'grounded coplanar waveguide'],
+  ] as const) {
+    await presets.getByRole('button', { name: button, exact: true }).click();
+    await expect(page.locator('#p-w')).toHaveValue('0.5');
+    await analyze(page);
+    await expect(page.locator('.report')).toContainText(name);
+    await tab(page, 'Cross-section').click();
+    await expect(page.getByRole('img', { name: /Cross-section of the line/ })).toBeVisible();
+    await tab(page, 'Return current').click();
+    await expect(page.getByRole('img', { name: /Return current density/ })).toBeVisible();
+    await tab(page, 'Field').click();
+    await expect(page.locator('.bar canvas')).toBeVisible({ timeout: 20_000 });
+    await tab(page, 'Results').click();
+  }
+  expect(errors).toEqual([]);
 });
 
 test('the field views draw the triangle mesh', async ({ page }) => {
