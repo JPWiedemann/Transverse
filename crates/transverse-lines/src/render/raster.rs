@@ -229,6 +229,9 @@ enum Source {
 }
 
 pub fn render(f: &FieldData, e: &EField, spec: &RasterSpec) -> Raster {
+    if let Some(m) = &f.mesh {
+        return super::mesh_raster::render_mesh(m, spec);
+    }
     let (nx, ny) = (f.nx(), f.ny());
     let [vx0, vx1, vy0, vy1] = spec.view;
     let (x0, x1) = (vx0.max(f.x[0]), vx1.min(f.x[nx - 1]));
@@ -295,6 +298,9 @@ pub struct Probe {
 }
 
 pub fn probe(f: &FieldData, e: &EField, x: f64, y: f64) -> Option<Probe> {
+    if let Some(m) = &f.mesh {
+        return super::mesh_raster::probe_mesh(m, x, y);
+    }
     let (nx, ny) = (f.nx(), f.ny());
     if x < f.x[0] || x > f.x[nx - 1] || y < f.y[0] || y > f.y[ny - 1] {
         return None;
@@ -350,6 +356,7 @@ mod tests {
             view_zoom: [0.0, 3.0, 0.0, 3.0],
             view_full: [0.0, 3.0, 0.0, 3.0],
             z0: 50.0,
+            mesh: None,
         };
         let e = e_field(&v, &x, &y, &fixed);
         let _ = ShapeKind::Ground;

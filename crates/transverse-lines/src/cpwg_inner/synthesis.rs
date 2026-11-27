@@ -5,7 +5,7 @@ use transverse_core::quasistatic::{self, Solution};
 use transverse_core::synthesis::{self as root, SynthSpec};
 use transverse_core::{Ctl, TvResult};
 
-use super::{CpwgParams, analyze};
+use super::{CpwgParams, FemSolution, analyze, analyze_fem};
 
 /// Which dimension is varied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,11 +32,59 @@ pub fn synthesize(
     rtol: f64,
     ctl: &Ctl,
 ) -> TvResult<(CpwgParams, Solution)> {
+    synthesize_with(
+        p,
+        target,
+        var,
+        rtol,
+        ctl,
+        |p| quasistatic::auto_margin(p, &p.fd_options(), ctl),
+        |q| analyze(q, ctl),
+        |s| s.z0,
+    )
+}
+
+/// As [`synthesize`] with the finite-element solver. Its Z0 carries some mesh noise, so the solves ask for a
+/// tighter mesh tolerance than the user's and the search stops at the larger of `rtol` and what that noise allows.
+pub fn synthesize_fem(
+    p: &CpwgParams,
+    target: f64,
+    var: SynthVar,
+    rtol: f64,
+    ctl: &Ctl,
+) -> TvResult<(CpwgParams, FemSolution)> {
+    let tight = CpwgParams { tol: p.tol / 4.0, ..p.clone() };
+    let solve = |q: &CpwgParams| analyze_fem(q, &q.fem_options(), ctl);
+    let (mut out, sol) = synthesize_with(
+        &tight,
+        target,
+        var,
+        rtol.max(tight.tol / 100.0 / 4.0),
+        ctl,
+        |q| Ok(solve(q)?.margin),
+        solve,
+        |s| s.z0,
+    )?;
+    out.tol = p.tol;
+    Ok((out, sol))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn synthesize_with<S>(
+    p: &CpwgParams,
+    target: f64,
+    var: SynthVar,
+    rtol: f64,
+    ctl: &Ctl,
+    margin_of: impl FnOnce(&CpwgParams) -> TvResult<f64>,
+    solve: impl Fn(&CpwgParams) -> TvResult<S>,
+    z0_of: impl Fn(&S) -> f64,
+) -> TvResult<(CpwgParams, S)> {
     p.validate()?;
     let mut p = p.clone();
     if p.margin <= 0.0 && !p.closed() {
         ctl.msg("Synthesis: determining domain size ...");
-        p.margin = quasistatic::auto_margin(&p, &p.fd_options(), ctl)?;
+        p.margin = margin_of(&p)?;
     }
     let total = 2.0 * p.s + p.w;
     let mk = |x: f64| match var {
@@ -70,11 +118,12 @@ pub fn synthesize(
         &spec,
         |x| {
             step += 1;
-            let sol = analyze(&mk(x), ctl)?;
-            ctl.msg(&format!("Synthesis step {step}: {name} = {:.2} um -> Z0 = {:.3} Ohm", x * 1e3, sol.z0));
-            Ok((sol.z0, sol))
+            let sol = solve(&mk(x))?;
+            let z0 = z0_of(&sol);
+            ctl.msg(&format!("Synthesis step {step}: {name} = {:.2} um -> Z0 = {z0:.3} Ohm", x * 1e3));
+            Ok((z0, sol))
         },
-        |x| analyze(&mk(x), ctl),
+        |x| solve(&mk(x)),
     )?;
     Ok((mk(x), sol))
 }

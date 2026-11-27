@@ -86,5 +86,6 @@ pub fn field_data(p: &CpwgParams, sol: &Solution) -> FieldData {
         view_zoom: d.view_zoom,
         view_full: d.view_full,
         z0: sol.z0,
+        mesh: None,
     }
 }

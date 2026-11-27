@@ -91,6 +91,23 @@ impl MeshFieldData {
         a
     }
 
+    /// Edges of the triangles whose bounding box meets `view` (`[x0, y0, x1, y1]`, every edge once). The edges of the
+    /// triangulation include those inside conductors only as far as they bound dielectric triangles.
+    pub fn edge_segments(&self, view: Bounds) -> Vec<[f64; 4]> {
+        let [x0, x1, y0, y1] = view;
+        self.edges
+            .iter()
+            .filter_map(|e| {
+                let (a, b) = (self.pts[e[0] as usize], self.pts[e[1] as usize]);
+                let hit = a[0].max(b[0]) >= x0
+                    && a[0].min(b[0]) <= x1
+                    && a[1].max(b[1]) >= y0
+                    && a[1].min(b[1]) <= y1;
+                hit.then_some([a[0], a[1], b[0], b[1]])
+            })
+            .collect()
+    }
+
     pub fn er_at(&self, p: [f64; 2]) -> Option<f64> {
         Some(self.tri_er[self.locate(p)?.tri])
     }

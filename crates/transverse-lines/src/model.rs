@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use transverse_core::losses::{FreqResponse, LossPoint};
 use transverse_core::postproc::{self, EField, StreamOptions};
 use transverse_core::quasistatic::Accuracy;
+
+use crate::mesh_field::MeshFieldData;
 use transverse_core::{Ctl, TvError, TvResult};
 
 // ---------------------------------------------------------------------------------------------
@@ -246,9 +248,37 @@ pub struct FieldData {
     pub view_zoom: Bounds,
     pub view_full: Bounds,
     pub z0: f64,
+    /// Solution on a triangle mesh (finite elements). Then `x` and `y` hold only the extent of the mesh, the
+    /// grid arrays above are empty, and the methods below and the raster functions work on the mesh.
+    pub mesh: Option<Box<MeshFieldData>>,
 }
 
 impl FieldData {
+    /// Field data of a mesh solution.
+    pub fn from_mesh(m: MeshFieldData) -> Self {
+        Self {
+            x: vec![m.bounds[0], m.bounds[1]],
+            y: vec![m.bounds[2], m.bounds[3]],
+            fixed: Vec::new(),
+            er: Vec::new(),
+            v: Vec::new(),
+            v0: Vec::new(),
+            conductors: m.conductors.clone(),
+            dashed_y: m.dashed_y.clone(),
+            dotted_y: m.dotted_y.clone(),
+            view_zoom: m.view_zoom,
+            view_full: m.view_full,
+            z0: m.z0,
+            mesh: Some(Box::new(m)),
+        }
+    }
+
+    /// Edges of the triangles that touch `view`, as `[x0, y0, x1, y1]` (`None` for a grid solution, whose lines are
+    /// the coordinates `x` and `y`).
+    pub fn mesh_edges(&self, view: Bounds) -> Option<Vec<[f64; 4]>> {
+        self.mesh.as_ref().map(|m| m.edge_segments(view))
+    }
+
     pub fn nx(&self) -> usize {
         self.x.len()
     }
@@ -259,16 +289,25 @@ impl FieldData {
 
     /// E field of the dielectric (`air = false`) or air solution.
     pub fn e_field(&self, air: bool) -> EField {
+        if self.mesh.is_some() {
+            return EField { ex: Vec::new(), ey: Vec::new(), e: Vec::new() };
+        }
         postproc::e_field(if air { &self.v0 } else { &self.v }, &self.x, &self.y, &self.fixed)
     }
 
     /// Equipotential segments for the given potentials (V).
     pub fn equipotentials(&self, levels: &[f64]) -> Vec<(f64, Vec<[[f64; 2]; 2]>)> {
+        if let Some(m) = &self.mesh {
+            return m.equipotentials(levels);
+        }
         levels.iter().map(|&l| (l, postproc::contour_segments(&self.v, &self.x, &self.y, l))).collect()
     }
 
     /// Field lines of the dielectric solution inside `view`.
     pub fn field_lines(&self, view: Bounds, density: (f64, f64)) -> Vec<Vec<[f64; 2]>> {
+        if let Some(m) = &self.mesh {
+            return m.field_lines(view, density);
+        }
         let e = self.e_field(false);
         postproc::field_lines(&self.x, &self.y, &e.ex, &e.ey, &self.fixed, &StreamOptions { view, density })
     }
