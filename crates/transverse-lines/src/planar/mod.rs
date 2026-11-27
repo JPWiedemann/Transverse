@@ -27,6 +27,8 @@ mod params;
 mod report;
 mod schematic;
 mod section;
+mod stackup;
+mod structure;
 mod synthesis;
 mod wheeler;
 
@@ -40,10 +42,11 @@ pub use field::field_data;
 pub use grid::*;
 pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
 pub use model::PlanarLine;
-pub use params::{GapMode, MeshMode, PlanarParams, analytic};
+pub use params::{Analytic, GapMode, MeshMode, PlanarParams, analytic};
 pub use report::{report, report_fem};
 pub use schematic::{SchematicFlags, schematic};
-pub use section::{GROWTH, MAT_AIR, MAT_GAP, MAT_LOWER, MAT_UPPER};
+pub use section::GROWTH;
+pub use stackup::{CopperLayer, MAT_AIR, MAT_GAP, MAT_LOWER, MAT_UPPER, Slab, Stackup, Trace, WallSpan};
 pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize, synthesize_fem};
 pub use wheeler::wheeler_dzdn;
 

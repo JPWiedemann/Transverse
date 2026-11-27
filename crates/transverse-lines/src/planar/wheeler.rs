@@ -11,7 +11,7 @@ impl PlanarParams {
     /// The structure with every metal surface moved by `d` into its metal (`d < 0`: out of it), as new
     /// dimensions. The heights h1 and h2 are measured from the copper surfaces, which move as well, so a plane
     /// that recedes gets `2 d` further from a thick copper layer (`d` from a zero-thickness one, whose faces
-    /// cannot move). The via fences keep their distance g: they recede with the coplanar-ground edge.
+    /// cannot move). Via fences keep their distance g: they recede with the coplanar-ground edge.
     pub fn walls_receded(&self, d: f64) -> Self {
         let thick = self.t > 0.0;
         let plane = if thick { 2.0 * d } else { d };
@@ -21,18 +21,28 @@ impl PlanarParams {
             t: if thick { (self.t - 2.0 * d).max(0.0) } else { 0.0 },
             h1: if self.plane1 { self.h1 + plane } else { self.h1 },
             h2: if self.plane2 { self.h2 + plane } else { self.h2 },
+            // a side wall is measured from the trace edge, which moves by -d
+            g: if self.has_walls() { self.g + 2.0 * d } else { self.g },
             ..self.clone()
         }
     }
 }
 
-/// dZ0_air/dn [Ohm/m] with the same mesh settings and domain as `sol`.
-pub fn wheeler_dzdn(p: &PlanarParams, sol: &Solution, ctl: &Ctl) -> TvResult<f64> {
-    // wall shift relative to the geometry
-    let mut dn = (p.s / 20.0).min(p.w / 20.0);
+/// The wall shift of the difference quotient [mm], relative to the geometry.
+pub(super) fn wheeler_step(p: &PlanarParams) -> f64 {
+    let mut dn = p.w / 20.0;
+    if p.coplanar {
+        dn = dn.min(p.s / 20.0);
+    }
     if p.t > 0.0 {
         dn = dn.min(p.t / 8.0);
     }
+    dn
+}
+
+/// dZ0_air/dn [Ohm/m] with the same mesh settings and domain as `sol`.
+pub fn wheeler_dzdn(p: &PlanarParams, sol: &Solution, ctl: &Ctl) -> TvResult<f64> {
+    let dn = wheeler_step(p);
     let (dmin, dmax, richardson) = sol.accuracy.mesh_used;
     let pa = PlanarParams {
         er1: 1.0,
@@ -90,5 +100,21 @@ mod tests {
         let p = PlanarParams { plane1: false, fence1: false, ..PlanarParams::default() };
         let q = p.walls_receded(1e-3);
         assert_eq!((q.h1, q.h2), (p.h1, p.h2 + 2e-3));
+    }
+
+    #[test]
+    fn a_side_wall_recedes_away_from_the_trace() {
+        let d = 1e-3;
+        for t in [0.018, 0.0] {
+            let p = PlanarParams { coplanar: false, side_walls: true, t, ..PlanarParams::default() };
+            let q = p.walls_receded(d);
+            // the trace edge goes inwards, the wall outwards, in absolute positions
+            assert!((q.w / 2.0 - (p.w / 2.0 - d)).abs() < 1e-15);
+            assert!((q.wall_x() - (p.wall_x() + d)).abs() < 1e-15, "{} {}", q.wall_x(), p.wall_x());
+        }
+        // fences on a coplanar ground keep g: they recede together with the gap edge
+        let p = PlanarParams::default();
+        let q = p.walls_receded(d);
+        assert!((q.g - p.g).abs() < 1e-15 && (q.wall_x() - (p.wall_x() + d)).abs() < 1e-15);
     }
 }

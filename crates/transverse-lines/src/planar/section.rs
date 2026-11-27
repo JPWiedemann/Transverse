@@ -7,15 +7,9 @@
 //! fences, and the strip and ground for t = 0) are segments, copper of thickness t is rectangles.
 
 use transverse_core::quasistatic::GridSource;
-use transverse_geom::{CrossSection, Far, GROUND, Item, Material, Paint, SIGNAL, Shape, SizeSpec};
+use transverse_geom::{CrossSection, Far, SizeSpec};
 
 use super::PlanarParams;
-use super::grid::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, C_SIG};
-
-pub const MAT_AIR: u16 = 0;
-pub const MAT_UPPER: u16 = 1;
-pub const MAT_LOWER: u16 = 2;
-pub const MAT_GAP: u16 = 3;
 
 /// Grading of the size field away from conductor edges.
 pub const GROWTH: f64 = 1.25;
@@ -26,57 +20,7 @@ impl PlanarParams {
     /// The cross-section for a domain extension `margin` of the open regions.
     pub fn cross_section(&self, margin: f64) -> CrossSection {
         let g = self.geometry(margin);
-        let t = self.t;
-        let xd = g.xd;
-        let (er_g, td_g) = self.gap_props();
-        let materials = vec![
-            Material { er: 1.0, tand: 0.0 },
-            Material { er: self.er1, tand: self.tand1 },
-            Material { er: self.er2, tand: self.tand2 },
-            Material { er: er_g, tand: td_g },
-        ];
-        let diel = |shape, m| Item { shape, paint: Paint::Dielectric(m) };
-        let cond = |shape, id, tag| Item { shape, paint: Paint::Conductor { id, tag } };
-        let mut items = vec![
-            diel(Shape::rect(-xd, g.ybot, xd, 0.0), MAT_LOWER),
-            diel(Shape::rect(-xd, t, xd, g.ytop), MAT_UPPER),
-        ];
-        if t > 0.0 {
-            items.push(diel(Shape::rect(-xd, 0.0, xd, t), MAT_GAP));
-        }
-        // painting order = precedence where pieces coincide, as in the node categories of the grid
-        for sx in [-g.xe, g.xe] {
-            if self.fence1 {
-                items.push(cond(Shape::segment([sx, t], [sx, g.ytop]), GROUND, C_F1));
-            }
-            if self.fence2 {
-                items.push(cond(Shape::segment([sx, g.ybot], [sx, 0.0]), GROUND, C_F2));
-            }
-        }
-        if self.plane1 {
-            items.push(cond(Shape::segment([-xd, g.ytop], [xd, g.ytop]), GROUND, C_PL1));
-        }
-        if self.plane2 {
-            items.push(cond(Shape::segment([-xd, g.ybot], [xd, g.ybot]), GROUND, C_PL2));
-        }
-        let (a, h) = (self.w / 2.0 + self.s, self.w / 2.0);
-        if t > 0.0 {
-            items.push(cond(Shape::rect(a, 0.0, xd, t), GROUND, C_COP));
-            items.push(cond(Shape::rect(-xd, 0.0, -a, t), GROUND, C_COP));
-            items.push(cond(Shape::rect(-h, 0.0, h, t), SIGNAL, C_SIG));
-        } else {
-            items.push(cond(Shape::segment([a, 0.0], [xd, 0.0]), GROUND, C_COP));
-            items.push(cond(Shape::segment([-xd, 0.0], [-a, 0.0]), GROUND, C_COP));
-            items.push(cond(Shape::segment([-h, 0.0], [h, 0.0]), SIGNAL, C_SIG));
-        }
-        CrossSection {
-            domain: [-xd, xd, g.ymin, g.ymax],
-            background: MAT_AIR,
-            materials,
-            items,
-            box_grounded: true,
-            box_tag: C_BND,
-        }
+        self.stackup().cross_section([-g.xd, g.xd, g.ymin, g.ymax])
     }
 
     /// Element sizes of the first mesh level: the sizes of the grid's first level, coarse cells in the open
@@ -98,7 +42,8 @@ impl PlanarParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transverse_geom::Shape;
+    use crate::planar::{C_BND, C_F1, C_PL1, C_SIG, MAT_GAP};
+    use transverse_geom::{Paint, SIGNAL, Shape};
 
     #[test]
     fn the_default_stackup_is_a_valid_closed_section_with_all_conductor_pieces() {
@@ -107,8 +52,9 @@ mod tests {
         cs.validate().unwrap();
         let g = p.geometry(0.0);
         assert_eq!(cs.domain, [-g.xe, g.xe, g.ybot, g.ytop]);
-        // 3 dielectric layers, 4 fence pieces, 2 planes, 2 coplanar ground rectangles, the signal strip
-        assert_eq!(cs.items.len(), 3 + 4 + 2 + 2 + 1);
+        // 2 dielectric layers (the gap material is that of the upper one: one layer), 4 fence pieces, 2 planes,
+        // 2 coplanar ground rectangles, the signal strip
+        assert_eq!(cs.items.len(), 2 + 4 + 2 + 2 + 1);
         assert_eq!(cs.materials[usize::from(MAT_GAP)].er, p.er1);
         assert!(cs.box_grounded && cs.box_tag == C_BND);
         assert!(cs.items.iter().any(|it| it.paint == Paint::Conductor { id: SIGNAL, tag: C_SIG }));
@@ -135,6 +81,28 @@ mod tests {
         // far field only where the structure is open
         assert!(p.size_spec(3.0).far.is_some());
         assert!(PlanarParams::default().size_spec(0.0).far.is_none());
+    }
+
+    #[test]
+    fn the_copper_layer_is_a_dielectric_of_its_own_only_with_a_material_of_its_own() {
+        use crate::planar::GapMode;
+        let layers = |p: &PlanarParams| -> Vec<(f64, f64)> {
+            p.cross_section(1.0)
+                .items
+                .iter()
+                .filter_map(|it| match (&it.paint, &it.shape) {
+                    (Paint::Dielectric(_), Shape::Rect { y0, y1, .. }) => Some((*y0, *y1)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let p = PlanarParams::default();
+        let (t, h1, h2) = (p.t, p.h1, p.h2);
+        assert_eq!(layers(&p), [(-h2, 0.0), (0.0, t + h1)]);
+        let lower = PlanarParams { gap_mode: GapMode::Lower, ..p.clone() };
+        assert_eq!(layers(&lower), [(-h2, t), (t, t + h1)]);
+        let custom = PlanarParams { gap_mode: GapMode::Custom, er_gap: 2.0, ..p };
+        assert_eq!(layers(&custom), [(-h2, 0.0), (t, t + h1), (0.0, t)]);
     }
 
     #[test]

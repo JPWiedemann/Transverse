@@ -10,15 +10,12 @@ use transverse_core::{Ctl, TvResult};
 
 use super::fem::{FemSolution, solve_mesh};
 use super::fem_morph::move_mesh;
+use super::wheeler::wheeler_step;
 use super::{GapMode, MeshMode, PlanarParams};
 
 /// dZ0_air/dn [Ohm/m] with the mesh settings and domain of `sol`.
 pub fn wheeler_dzdn_fem(p: &PlanarParams, sol: &FemSolution, ctl: &Ctl) -> TvResult<f64> {
-    // wall shift relative to the geometry (the same rule as for the grid)
-    let mut dn = (p.s / 20.0).min(p.w / 20.0);
-    if p.t > 0.0 {
-        dn = dn.min(p.t / 8.0);
-    }
+    let dn = wheeler_step(p);
     let pa = PlanarParams {
         er1: 1.0,
         er2: 1.0,

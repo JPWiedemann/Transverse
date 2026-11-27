@@ -41,10 +41,9 @@ fn from_surface_current(p: &PlanarParams, sol: &FemSolution, r0: f64) -> f64 {
     let grad = corner_gradients(&inp, &sol.edges, &sol.v0).unwrap();
     let tags: HashMap<(u32, u32), u8> =
         m.edges.iter().map(|e| ((e.a.min(e.b), e.a.max(e.b)), e.tag)).collect();
-    let corners: Vec<[f64; 2]> = [p.w / 2.0, p.w / 2.0 + p.s]
-        .iter()
-        .flat_map(|&x| [[x, 0.0], [x, p.t], [-x, 0.0], [-x, p.t]])
-        .collect();
+    // the corners of the copper: at the trace edges and, with a coplanar ground, at the gap edges
+    let corners: Vec<[f64; 2]> =
+        p.stackup().copper_edges_x().iter().flat_map(|&x| [[x, 0.0], [x, p.t]]).collect();
     let to_corner =
         |q: [f64; 2]| corners.iter().map(|c| (q[0] - c[0]).hypot(q[1] - c[1])).fold(f64::INFINITY, f64::min);
 
@@ -95,11 +94,18 @@ fn wheeler_agrees_with_the_integral_of_the_surface_current() {
         ("tight gap", PlanarParams { w: 0.2, s: 0.075, ..base.clone() }),
         ("wide gap", PlanarParams { w: 0.3, s: 0.5, ..base.clone() }),
         ("35 um copper", PlanarParams { t: 0.035, ..base.clone() }),
-        ("no plane 1, no fence 1", PlanarParams { plane1: false, fence1: false, ..base }),
+        ("no plane 1, no fence 1", PlanarParams { plane1: false, fence1: false, ..base.clone() }),
+        ("stripline", PlanarParams { coplanar: false, w: 0.2, ..base.clone() }),
+        (
+            "stripline, side walls close by",
+            PlanarParams { coplanar: false, side_walls: true, w: 0.25, g: 0.12, t: 0.035, ..base.clone() },
+        ),
+        ("microstrip", PlanarParams { coplanar: false, upper: false, w: 0.5, t: 0.035, ..base.clone() }),
+        ("grounded CPW, outer layer", PlanarParams { upper: false, w: 0.35, s: 0.15, g: 0.3, ..base }),
     ];
     for (name, p) in cases {
         // a fine mesh for the integral; the loss itself is taken at the default accuracy, as the apps do
-        let fine = PlanarParams { tol: 0.005, ..p.clone() };
+        let fine = PlanarParams { tol: 0.001, ..p.clone() };
         let air = analyze_fem(&fine, &fine.fem_options(), &Ctl::new()).unwrap();
         // 0.5 um is small against the copper thickness, where the power law holds
         let reference = from_surface_current(&p, &air, 0.5e-3);
@@ -113,7 +119,7 @@ fn wheeler_agrees_with_the_integral_of_the_surface_current() {
             fd / reference - 1.0,
             fem / reference - 1.0
         );
-        // measured: within 3.5e-3; the old rule, which left planes and the gap face in place, was 14 to 22 % low
+        // measured: within 2.4e-3; the old rule, which left planes and the gap face in place, was 14 to 22 % low
         assert!((fd / reference - 1.0).abs() < 5e-3, "{name}: FD {fd} vs integral {reference}");
         assert!((fem / reference - 1.0).abs() < 5e-3, "{name}: FEM {fem} vs integral {reference}");
     }

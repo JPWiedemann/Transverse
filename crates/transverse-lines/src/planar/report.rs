@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use super::{GroundCat, PlanarAnalysis, PlanarFemAnalysis, PlanarParams, Split, analytic};
+use super::{GroundCat, PlanarAnalysis, PlanarFemAnalysis, PlanarParams, Shares, Split, analytic};
 use transverse_core::losses::LossModel;
 use transverse_core::units::format_g;
 use transverse_core::{C_LIGHT, NP2DB, guided_wavelength_mm, phase_deg};
@@ -79,33 +79,50 @@ fn domain_line(s: &mut String, p: &PlanarParams, margin: f64) {
     }
 }
 
+/// The structure and its dimensions.
+fn geometry_lines(w: &mut String, e: &PlanarParams) {
+    let mut sizes = vec![format!("w = {:.2} um", e.w * 1e3)];
+    if e.coplanar {
+        sizes.push(format!("s = {:.2} um", e.s * 1e3));
+    }
+    sizes.push(format!("t = {:.2} um", e.t * 1e3));
+    if e.fence1 || e.fence2 || e.side_walls {
+        sizes.push(format!("g = {:.3} mm", e.g));
+    }
+    let _ = writeln!(w, "Geometry : {}", sizes.join(", "));
+    let yn = |on: bool, name: &str| if on { name.to_string() } else { format!("no {name}") };
+    let mut parts = Vec::new();
+    if !e.upper {
+        parts.push("air above".to_string());
+    }
+    if e.upper {
+        parts.push(yn(e.plane1, "plane 1"));
+    }
+    parts.push(yn(e.plane2, "plane 2"));
+    if e.coplanar {
+        if e.upper {
+            parts.push(yn(e.fence1, "fence 1"));
+        }
+        parts.push(yn(e.fence2, "fence 2"));
+    } else if e.side_walls {
+        parts.push("via fences".to_string());
+    }
+    let total =
+        if e.coplanar { format!("2s + w = {:.2} um   ", (2.0 * e.s + e.w) * 1e3) } else { String::new() };
+    let _ = writeln!(w, "           {total}{}  [{}]\n", e.structure_name(), parts.join(", "));
+}
+
 fn body(title: &str, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &Split) -> String {
     let lo = loss.at(p.f);
     let to_db_mm = NP2DB / 1000.0;
     let (ac, ad) = (lo.alpha_c * to_db_mm, lo.alpha_d * to_db_mm);
     let tot = ac + ad;
     let vp = C_LIGHT / sol.eeff.sqrt();
-    let yn = |on: bool, name: &str| if on { name.to_string() } else { format!("no {name}") };
+    let e = p.effective();
     let mut s = String::new();
     let w = &mut s;
     let _ = writeln!(w, "=== {title} ===");
-    let _ = writeln!(
-        w,
-        "Geometry : w = {:.2} um, s = {:.2} um, t = {:.2} um, g = {:.3} mm",
-        p.w * 1e3,
-        p.s * 1e3,
-        p.t * 1e3,
-        p.g
-    );
-    let _ = writeln!(
-        w,
-        "           2s + w = {:.2} um   [{}, {}, {}, {}]\n",
-        (2.0 * p.s + p.w) * 1e3,
-        yn(p.plane1, "plane 1"),
-        yn(p.plane2, "plane 2"),
-        yn(p.fence1, "fence 1"),
-        yn(p.fence2, "fence 2")
-    );
+    geometry_lines(w, &e);
     let _ = writeln!(w, "Z0              = {:8.3} Ohm", sol.z0);
     let _ = writeln!(w, "eps_eff         = {:8.4}", sol.eeff);
     let _ = writeln!(w, "v_p             = {:8.4} c", vp / C_LIGHT);
@@ -156,24 +173,31 @@ fn body(title: &str, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &S
             width = width
         );
     };
-    if p.plane1 {
+    if e.plane1 {
         row(w, "  ", 31, GroundCat::Plane1);
     }
-    if p.plane2 {
+    if e.plane2 {
         row(w, "  ", 31, GroundCat::Plane2);
     }
-    let _ = writeln!(w, "  {:31}{:6.1} %   {:6.1} %", "Coplanar ground (total)", fd.coplanar, cur.coplanar);
-    for c in GroundCat::COPLANAR {
-        if c == GroundCat::CopOuter && fd.get(c) < 0.05 && cur.get(c) < 0.05 {
-            continue;
+    if e.coplanar {
+        let _ =
+            writeln!(w, "  {:31}{:6.1} %   {:6.1} %", "Coplanar ground (total)", fd.coplanar, cur.coplanar);
+        for c in GroundCat::COPLANAR {
+            if c == GroundCat::CopOuter && fd.get(c) < 0.05 && cur.get(c) < 0.05 {
+                continue;
+            }
+            row(w, "    ", 29, c);
         }
-        row(w, "    ", 29, c);
     }
-    if p.fence1 {
+    if e.fence1 {
         row(w, "  ", 31, GroundCat::Fence1);
     }
-    if p.fence2 {
+    if e.fence2 {
         row(w, "  ", 31, GroundCat::Fence2);
+    }
+    if e.side_walls {
+        let sum = |s: &Shares| s.get(GroundCat::Fence1) + s.get(GroundCat::Fence2);
+        let _ = writeln!(w, "  {:31}{:6.1} %   {:6.1} %", "Via fences", sum(fd), sum(cur));
     }
     if !p.closed() {
         row(w, "  ", 31, GroundCat::Boundary);
@@ -181,10 +205,21 @@ fn body(title: &str, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &S
     if let Some(x) = split.x90_planes {
         let _ = writeln!(w, "  90 % of plane current within |x| <= {x:.3} mm");
     }
-    let _ = writeln!(w, "  90 % of coplanar current within {:.3} mm of the gap edge\n", split.x90_cop);
+    if e.coplanar {
+        let _ = writeln!(w, "  90 % of coplanar current within {:.3} mm of the gap edge", split.x90_cop);
+    }
+    let _ = writeln!(w);
 
-    let (za, ea, exact) = analytic(p);
-    let rough = if exact { "" } else { "  (rough: open side treated as filled half-space)" };
-    let _ = writeln!(w, "Analytic (t=0)  : Z0 = {za:.2} Ohm, eps_eff = {ea:.3}{rough}");
+    if let Some(a) = analytic(p) {
+        let note = match (a.method, a.exact) {
+            ("conformal mapping", true) => String::new(),
+            ("conformal mapping", false) if e.coplanar => {
+                "  (rough: open side treated as filled half-space)".into()
+            }
+            (method, false) => format!("  (estimate: {method})"),
+            (_, true) => String::new(),
+        };
+        let _ = writeln!(w, "Analytic (t=0)  : Z0 = {:.2} Ohm, eps_eff = {:.3}{note}", a.z0, a.eeff);
+    }
     s
 }

@@ -4,33 +4,56 @@ use transverse_core::units::format_g;
 use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
-    DEFAULT_RTOL, GapMode, GroundCat, MeshMode, PlanarFemAnalysis, PlanarParams, SchematicFlags, Split,
-    SynthVar, fem_accuracy, field_data_fem, full_analysis_fem, ground_split_fem, loss_model_fem, report_fem,
-    schematic, synthesize_fem,
+    DEFAULT_RTOL, GapMode, GroundCat, MeshMode, PlanarFemAnalysis, PlanarParams, SchematicFlags, Shares,
+    Split, SynthVar, fem_accuracy, field_data_fem, full_analysis_fem, ground_split_fem, loss_model_fem,
+    report_fem, schematic, synthesize_fem,
 };
 use crate::model::*;
 use transverse_core::losses::LossModel;
 use transverse_core::quasistatic::Accuracy;
 
+const STRUCTURE: &str = "Structure";
 const GEO: &str = "Geometry";
-const UP: &str = "Upper dielectric / plane 1";
-const LO: &str = "Lower dielectric / plane 2";
-const GAP: &str = "Gap material (signal - coplanar ground)";
+const UP: &str = "Upper half";
+const LO: &str = "Lower half";
+const GAP: &str = "Material beside the trace";
 const COND: &str = "Conductor";
 const FREQ: &str = "Frequency / length";
 const MESH: &str = "Mesh";
 
 const fn spec(key: &'static str, label: &'static str, group: &'static str, kind: ParamKind) -> ParamSpec {
-    ParamSpec { key, label, group, kind, enable_when: None }
+    ParamSpec { key, label, group, kind, visible_when: &[] }
 }
 
-const fn when(mut s: ParamSpec, key: &'static str, value: usize) -> ParamSpec {
-    s.enable_when = Some(EnableWhen { key, value });
+const fn when(mut s: ParamSpec, visible_when: Visibility) -> ParamSpec {
+    s.visible_when = visible_when;
     s
 }
 
+const fn is(key: &'static str, value: usize) -> Condition {
+    Condition { key, value }
+}
+
+const COPLANAR: Visibility = &[&[is("coplanar", 1)]];
+const UPPER: Visibility = &[&[is("upper", 1)]];
+const OWN_UPPER_MATERIAL: Visibility = &[&[is("upper", 1), is("upper_same", 0)]];
+const UPPER_FENCE: Visibility = &[&[is("upper", 1), is("coplanar", 1)]];
+const SIDE_WALLS: Visibility = &[&[is("coplanar", 0), is("upper", 1), is("plane1", 1), is("plane2", 1)]];
+/// The fence distance: next to a via fence on the coplanar ground, or next to a side wall.
+const FENCE_DISTANCE: Visibility = &[
+    &[is("coplanar", 1), is("upper", 1), is("fence1", 1)],
+    &[is("coplanar", 1), is("fence2", 1)],
+    &[is("coplanar", 0), is("upper", 1), is("plane1", 1), is("plane2", 1), is("side_walls", 1)],
+];
+const CUSTOM_GAP: Visibility = &[&[is("gap_mode", 2)]];
+const MANUAL_MESH: Visibility = &[&[is("mesh_mode", 1)]];
+
 const fn len(mm: f64, unit: &'static str) -> ParamKind {
     ParamKind::Length { default_mm: mm, unit, lambda: false }
+}
+
+const fn mesh_len(mm: f64) -> ParamKind {
+    ParamKind::Length { default_mm: mm, unit: "µm", lambda: true }
 }
 
 const fn num(default: f64, unit: &'static str) -> ParamKind {
@@ -40,59 +63,86 @@ const fn num(default: f64, unit: &'static str) -> ParamKind {
 const GAP_CHOICES: &[&str] = &["upper", "lower", "custom"];
 const MESH_CHOICES: &[&str] = &["Auto (target error)", "Manual"];
 
-/// Parameter form of the CPWG line (defaults equal [`PlanarParams::default`]).
-static SPECS: [ParamSpec; 27] = [
+/// Parameter form of the planar line (defaults equal [`PlanarParams::default`]).
+static SPECS: [ParamSpec; 31] = [
+    spec("coplanar", "Coplanar ground", STRUCTURE, ParamKind::Bool(true)),
+    spec("upper", "Upper half (else air above)", STRUCTURE, ParamKind::Bool(true)),
     spec("w", "Trace width w", GEO, len(0.3605, "mm")),
-    spec("s", "Gap s", GEO, len(0.11, "mm")),
+    when(spec("s", "Gap s", GEO, len(0.11, "mm")), COPLANAR),
     spec("t", "Copper thickness t", GEO, len(0.018, "µm")),
-    spec("g", "Via fence distance g", GEO, len(1.0, "mm")),
-    spec("h1", "Height h1", UP, len(0.204, "mm")),
-    spec("er1", "er1", UP, num(3.52, "")),
-    spec("tand1", "tan d1", UP, num(0.02, "")),
-    spec("plane1", "Ground plane 1 (top)", UP, ParamKind::Bool(true)),
-    spec("fence1", "Via fence 1 (coplanar to top)", UP, ParamKind::Bool(true)),
+    when(spec("side_walls", "Via fences (plane to plane)", GEO, ParamKind::Bool(false)), SIDE_WALLS),
+    when(spec("g", "Via fence distance g", GEO, len(1.0, "mm")), FENCE_DISTANCE),
+    when(spec("upper_same", "Same er, tan d as lower", UP, ParamKind::Bool(false)), UPPER),
+    when(spec("h1", "Height h1", UP, len(0.204, "mm")), UPPER),
+    when(spec("er1", "er1", UP, num(3.52, "")), OWN_UPPER_MATERIAL),
+    when(spec("tand1", "tan d1", UP, num(0.02, "")), OWN_UPPER_MATERIAL),
+    when(spec("plane1", "Ground plane 1 (top)", UP, ParamKind::Bool(true)), UPPER),
+    when(spec("fence1", "Via fence 1 (coplanar to top)", UP, ParamKind::Bool(true)), UPPER_FENCE),
     spec("h2", "Height h2", LO, len(0.254, "mm")),
     spec("er2", "er2", LO, num(3.66, "")),
     spec("tand2", "tan d2", LO, num(0.02, "")),
     spec("plane2", "Ground plane 2 (bottom)", LO, ParamKind::Bool(true)),
-    spec("fence2", "Via fence 2 (coplanar to bottom)", LO, ParamKind::Bool(true)),
+    when(spec("fence2", "Via fence 2 (coplanar to bottom)", LO, ParamKind::Bool(true)), COPLANAR),
     spec("gap_mode", "Material", GAP, ParamKind::Choice(GAP_CHOICES, 0)),
-    when(spec("er_gap", "er gap (custom)", GAP, num(3.52, "")), "gap_mode", 2),
-    when(spec("tand_gap", "tan d gap (custom)", GAP, num(0.02, "")), "gap_mode", 2),
+    when(spec("er_gap", "er gap (custom)", GAP, num(3.52, "")), CUSTOM_GAP),
+    when(spec("tand_gap", "tan d gap (custom)", GAP, num(0.02, "")), CUSTOM_GAP),
     spec("sigma", "Conductivity", COND, ParamKind::Number { default: 5.8e7, unit: "MS/m", scale: 1e6 }),
     spec("rq", "Roughness Rq", COND, len(0.0, "µm")),
     spec("f", "Frequency", FREQ, ParamKind::Frequency { default_hz: 1e9, unit: "GHz" }),
     spec("length", "Line length", FREQ, len(100.0, "mm")),
     spec("mesh_mode", "Mode", MESH, ParamKind::Choice(MESH_CHOICES, 0)),
     spec("tol", "Target error", MESH, num(0.5, "%")),
-    when(
-        spec(
-            "dmin",
-            "Min. cell (edges)",
-            MESH,
-            ParamKind::Length { default_mm: 0.002, unit: "µm", lambda: true },
-        ),
-        "mesh_mode",
-        1,
-    ),
-    when(
-        spec(
-            "dmax",
-            "Max. cell (core)",
-            MESH,
-            ParamKind::Length { default_mm: 0.02, unit: "µm", lambda: true },
-        ),
-        "mesh_mode",
-        1,
-    ),
+    when(spec("dmin", "Min. cell (edges)", MESH, mesh_len(0.002)), MANUAL_MESH),
+    when(spec("dmax", "Max. cell (core)", MESH, mesh_len(0.02)), MANUAL_MESH),
     spec("max_nodes", "Max. nodes", MESH, num(600_000.0, "")),
     spec("margin", "Domain margin (0=auto)", MESH, len(0.0, "mm")),
 ];
 
 static SYNTH: [SynthTarget; 3] = [
-    SynthTarget { id: "w", label: "w (s fixed)" },
-    SynthTarget { id: "s", label: "s (w fixed)" },
-    SynthTarget { id: "w_total", label: "w (2s+w fixed)" },
+    SynthTarget { id: "w", label: "w", visible_when: &[] },
+    SynthTarget { id: "s", label: "s (w fixed)", visible_when: COPLANAR },
+    SynthTarget { id: "w_total", label: "w (2s+w fixed)", visible_when: COPLANAR },
+];
+
+/// The settings of a preset: all structure switches, and the upper dielectric beside the trace (which is air
+/// without an upper half). Dimensions and materials stay as they are.
+macro_rules! structure {
+    ($coplanar:expr, $upper:expr, $plane1:expr, $plane2:expr, $fence1:expr, $fence2:expr) => {
+        &[
+            ("coplanar", ParamValue::Bool($coplanar)),
+            ("upper", ParamValue::Bool($upper)),
+            ("plane1", ParamValue::Bool($plane1)),
+            ("plane2", ParamValue::Bool($plane2)),
+            ("fence1", ParamValue::Bool($fence1)),
+            ("fence2", ParamValue::Bool($fence2)),
+            ("side_walls", ParamValue::Bool(false)),
+            ("gap_mode", ParamValue::Num(0.0)),
+        ]
+    };
+}
+
+static PRESETS: [Preset; 5] = [
+    Preset {
+        id: "cpwg_inner",
+        label: "CPWG, inner layer",
+        values: structure!(true, true, true, true, true, true),
+    },
+    Preset { id: "stripline", label: "Stripline", values: structure!(false, true, true, true, false, false) },
+    Preset {
+        id: "microstrip",
+        label: "Microstrip",
+        values: structure!(false, false, false, true, false, false),
+    },
+    Preset {
+        id: "cpwg_outer",
+        label: "Grounded CPW, outer layer",
+        values: structure!(true, false, false, true, false, true),
+    },
+    Preset {
+        id: "cpw",
+        label: "CPW, no planes",
+        values: structure!(true, false, false, false, false, false),
+    },
 ];
 
 fn get_num(s: &ParamSet, k: &str, d: f64) -> TvResult<f64> {
@@ -133,6 +183,10 @@ impl PlanarParams {
             tand2: get_num(s, "tand2", d.tand2)?,
             plane2: get_flag(s, "plane2", d.plane2)?,
             fence2: get_flag(s, "fence2", d.fence2)?,
+            coplanar: get_flag(s, "coplanar", d.coplanar)?,
+            upper: get_flag(s, "upper", d.upper)?,
+            upper_same: get_flag(s, "upper_same", d.upper_same)?,
+            side_walls: get_flag(s, "side_walls", d.side_walls)?,
             gap_mode,
             er_gap: get_num(s, "er_gap", d.er_gap)?,
             tand_gap: get_num(s, "tand_gap", d.tand_gap)?,
@@ -184,6 +238,10 @@ impl PlanarParams {
             ("fence1", self.fence1),
             ("plane2", self.plane2),
             ("fence2", self.fence2),
+            ("coplanar", self.coplanar),
+            ("upper", self.upper),
+            ("upper_same", self.upper_same),
+            ("side_walls", self.side_walls),
         ] {
             s.set(k, Bool(v));
         }
@@ -194,6 +252,7 @@ impl PlanarParams {
 }
 
 fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64) -> SplitSummary {
+    let e = &p.effective();
     let (fd, cur) = (&split.field, &split.current);
     let row = |c: GroundCat, indent: u8| SplitRow {
         key: c.key().into(),
@@ -203,30 +262,43 @@ fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64)
         current_pct: cur.get(c),
     };
     let mut rows = Vec::new();
-    if p.plane1 {
+    if e.plane1 {
         rows.push(row(GroundCat::Plane1, 0));
     }
-    if p.plane2 {
+    if e.plane2 {
         rows.push(row(GroundCat::Plane2, 0));
     }
-    rows.push(SplitRow {
-        key: "coplanar".into(),
-        label: "Coplanar ground (total)".into(),
-        indent: 0,
-        field_pct: fd.coplanar,
-        current_pct: cur.coplanar,
-    });
-    for c in GroundCat::COPLANAR {
-        if c == GroundCat::CopOuter && fd.get(c) < 0.05 && cur.get(c) < 0.05 {
-            continue;
+    if e.coplanar {
+        rows.push(SplitRow {
+            key: "coplanar".into(),
+            label: "Coplanar ground (total)".into(),
+            indent: 0,
+            field_pct: fd.coplanar,
+            current_pct: cur.coplanar,
+        });
+        for c in GroundCat::COPLANAR {
+            if c == GroundCat::CopOuter && fd.get(c) < 0.05 && cur.get(c) < 0.05 {
+                continue;
+            }
+            rows.push(row(c, 1));
         }
-        rows.push(row(c, 1));
     }
-    if p.fence1 {
+    if e.fence1 {
         rows.push(row(GroundCat::Fence1, 0));
     }
-    if p.fence2 {
+    if e.fence2 {
         rows.push(row(GroundCat::Fence2, 0));
+    }
+    if e.side_walls {
+        // one wall from plane to plane; the split keeps its two halves apart
+        let sum = |s: &Shares| s.get(GroundCat::Fence1) + s.get(GroundCat::Fence2);
+        rows.push(SplitRow {
+            key: "walls".into(),
+            label: "Via fences".into(),
+            indent: 0,
+            field_pct: sum(fd),
+            current_pct: sum(cur),
+        });
     }
     if !p.closed() {
         rows.push(row(GroundCat::Boundary, 0));
@@ -235,28 +307,39 @@ fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64)
     if let Some(x) = split.x90_planes {
         x90.push(("90 % of plane current within |x| <=".to_string(), x));
     }
-    x90.push(("90 % of coplanar current within (from the gap edge)".to_string(), split.x90_cop));
+    if e.coplanar {
+        x90.push(("90 % of coplanar current within (from the gap edge)".to_string(), split.x90_cop));
+    }
 
-    let (w2, sw) = (p.w / 2.0, p.w / 2.0 + p.s);
-    let plot = ProfilePlot {
-        title: format!(
+    let w2 = p.w / 2.0;
+    let xd = p.geometry(margin).xd;
+    let mut markers = vec![-w2, w2];
+    let mut labels = vec![(0.0, "signal".to_string())];
+    let (title, half_width) = if e.coplanar {
+        let sw = w2 + p.s;
+        markers = vec![-sw, -w2, w2, sw];
+        labels.extend([(-(w2 + p.s / 2.0), "s".into()), (w2 + p.s / 2.0, "s".into())]);
+        let title = format!(
             "HF return-current density (coplanar gap flank {:.1} %, not shown as a curve)",
             cur.get(GroundCat::CopFlank)
-        ),
-        half_width: (sw + p.g.min(1.5 * sw)).min(p.geometry(margin).xd),
-        signal: Some([-w2, w2]),
-        markers: vec![-sw, -w2, w2, sw],
-        labels: vec![(0.0, "signal".into()), (-(w2 + p.s / 2.0), "s".into()), (w2 + p.s / 2.0, "s".into())],
+        );
+        (title, (sw + p.g.min(1.5 * sw)).min(xd))
+    } else {
+        ("HF return-current density".to_string(), (w2 + p.w.max(2.0 * e.h1.max(e.h2))).min(xd))
     };
+    let plot = ProfilePlot { title, half_width, signal: Some([-w2, w2]), markers, labels };
     let delta_um = loss.at(p.f).delta * 1e6;
     let valid = p.t > 0.0 && delta_um * 1e-3 < p.t / 3.0;
     let mut info = String::new();
     if let Some(x) = split.x90_planes {
         info += &format!("90 % of the plane return current flows within |x| <= {x:.3} mm; ");
     }
+    if e.coplanar {
+        info +=
+            &format!("90 % of the coplanar return current within {:.3} mm of the gap edge.\n", split.x90_cop);
+    }
     info += &format!(
-        "90 % of the coplanar return current within {:.3} mm of the gap edge.\nE-field share = where the field lines end (solution with dielectrics). Return current = HF distribution (skin depth << t). Skin depth at {} GHz: {:.2} um -> {}",
-        split.x90_cop,
+        "E-field share = where the field lines end (solution with dielectrics). Return current = HF distribution (skin depth << t). Skin depth at {} GHz: {:.2} um -> {}",
         format_g(p.f / 1e9),
         delta_um,
         if valid { "valid." } else { "NOT well below t: the real current spreads more widely." }
@@ -361,20 +444,32 @@ impl LineModel for PlanarLine {
         &SYNTH
     }
 
+    fn presets(&self) -> &'static [Preset] {
+        &PRESETS
+    }
+
     fn wavelength_mm(&self, p: &ParamSet) -> Option<f64> {
         let p = PlanarParams::from_set(p).ok()?;
         (p.f > 0.0 && p.er1 > 0.0 && p.er2 > 0.0).then(|| p.wavelength())
     }
 
     fn schematic(&self, p: &ParamSet) -> Option<Schematic> {
-        Some(schematic(&SchematicFlags {
-            plane1: get_flag(p, "plane1", true).ok()?,
-            plane2: get_flag(p, "plane2", true).ok()?,
-            fence1: get_flag(p, "fence1", true).ok()?,
-            fence2: get_flag(p, "fence2", true).ok()?,
+        let d = PlanarParams::default();
+        let flag = |key, value| get_flag(p, key, value).ok();
+        let params = PlanarParams {
+            coplanar: flag("coplanar", d.coplanar)?,
+            upper: flag("upper", d.upper)?,
+            upper_same: flag("upper_same", d.upper_same)?,
+            side_walls: flag("side_walls", d.side_walls)?,
+            plane1: flag("plane1", d.plane1)?,
+            plane2: flag("plane2", d.plane2)?,
+            fence1: flag("fence1", d.fence1)?,
+            fence2: flag("fence2", d.fence2)?,
             gap_mode: [GapMode::Upper, GapMode::Lower, GapMode::Custom]
                 [get_choice(p, "gap_mode", 0, 3).ok()?],
-        }))
+            ..d
+        };
+        Some(schematic(&SchematicFlags::of(&params)))
     }
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis> {
@@ -402,6 +497,9 @@ impl LineModel for PlanarLine {
             "s" => SynthVar::S,
             _ => SynthVar::WTotal,
         };
+        if !is_visible(t.visible_when, p) {
+            return Err(TvError::Synthesis(format!("'{}' needs a coplanar ground", t.label)));
+        }
         let p = PlanarParams::from_set(p)?;
         let (mut pp, sol) = synthesize_fem(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
         // the length follows from the solution: eps_eff does not depend on it

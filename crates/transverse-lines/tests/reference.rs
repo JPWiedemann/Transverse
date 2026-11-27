@@ -126,7 +126,7 @@ fn t0_cases_match_conformal_mapping() {
         if let Some(az) = case.analytic_z0 {
             let sol = analyze(&case.params, &Ctl::new()).unwrap();
             assert!(rel(sol.z0, az) < 2.5e-3, "{}: {} vs analytic {}", case.name, sol.z0, az);
-            assert!(rel(analytic(&case.params).0, az) < 1e-12);
+            assert!(rel(analytic(&case.params).unwrap().z0, az) < 1e-12);
         }
     }
 }

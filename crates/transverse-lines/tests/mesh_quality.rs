@@ -54,6 +54,20 @@ fn no_knots_of_tiny_elements_anywhere() {
         let open = PlanarParams { plane1: false, fence1: false, gap_mode: GapMode::Lower, ..p };
         cases.push((format!("open {i}"), open, None, 2.0));
     }
+    // the structures behind the switches
+    let strip = PlanarParams { coplanar: false, w: 0.2, ..base.clone() };
+    for (name, p) in [
+        ("stripline", strip.clone()),
+        ("side walls close by", PlanarParams { side_walls: true, g: 0.05, ..strip.clone() }),
+        ("microstrip", PlanarParams { upper: false, ..strip.clone() }),
+        ("thin microstrip", PlanarParams { upper: false, t: 0.0, w: 1.5, ..strip.clone() }),
+        ("outer CPW", PlanarParams { upper: false, g: 0.2, ..base.clone() }),
+        ("CPW without planes", PlanarParams { upper: false, plane2: false, fence2: false, ..base.clone() }),
+    ] {
+        for scale in [1.0, 2.0, 4.0] {
+            cases.push((format!("{name} scale {scale}"), p.clone(), None, scale));
+        }
+    }
     let mut bad = Vec::new();
     let mut lowest = f64::INFINITY;
     for (name, p, sizes, scale) in &cases {

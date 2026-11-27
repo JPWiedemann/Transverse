@@ -1,16 +1,36 @@
 //! Sketch of the CPWG cross-section (not to scale), ported from the Python tool's canvas drawing.
 
-use super::GapMode;
+use super::{GapMode, PlanarParams};
 use crate::model::{Anchor, SchemColor, SchemItem, Schematic};
 
 /// What the sketch shows (all other parameters do not change the picture).
 #[derive(Clone, Copy, Debug)]
 pub struct SchematicFlags {
+    pub coplanar: bool,
+    pub upper: bool,
+    pub side_walls: bool,
     pub plane1: bool,
     pub plane2: bool,
     pub fence1: bool,
     pub fence2: bool,
     pub gap_mode: GapMode,
+}
+
+impl SchematicFlags {
+    /// The flags of the structure that `p` describes (switches resolved).
+    pub fn of(p: &PlanarParams) -> Self {
+        let e = p.effective();
+        Self {
+            coplanar: e.coplanar,
+            upper: e.upper,
+            side_walls: e.side_walls,
+            plane1: e.plane1,
+            plane2: e.plane2,
+            fence1: e.fence1,
+            fence2: e.fence2,
+            gap_mode: e.gap_mode,
+        }
+    }
 }
 
 pub fn schematic(f: &SchematicFlags) -> Schematic {
@@ -35,12 +55,18 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         it.push(SchemItem::Text { x, y, text: t.to_string(), anchor, bold, color });
     };
 
-    text(&mut it, 330.0, 16.0, "CPWG in PCB inner layer (not to scale)", Anchor::Center, true, Text);
-    rect(&mut it, x0, y1, x1, yc, UpperDielectric, None);
+    text(&mut it, 330.0, 16.0, "Cross-section (not to scale)", Anchor::Center, true, Text);
+    if f.upper {
+        rect(&mut it, x0, y1, x1, yc, UpperDielectric, None);
+    }
     rect(&mut it, x0, y2, x1, yb, LowerDielectric, None);
-    // copper layer: gaps and the area beyond the coplanar ground are filled with the gap material
-    rect(&mut it, x0, yc, x1, y2, gap_col, None);
-    if f.plane1 {
+    // copper layer: what is not copper is filled with the gap material (air for the upper one without an upper half)
+    if f.upper || f.gap_mode != GapMode::Upper {
+        rect(&mut it, x0, yc, x1, y2, gap_col, None);
+    }
+    if !f.upper {
+        text(&mut it, 330.0, y1 + 20.0, "air", Anchor::Center, false, Muted);
+    } else if f.plane1 {
         rect(&mut it, x0, yt, x1, y1, Conductor, None);
         text(&mut it, x1, yt - 8.0, "Ground plane 1", Anchor::Right, false, Muted);
     } else {
@@ -54,8 +80,10 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         line(&mut it, x0, yb, x1, yb, Muted, true, false);
         text(&mut it, 330.0, yb + 22.0, "no ground plane 2  (air)", Anchor::Center, false, Muted);
     }
-    rect(&mut it, x0, yc, cx - hw - s, y2, Conductor, None);
-    rect(&mut it, cx + hw + s, yc, x1, y2, Conductor, None);
+    if f.coplanar {
+        rect(&mut it, x0, yc, cx - hw - s, y2, Conductor, None);
+        rect(&mut it, cx + hw + s, yc, x1, y2, Conductor, None);
+    }
     rect(&mut it, cx - hw, yc, cx + hw, y2, Signal, None);
     for xv in [xf0, xf1] {
         if f.fence1 {
@@ -64,6 +92,12 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         if f.fence2 {
             rect(&mut it, xv - 4.0, y2, xv + 4.0, yb, Conductor, Some(ConductorEdge));
         }
+        if f.side_walls {
+            rect(&mut it, xv - 4.0, y1, xv + 4.0, yb, Conductor, Some(ConductorEdge));
+        }
+    }
+    if f.side_walls {
+        text(&mut it, xf1 - 8.0, y1 + 14.0, "Via fences", Anchor::Right, false, Muted);
     }
     if f.fence1 {
         text(&mut it, xf1 - 8.0, y1 + 14.0, "Via fence 1", Anchor::Right, false, Muted);
@@ -71,28 +105,43 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
     if f.fence2 {
         text(&mut it, xf1 - 8.0, yb - 14.0, "Via fence 2", Anchor::Right, false, Muted);
     }
-    text(&mut it, x0 + 70.0, y1 + 20.0, "Upper dielectric:  h1, er1, tan d1", Anchor::Left, false, Text);
+    if f.upper {
+        text(&mut it, x0 + 70.0, y1 + 20.0, "Upper dielectric:  h1, er1, tan d1", Anchor::Left, false, Text);
+    }
     text(&mut it, x0 + 70.0, yb - 20.0, "Lower dielectric:  h2, er2, tan d2", Anchor::Left, false, Text);
     text(&mut it, cx, y2 + 16.0, "Signal", Anchor::Center, true, Text);
-    text(&mut it, (xf0 + cx - hw - s) / 2.0, y2 + 14.0, "Coplanar ground", Anchor::Center, false, Text);
+    if f.coplanar {
+        text(&mut it, (xf0 + cx - hw - s) / 2.0, y2 + 14.0, "Coplanar ground", Anchor::Center, false, Text);
+    }
 
     // dimensions
     let ya = yc - 14.0;
-    for (xa, xb, lab) in [(cx - hw - s, cx - hw, "s"), (cx - hw, cx + hw, "w"), (cx + hw, cx + hw + s, "s")] {
+    // the edges next to the trace: the gap edges of a coplanar ground, or the trace edges alone
+    let spans: &[(f64, f64, &str)] = if f.coplanar {
+        &[(cx - hw - s, cx - hw, "s"), (cx - hw, cx + hw, "w"), (cx + hw, cx + hw + s, "s")]
+    } else {
+        &[(cx - hw, cx + hw, "w")]
+    };
+    for &(xa, xb, lab) in spans {
         line(&mut it, xa, ya, xb, ya, Text, false, true);
         text(&mut it, (xa + xb) / 2.0, ya - 9.0, lab, Anchor::Center, false, Text);
+        for xv in [xa, xb] {
+            line(&mut it, xv, ya - 6.0, xv, yc, Muted, true, false);
+        }
     }
-    for xv in [cx - hw - s, cx - hw, cx + hw, cx + hw + s] {
-        line(&mut it, xv, ya - 6.0, xv, yc, Muted, true, false);
+    if f.fence1 || f.fence2 || f.side_walls {
+        let inner = if f.coplanar { cx + hw + s } else { cx + hw };
+        let yg = y2 + 34.0;
+        line(&mut it, inner, y2, inner, yg + 4.0, Muted, true, false);
+        line(&mut it, xf1, y2, xf1, yg + 4.0, Muted, true, false);
+        line(&mut it, inner, yg, xf1, yg, Text, false, true);
+        text(&mut it, (inner + xf1) / 2.0, yg - 9.0, "g", Anchor::Center, false, Text);
     }
-    let yg = y2 + 34.0;
-    line(&mut it, cx + hw + s, y2, cx + hw + s, yg + 4.0, Muted, true, false);
-    line(&mut it, xf1, y2, xf1, yg + 4.0, Muted, true, false);
-    line(&mut it, cx + hw + s, yg, xf1, yg, Text, false, true);
-    text(&mut it, (cx + hw + s + xf1) / 2.0, yg - 9.0, "g", Anchor::Center, false, Text);
     let xd = x1 + 28.0;
-    line(&mut it, xd, y1, xd, yc, Text, false, true);
-    text(&mut it, xd + 14.0, (y1 + yc) / 2.0, "h1", Anchor::Center, false, Text);
+    if f.upper {
+        line(&mut it, xd, y1, xd, yc, Text, false, true);
+        text(&mut it, xd + 14.0, (y1 + yc) / 2.0, "h1", Anchor::Center, false, Text);
+    }
     line(&mut it, xd, y2, xd, yb, Text, false, true);
     text(&mut it, xd + 14.0, (y2 + yb) / 2.0, "h2", Anchor::Center, false, Text);
     line(&mut it, x1 + 10.0, yc, x1 + 10.0, y2, Text, false, false);
@@ -124,7 +173,16 @@ mod tests {
     use super::*;
 
     fn flags(plane1: bool, plane2: bool, fence1: bool, fence2: bool, gap_mode: GapMode) -> SchematicFlags {
-        SchematicFlags { plane1, plane2, fence1, fence2, gap_mode }
+        SchematicFlags {
+            coplanar: true,
+            upper: true,
+            side_walls: false,
+            plane1,
+            plane2,
+            fence1,
+            fence2,
+            gap_mode,
+        }
     }
 
     fn count(s: &Schematic, pred: impl Fn(&SchemItem) -> bool) -> usize {

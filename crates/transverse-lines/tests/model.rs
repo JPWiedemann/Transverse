@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::postproc::percentile;
-use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamValue, ShapeKind, is_enabled};
+use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamValue, ShapeKind, is_visible};
 use transverse_lines::planar::{GroundCat, PlanarLine, PlanarParams, analyze, field_data, full_analysis};
 
 fn rel(a: f64, b: f64) -> f64 {
@@ -29,7 +29,7 @@ fn spec_keys_match_the_parameter_set_exactly() {
     assert_eq!(spec_keys, set_keys);
     // dependencies point at existing choice/bool keys
     for p in m.params() {
-        if let Some(dep) = p.enable_when {
+        for dep in p.visible_when.iter().flat_map(|all| all.iter()) {
             assert!(set.get(dep.key).is_some(), "{} depends on unknown {}", p.key, dep.key);
         }
         if let ParamKind::Choice(opts, def) = p.kind {
@@ -38,18 +38,81 @@ fn spec_keys_match_the_parameter_set_exactly() {
     }
 }
 
+/// The keys of the fields the form shows for these values.
+fn shown(set: &ParamSet) -> Vec<&'static str> {
+    PlanarLine.params().iter().filter(|p| is_visible(p.visible_when, set)).map(|p| p.key).collect()
+}
+
+fn with(changes: &[(&str, ParamValue)]) -> ParamSet {
+    let mut s = PlanarLine.defaults();
+    for (k, v) in changes {
+        s.set(k, *v);
+    }
+    s
+}
+
 #[test]
-fn enable_when_follows_choices() {
-    let m = PlanarLine;
-    let mut set = m.defaults();
-    let find = |k: &str| *m.params().iter().find(|p| p.key == k).unwrap();
-    assert!(!is_enabled(&find("dmin"), &set) && !is_enabled(&find("dmax"), &set));
-    assert!(!is_enabled(&find("er_gap"), &set));
-    set.set("mesh_mode", ParamValue::Num(1.0));
-    set.set("gap_mode", ParamValue::Num(2.0));
-    assert!(is_enabled(&find("dmin"), &set) && is_enabled(&find("dmax"), &set));
-    assert!(is_enabled(&find("tand_gap"), &set));
-    assert!(is_enabled(&find("w"), &set));
+fn the_form_shows_only_what_the_structure_uses() {
+    use ParamValue::{Bool, Num};
+    // the default coplanar structure: everything but side walls, custom gap and manual mesh
+    let all = shown(&PlanarLine.defaults());
+    for k in ["s", "g", "fence1", "fence2", "h1", "er1", "plane1", "upper_same"] {
+        assert!(all.contains(&k), "{k}");
+    }
+    for k in ["side_walls", "er_gap", "tand_gap", "dmin", "dmax"] {
+        assert!(!all.contains(&k), "{k}");
+    }
+    let manual = shown(&with(&[("mesh_mode", Num(1.0)), ("gap_mode", Num(2.0))]));
+    assert!(["dmin", "dmax", "er_gap", "tand_gap"].iter().all(|k| manual.contains(k)));
+    let same = shown(&with(&[("upper_same", Bool(true))]));
+    assert!(same.contains(&"h1") && !same.contains(&"er1") && !same.contains(&"tand1"));
+    let open = shown(&with(&[("upper", Bool(false))]));
+    for k in ["h1", "er1", "tand1", "plane1", "fence1", "upper_same"] {
+        assert!(!open.contains(&k), "{k} without an upper half");
+    }
+    assert!(open.contains(&"g"), "fence 2 is still there");
+    assert!(!shown(&with(&[("upper", Bool(false)), ("fence2", Bool(false))])).contains(&"g"));
+    // no coplanar ground: no gap and no fences on it; side walls need both planes
+    let strip = shown(&with(&[("coplanar", Bool(false))]));
+    assert!(!strip.contains(&"s") && !strip.contains(&"fence1") && !strip.contains(&"fence2"));
+    assert!(strip.contains(&"side_walls") && !strip.contains(&"g"));
+    assert!(shown(&with(&[("coplanar", Bool(false)), ("side_walls", Bool(true))])).contains(&"g"));
+    assert!(!shown(&with(&[("coplanar", Bool(false)), ("plane1", Bool(false))])).contains(&"side_walls"));
+    // synthesis of the gap needs a coplanar ground
+    let targets = |set: &ParamSet| -> Vec<&str> {
+        PlanarLine.synth_targets().iter().filter(|t| is_visible(t.visible_when, set)).map(|t| t.id).collect()
+    };
+    assert_eq!(targets(&PlanarLine.defaults()), ["w", "s", "w_total"]);
+    assert_eq!(targets(&with(&[("coplanar", Bool(false))])), ["w"]);
+}
+
+#[test]
+fn presets_set_the_structure_and_nothing_else() {
+    let names = [
+        "grounded coplanar waveguide",
+        "stripline",
+        "microstrip",
+        "grounded coplanar waveguide",
+        "coplanar waveguide",
+    ];
+    let presets = PlanarLine.presets();
+    assert_eq!(presets.len(), names.len());
+    // from a form with dimensions and materials of its own
+    let own =
+        with(&[("w", ParamValue::Num(0.2)), ("er2", ParamValue::Num(4.4)), ("h2", ParamValue::Num(0.1))]);
+    for (preset, name) in presets.iter().zip(names) {
+        let mut set = own.clone();
+        for (k, v) in preset.values {
+            assert!(set.get(k).is_some(), "{}: unknown key {k}", preset.id);
+            set.set(k, *v);
+        }
+        let p = PlanarParams::from_set(&set).unwrap();
+        p.validate().unwrap();
+        assert_eq!(p.structure_name(), name, "{}", preset.id);
+        assert_eq!((p.w, p.er2, p.h2), (0.2, 4.4, 0.1));
+        // a preset does not depend on what was selected before it
+        assert!(preset.values.len() == presets[0].values.len());
+    }
 }
 
 #[test]
@@ -117,7 +180,7 @@ fn synthesis_through_the_trait_keeps_other_parameters() {
     set.set("fence1", ParamValue::Bool(false));
     let (out, a) = m.synthesize(&set, "w", 50.0, None, &Ctl::new()).unwrap();
     assert!(rel(a.modes[0].z0, 50.0) < 2e-3);
-    assert!(a.report.starts_with("=== Synthesis: Z0 = 50 Ohm, vary w (s fixed) ==="));
+    assert!(a.report.starts_with("=== Synthesis: Z0 = 50 Ohm, vary w ==="));
     // only w changed; in particular the automatically found margin is not written back
     let mut expect = set.clone();
     expect.set("w", out.get("w").unwrap());
@@ -163,9 +226,7 @@ fn synthesis_with_a_phase_sets_the_length_from_the_solution() {
     expect.set("length", out.get("length").unwrap());
     assert_eq!(out, expect);
     assert!(
-        a.report.starts_with(
-            "=== Synthesis: Z0 = 35 Ohm, vary w (s fixed), phase = 90 deg at 2.4 GHz -> length ==="
-        ),
+        a.report.starts_with("=== Synthesis: Z0 = 35 Ohm, vary w, phase = 90 deg at 2.4 GHz -> length ==="),
         "{}",
         a.report
     );

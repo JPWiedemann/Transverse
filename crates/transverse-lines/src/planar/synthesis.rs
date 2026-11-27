@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use transverse_core::quasistatic::{self, Solution};
 use transverse_core::synthesis::{self as root, SynthSpec};
-use transverse_core::{Ctl, TvResult};
+use transverse_core::{Ctl, TvError, TvResult};
 
 use super::{FemSolution, PlanarParams, analyze, analyze_fem};
 
@@ -81,6 +81,9 @@ fn synthesize_with<S>(
     z0_of: impl Fn(&S) -> f64,
 ) -> TvResult<(PlanarParams, S)> {
     p.validate()?;
+    if var != SynthVar::W && !p.coplanar {
+        return Err(TvError::Synthesis("the gap can only be varied with a coplanar ground".into()));
+    }
     let mut p = p.clone();
     if p.margin <= 0.0 && !p.closed() {
         ctl.msg("Synthesis: determining domain size ...");
@@ -93,7 +96,7 @@ fn synthesize_with<S>(
         SynthVar::WTotal => PlanarParams { w: x, s: (total - x) / 2.0, ..p.clone() },
     };
 
-    let scale = p.w + 2.0 * p.s; // all limits relative to the geometry
+    let scale = p.w + 2.0 * p.gap_or_zero(); // all limits relative to the geometry
     let hmax = p.h1.max(p.h2);
     let (lo_lim, hi_lim) = match var {
         SynthVar::WTotal => (1e-3 * total, total * (1.0 - 2e-3)),

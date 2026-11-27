@@ -8,11 +8,14 @@ use transverse_mesh::Mesh;
 
 use super::PlanarParams;
 
-/// Wall positions in x and y, in ascending order; the same list of walls for every set of dimensions.
-fn walls(p: &PlanarParams, margin: f64) -> ([f64; 8], [f64; 6]) {
+/// Wall positions in x and y, in ascending order; the same list of walls for every set of dimensions of one
+/// structure.
+fn walls(p: &PlanarParams, margin: f64) -> (Vec<f64>, [f64; 6]) {
     let g = p.geometry(margin);
-    let (inner, outer) = (p.w / 2.0, p.w / 2.0 + p.s);
-    ([-g.xd, -g.xe, -outer, -inner, inner, outer, g.xe, g.xd], [g.ymin, g.ybot, 0.0, p.t, g.ytop, g.ymax])
+    let mut x = vec![-g.xd, -g.xe];
+    x.extend(p.stackup().copper_edges_x());
+    x.extend([g.xe, g.xd]);
+    (x, [g.ymin, g.ybot, 0.0, p.t, g.ytop, g.ymax])
 }
 
 /// The piecewise linear map that takes every `from[i]` to `to[i]`. Walls that coincide in `from` (no copper
