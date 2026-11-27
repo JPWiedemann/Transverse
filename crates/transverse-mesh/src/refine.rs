@@ -56,6 +56,38 @@ fn inside(v: [Point2<f64>; 3], p: P2) -> bool {
     (d0 > 0.0 && d1 > 0.0 && d2 > 0.0) || (d0 < 0.0 && d1 < 0.0 && d2 < 0.0)
 }
 
+/// The constraint edge (as its two vertices) that a new point `p` in `face` would crowd: one of the face or of
+/// its neighbours whose diametral circle holds `p`. A point that close to a boundary or an interface would leave
+/// a sliver there, which the quality refinement can only remove with a knot of tiny elements.
+fn crowded_constraint(
+    cdt: &Cdt,
+    face: FixedFaceHandle<InnerTag>,
+    p: P2,
+) -> Option<(FixedVertexHandle, FixedVertexHandle)> {
+    let own = cdt.face(face).adjacent_edges();
+    let around = own.iter().filter_map(|e| e.rev().face().as_inner()).flat_map(|n| n.adjacent_edges());
+    own.iter().copied().chain(around).find_map(|e| {
+        let ([a, b], [pa, pb]) = (e.vertices().map(|v| v.fix()), e.positions());
+        let in_circle = (p[0] - pa.x) * (p[0] - pb.x) + (p[1] - pa.y) * (p[1] - pb.y) < 0.0;
+        (e.as_undirected().is_constraint_edge() && in_circle).then_some((a, b))
+    })
+}
+
+/// Halve the constraint edge between `a` and `b`.
+fn split_constraint(cdt: &mut Cdt, a: FixedVertexHandle, b: FixedVertexHandle) -> TvResult<()> {
+    let Some(edge) = cdt.get_edge_from_neighbors(a, b).map(|e| e.as_undirected().fix()) else {
+        return Ok(()); // split already
+    };
+    let (pa, pb) = (cdt.vertex(a).position(), cdt.vertex(b).position());
+    // released and added again as two pieces: this also works where rounding puts the midpoint of a slanted
+    // edge a hair off the line
+    cdt.remove_constraint_edge(edge);
+    let mid = ins(cdt, [0.5 * (pa.x + pb.x), 0.5 * (pa.y + pb.y)])?;
+    cdt.add_constraint(a, mid);
+    cdt.add_constraint(mid, b);
+    Ok(())
+}
+
 /// Triangulate. Every PSLG edge becomes constraint edges, so interfaces and conductor edges are
 /// edges of the triangulation.
 pub fn triangulate(pslg: &Pslg, field: &SizeField, st: &Settings<'_>, ctl: &Ctl) -> TvResult<Cdt> {
@@ -119,6 +151,8 @@ pub fn triangulate(pslg: &Pslg, field: &SizeField, st: &Settings<'_>, ctl: &Ctl)
         // at most one new point per neighbourhood and round: a chosen triangle blocks itself and its neighbours
         let mut blocked = vec![false; cdt.num_all_faces()];
         let mut chosen: Vec<P2> = Vec::new();
+        // boundary and interface edges to halve instead of placing a point next to them
+        let mut splits: Vec<(FixedVertexHandle, FixedVertexHandle)> = Vec::new();
         for (_, handle, p) in cand {
             if blocked[handle.index()] {
                 continue;
@@ -130,7 +164,13 @@ pub fn triangulate(pslg: &Pslg, field: &SizeField, st: &Settings<'_>, ctl: &Ctl)
                     blocked[n.fix().index()] = true;
                 }
             }
-            chosen.push(p);
+            match crowded_constraint(&cdt, handle, p) {
+                Some((a, b)) => splits.push((a, b)),
+                None => chosen.push(p),
+            }
+        }
+        for (a, b) in splits {
+            split_constraint(&mut cdt, a, b)?;
         }
         for p in chosen {
             ins(&mut cdt, p)?;
