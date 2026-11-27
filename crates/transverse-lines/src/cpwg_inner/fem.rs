@@ -6,7 +6,7 @@ use transverse_core::fem::{self, FemInput, Level, LevelRun, Order};
 use transverse_core::quasistatic::GridSource;
 use transverse_core::{Ctl, TvResult};
 use transverse_geom::{SIGNAL, SizeSpec};
-use transverse_mesh::Mesh;
+use transverse_mesh::{Hint, Mesh};
 
 use super::{CpwgParams, MeshMode};
 
@@ -25,11 +25,31 @@ pub struct FemOptions {
     pub start_scale: f64,
     pub max_levels: usize,
     pub order: Order,
+    /// Refine where the error indicator is large instead of uniformly (automatic mesh only).
+    pub adaptive: bool,
 }
 
-/// First mesh level: coarse, so that the three levels needed for the error estimate stay cheap.
+/// First mesh level of the uniform refinement: coarse, so that the three levels needed for the error estimate
+/// stay cheap.
 pub const START_SCALE: f64 = 4.0;
+/// Size field of the adaptive refinement (before it refines where needed): fine enough that the coarse
+/// regions, where little energy is stored, still give a smooth image of the field.
+pub const ADAPTIVE_BASE: f64 = 2.0;
 pub const MAX_LEVELS: usize = 12;
+/// Fraction of the squared error indicator that the refined elements carry (Doerfler marking).
+const MARK_FRACTION: f64 = 0.5;
+/// Size targets of refined and of other elements relative to their current longest edge.
+const REFINE_FACTOR: f64 = 0.6;
+const KEEP_FACTOR: f64 = 1.2;
+/// Largest number of adaptive rounds.
+const MAX_ROUNDS: usize = 30;
+
+impl FemOptions {
+    /// Uniform mesh levels instead of adaptive refinement (with the coarse first level they need).
+    pub fn uniform(self) -> Self {
+        Self { adaptive: false, start_scale: START_SCALE, ..self }
+    }
+}
 
 impl CpwgParams {
     pub fn fem_options(&self) -> FemOptions {
@@ -38,9 +58,10 @@ impl CpwgParams {
             max_nodes: self.max_nodes,
             margin: self.margin,
             manual: (self.mesh_mode == MeshMode::Manual).then_some((self.dmin, self.dmax)),
-            start_scale: START_SCALE,
+            start_scale: ADAPTIVE_BASE,
             max_levels: MAX_LEVELS,
             order: Order::P2,
+            adaptive: true,
         }
     }
 }
@@ -73,9 +94,23 @@ pub struct FemSolution {
     pub manual: Option<(f64, f64)>,
     /// Size field of the finest level.
     pub spec: SizeSpec,
+    /// Adaptive mesh: the largest element edge wanted inside each triangle of `mesh`. Shifted copies of the
+    /// structure (conductor loss) are meshed with these targets so that they get alike meshes.
+    pub refined: Option<Vec<f64>>,
 }
 
-pub(super) type Payload = (Mesh, Vec<f64>, Vec<f64>, Vec<[u32; 2]>);
+/// Mesh and potentials of one level.
+pub(super) struct Payload {
+    pub mesh: Mesh,
+    pub v: Vec<f64>,
+    pub v0: Vec<f64>,
+    pub edges: Vec<[u32; 2]>,
+}
+
+fn longest_edge(mesh: &Mesh, t: [u32; 3]) -> f64 {
+    let p = t.map(|i| mesh.pts[i as usize]);
+    (0..3).map(|k| (p[k][0] - p[(k + 1) % 3][0]).hypot(p[k][1] - p[(k + 1) % 3][1])).fold(0.0, f64::max)
+}
 
 /// Per-triangle materials and the fixed potentials of a mesh, owned so that [`FemInput`] can borrow them.
 pub(super) struct InputData {
@@ -123,16 +158,17 @@ pub(super) fn solve_level(
     p: &CpwgParams,
     margin: f64,
     spec: &SizeSpec,
+    hint: Option<Hint<'_>>,
     max_nodes: usize,
     order: Order,
     ctl: &Ctl,
 ) -> TvResult<LevelRun<Payload>> {
     let cs = p.cross_section(margin);
-    let mesh = transverse_mesh::mesh(&cs, spec, max_nodes, ctl)?;
+    let mesh = transverse_mesh::mesh_hinted(&cs, spec, hint, max_nodes, ctl)?;
     let data = InputData::new(&cs, &mesh);
     let s = fem::solve_lumped(&data.input(&mesh), order, ctl)?;
     let nodes = mesh.pts.len();
-    Ok(LevelRun { lumped: s.lumped, nodes, payload: (mesh, s.v, s.v0, s.edges) })
+    Ok(LevelRun { lumped: s.lumped, nodes, payload: Payload { mesh, v: s.v, v0: s.v0, edges: s.edges } })
 }
 
 /// Analyse one geometry with the FEM backend.
@@ -146,18 +182,20 @@ pub fn analyze_fem(p: &CpwgParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<FemS
         // a coarse mesh is enough for the domain-size check, as for the grid (twice the base sizes)
         fem::auto_margin_with(p.initial_margin(), opt.tol_pct, ctl, |m| {
             ctl.msg(&format!("Domain size check: margin {m:.3} mm ..."));
-            Ok(solve_level(p, m, &level_spec(p, m, opt.manual, 2.0), opt.max_nodes, opt.order, ctl)?
+            Ok(solve_level(p, m, &level_spec(p, m, opt.manual, 2.0), None, opt.max_nodes, opt.order, ctl)?
                 .lumped
                 .z0())
         })?
     };
-    let (lumped, (mesh, v, v0, edges), accuracy) = match opt.manual {
+    let mut refined = None;
+    let (lumped, Payload { mesh, v, v0, edges }, accuracy) = match opt.manual {
         Some(sizes) => {
             ctl.msg("Solving (manual mesh) ...");
             let r = solve_level(
                 p,
                 margin,
                 &level_spec(p, margin, Some(sizes), 1.0),
+                None,
                 opt.max_nodes,
                 opt.order,
                 ctl,
@@ -171,11 +209,41 @@ pub fn analyze_fem(p: &CpwgParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<FemS
             };
             (r.lumped, r.payload, acc)
         }
+        None if opt.adaptive => {
+            let spec = level_spec(p, margin, None, opt.start_scale);
+            let cs = p.cross_section(margin);
+            let mut sizes: Vec<f64> = Vec::new();
+            let r = fem::converge_adaptive(opt.tol_pct, MAX_ROUNDS, ctl, |round, prev: Option<&Payload>| {
+                let Some(prev) = prev else {
+                    return solve_level(p, margin, &spec, None, opt.max_nodes, opt.order, ctl);
+                };
+                let data = InputData::new(&cs, &prev.mesh);
+                let eta = fem::error_indicators(&data.input(&prev.mesh), &prev.edges, &prev.v)?;
+                let marked = fem::mark(&eta, MARK_FRACTION);
+                // targets: the previous ones (or the current element sizes), smaller where marked
+                sizes = prev
+                    .mesh
+                    .tris
+                    .iter()
+                    .zip(&marked)
+                    .map(|(t, m)| longest_edge(&prev.mesh, *t) * if *m { REFINE_FACTOR } else { KEEP_FACTOR })
+                    .collect();
+                let hint = Hint { pts: &prev.mesh.pts, tris: &prev.mesh.tris, size: &sizes };
+                ctl.msg(&format!(
+                    "Adaptive refinement round {round}: {} elements marked",
+                    marked.iter().filter(|m| **m).count()
+                ));
+                solve_level(p, margin, &spec, Some(hint), opt.max_nodes, opt.order, ctl)
+            })?;
+            refined = Some(adapted_sizes(&r.1.mesh));
+            r
+        }
         None => fem::converge(opt.tol_pct, opt.max_levels, opt.start_scale, ctl, |scale, _| {
-            solve_level(p, margin, &level_spec(p, margin, None, scale), opt.max_nodes, opt.order, ctl)
+            solve_level(p, margin, &level_spec(p, margin, None, scale), None, opt.max_nodes, opt.order, ctl)
         })?,
     };
-    let final_scale = accuracy.scales.last().copied().unwrap_or(1.0);
+    let final_scale =
+        if refined.is_some() { opt.start_scale } else { accuracy.scales.last().copied().unwrap_or(1.0) };
     Ok(FemSolution {
         c: lumped.c,
         c0: lumped.c0,
@@ -193,5 +261,11 @@ pub fn analyze_fem(p: &CpwgParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<FemS
         final_scale,
         manual: opt.manual,
         spec: level_spec(p, margin, opt.manual, final_scale),
+        refined,
     })
+}
+
+/// Size targets that reproduce a mesh: the longest edge of each of its triangles.
+fn adapted_sizes(mesh: &Mesh) -> Vec<f64> {
+    mesh.tris.iter().map(|t| longest_edge(mesh, *t)).collect()
 }

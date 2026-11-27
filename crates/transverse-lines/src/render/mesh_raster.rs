@@ -2,7 +2,7 @@
 //! colour scales and legends as the grid ([`super::raster`]); each pixel is looked up in the mesh.
 
 use transverse_core::fem::p2_values;
-use transverse_core::postproc::percentile;
+use transverse_core::postproc::weighted_percentile;
 
 use super::raster::{FieldMode, Probe, Raster, RasterSpec, Scale, V_PER_M};
 use crate::mesh_field::MeshFieldData;
@@ -24,9 +24,12 @@ pub fn render_mesh(f: &MeshFieldData, spec: &RasterSpec) -> Raster {
         let p = f.pts[k];
         p[0] >= sx0 && p[0] <= sx1 && p[1] >= sy0 && p[1] <= sy1
     };
+    // each node counts with the area around it: the mesh is much denser at conductor edges than elsewhere
+    let area = f.node_areas();
     let e_hi = || {
-        let view = percentile((0..e_nodal.len()).filter(|&k| in_view(k)).map(|k| e_nodal[k]), 99.7);
-        view.or_else(|| percentile(e_nodal.iter().copied(), 99.7)).unwrap_or(1.0).max(1e-30)
+        let all = |k: usize| (e_nodal[k], area[k]);
+        let view = weighted_percentile((0..e_nodal.len()).filter(|&k| in_view(k)).map(all), 99.7);
+        view.or_else(|| weighted_percentile((0..e_nodal.len()).map(all), 99.7)).unwrap_or(1.0).max(1e-30)
     };
     let range = |a: &mut dyn Iterator<Item = f64>| {
         a.fold((f64::INFINITY, f64::NEG_INFINITY), |r, v| (r.0.min(v), r.1.max(v)))

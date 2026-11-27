@@ -8,6 +8,8 @@
 use transverse_core::losses::LossModel;
 use transverse_core::{Ctl, TvResult};
 
+use transverse_mesh::Hint;
+
 use super::fem::{FemSolution, solve_level};
 use super::{CpwgParams, GapMode, MeshMode};
 
@@ -42,7 +44,8 @@ pub fn wheeler_dzdn_fem(p: &CpwgParams, sol: &FemSolution, max_nodes: usize, ctl
         // the same absolute sizes as the finest level of the main solution (the shifted geometry would have its
         // own base sizes, a few percent different, and its own mesh noise)
         let spec = q.size_spec_like(q.margin, &sol.spec);
-        let run = solve_level(&q, q.margin, &spec, max_nodes, sol.order, ctl)?;
+        let hint = sol.refined.as_ref().map(|size| Hint { pts: &sol.mesh.pts, tris: &sol.mesh.tris, size });
+        let run = solve_level(&q, q.margin, &spec, hint, max_nodes, sol.order, ctl)?;
         Ok(run.lumped.z0())
     };
     Ok((z(dn)? - z(-dn)?) / (2.0 * dn * 1e-3))

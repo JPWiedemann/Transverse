@@ -1,8 +1,26 @@
 //! The size field: how large an element may be at a point.
 
+use transverse_core::postproc::mesh::TriIndex;
 use transverse_geom::{P2, SizeSpec};
 
 use crate::planar::{Pslg, project};
+
+/// Local size targets taken from an earlier mesh: one size per triangle of it. Used for adaptive refinement
+/// (smaller targets where the error is large) and to mesh shifted copies of a structure alike.
+#[derive(Clone, Copy)]
+pub struct Hint<'a> {
+    pub pts: &'a [P2],
+    pub tris: &'a [[u32; 3]],
+    /// Largest element edge wanted inside each triangle.
+    pub size: &'a [f64],
+}
+
+struct HintField {
+    pts: Vec<P2>,
+    tris: Vec<[u32; 3]>,
+    size: Vec<f64>,
+    index: TriIndex,
+}
 
 /// Target element size, small at conductor edges and growing with the distance from them
 /// (`SizeSpec::at_distance`). Distances are measured to the pieces of conductor boundary in the PSLG;
@@ -10,17 +28,30 @@ use crate::planar::{Pslg, project};
 pub struct SizeField {
     segs: Vec<(P2, P2)>,
     spec: SizeSpec,
+    hint: Option<HintField>,
 }
 
 impl SizeField {
     pub fn new(pslg: &Pslg, spec: SizeSpec) -> Self {
+        Self::with_hint(pslg, spec, None)
+    }
+
+    /// With local targets from `hint`: the size is the smaller of the size field and the target of the triangle
+    /// of the earlier mesh that contains the point (no restriction where there is none).
+    pub fn with_hint(pslg: &Pslg, spec: SizeSpec, hint: Option<Hint<'_>>) -> Self {
         let segs = pslg
             .edges
             .iter()
             .filter(|e| e.owner.is_some_and(|o| o.rank >= 0))
             .map(|e| (pslg.pts[e.a as usize], pslg.pts[e.b as usize]))
             .collect();
-        Self { segs, spec }
+        let hint = hint.map(|h| HintField {
+            index: TriIndex::new(h.pts, h.tris),
+            pts: h.pts.to_vec(),
+            tris: h.tris.to_vec(),
+            size: h.size.to_vec(),
+        });
+        Self { segs, spec, hint }
     }
 
     /// Distance to the nearest conductor edge (infinite without conductors).
@@ -29,7 +60,11 @@ impl SizeField {
     }
 
     pub fn at(&self, p: P2) -> f64 {
-        self.spec.at_distance(self.distance(p), self.spec.core_distance(p))
+        let base = self.spec.at_distance(self.distance(p), self.spec.core_distance(p));
+        match &self.hint {
+            Some(h) => h.index.locate(&h.pts, &h.tris, p).map_or(base, |l| base.min(h.size[l.tri])),
+            None => base,
+        }
     }
 }
 

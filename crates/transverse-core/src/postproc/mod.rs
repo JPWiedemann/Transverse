@@ -71,9 +71,37 @@ pub fn percentile(values: impl Iterator<Item = f64>, q: f64) -> Option<f64> {
     Some(v[lo] + (v[hi] - v[lo]) * (pos - lo as f64))
 }
 
+/// Percentile of finite `(value, weight)` pairs: the smallest value below which the weights add up to `q` percent
+/// of the total (so a region with many samples counts as much as its weight, not its number of samples).
+pub fn weighted_percentile(values: impl Iterator<Item = (f64, f64)>, q: f64) -> Option<f64> {
+    let mut v: Vec<(f64, f64)> = values.filter(|(x, w)| x.is_finite() && *w > 0.0).collect();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let target = q / 100.0 * v.iter().map(|x| x.1).sum::<f64>();
+    let mut acc = 0.0;
+    for (x, w) in &v {
+        acc += w;
+        if acc >= target {
+            return Some(*x);
+        }
+    }
+    v.last().map(|x| x.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weighted_percentile_ignores_how_densely_a_region_is_sampled() {
+        // 90 samples of 1 with weight 1 in total 9, one sample of 100 with weight 1: the top 10 % of the weight
+        let v: Vec<(f64, f64)> = (0..90).map(|_| (1.0, 0.1)).chain([(100.0, 1.0)]).collect();
+        assert_eq!(weighted_percentile(v.iter().copied(), 50.0), Some(1.0));
+        assert_eq!(weighted_percentile(v.iter().copied(), 99.0), Some(100.0));
+        assert_eq!(weighted_percentile(std::iter::empty(), 50.0), None);
+    }
 
     fn grid() -> (Vec<f64>, Vec<f64>) {
         (vec![0.0, 0.1, 0.3, 0.7, 1.5, 2.0], vec![-1.0, -0.9, -0.5, 0.0, 0.2])

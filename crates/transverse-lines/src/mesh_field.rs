@@ -78,6 +78,19 @@ impl MeshFieldData {
         self.e_nodal.iter().map(|e| e[0].hypot(e[1])).collect()
     }
 
+    /// A third of the area of the triangles around each node.
+    pub fn node_areas(&self) -> Vec<f64> {
+        let mut a = vec![0.0; self.pts.len()];
+        for t in &self.tris {
+            let [p, q, r] = t.map(|i| self.pts[i as usize]);
+            let area = 0.5 * ((q[0] - p[0]) * (r[1] - p[1]) - (r[0] - p[0]) * (q[1] - p[1])).abs();
+            for &n in t {
+                a[n as usize] += area / 3.0;
+            }
+        }
+        a
+    }
+
     pub fn er_at(&self, p: [f64; 2]) -> Option<f64> {
         Some(self.tri_er[self.locate(p)?.tri])
     }

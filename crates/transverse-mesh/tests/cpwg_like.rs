@@ -349,3 +349,40 @@ fn perturbed_geometries_keep_area_conformity_and_angles() {
         }
     }
 }
+
+#[test]
+fn a_hint_refines_where_it_asks_and_nowhere_else() {
+    use transverse_mesh::{Hint, mesh_hinted};
+    let g = Geo::stackup();
+    let (cs, spec) = (g.section(), g.spec().scaled(2.0));
+    let base = mesh(&cs, &spec, 1_000_000, &Ctl::new()).unwrap();
+    // ask for a quarter of the size in the triangles right of the strip centre, keep the others
+    let size: Vec<f64> = base
+        .tris
+        .iter()
+        .map(|t| {
+            let p = t.map(|i| base.pts[i as usize]);
+            let long = (0..3)
+                .map(|k| (p[k][0] - p[(k + 1) % 3][0]).hypot(p[k][1] - p[(k + 1) % 3][1]))
+                .fold(0.0, f64::max);
+            let cx = (p[0][0] + p[1][0] + p[2][0]) / 3.0;
+            if cx > 0.5 { 0.25 * long } else { 1.5 * long }
+        })
+        .collect();
+    let hint = Hint { pts: &base.pts, tris: &base.tris, size: &size };
+    let fine = mesh_hinted(&cs, &spec, Some(hint), 1_000_000, &Ctl::new()).unwrap();
+    let count = |m: &Mesh, right: bool| {
+        m.tris
+            .iter()
+            .filter(|t| {
+                let cx = t.iter().map(|&i| m.pts[i as usize][0]).sum::<f64>() / 3.0;
+                (cx > 0.5) == right
+            })
+            .count()
+    };
+    assert!(count(&fine, true) > 6 * count(&base, true), "{} vs {}", count(&fine, true), count(&base, true));
+    // the left half is not made finer than the size field asks (it may be coarser than before, never much finer)
+    assert!(count(&fine, false) < 2 * count(&base, false));
+    assert!((total_area(&fine) / total_area(&base) - 1.0).abs() < 1e-12);
+    assert!(min_angle_deg(&fine) > 24.0);
+}
