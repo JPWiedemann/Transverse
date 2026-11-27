@@ -31,6 +31,8 @@ const MARGIN: f64 = 0.25;
 const RERENDER_RATIO: (f64, f64) = (0.6, 1.4);
 /// Height reserved for the title (two lines) and the readout line, so toggling options never
 /// changes the plot size.
+/// Mesh edges drawn at most (a finite-element mesh has tens of thousands of them).
+const MESH_EDGE_LIMIT: usize = 300_000;
 const READOUT_HEIGHT: f32 = 24.0;
 
 /// Field lines as polylines in mm.
@@ -307,6 +309,21 @@ impl FieldView {
         // title: always two lines, so showing the mesh info does not resize the plot
         let mut title = format!("{}  -  1 V on signal, Z0 = {:.2} Ohm\n", self.mode.label(), f.z0);
         match (show_mesh, acc) {
+            (true, Some(a)) if f.mesh.is_some() => {
+                // a triangle mesh: no grid size, and its shortest edge is far below the size of the view
+                let (small, small_f) = auto_length_unit(units, a.dmin_actual);
+                title += &format!(
+                    "mesh {} nodes (finite elements), min. edge {} {}",
+                    a.nodes,
+                    format_sig(a.dmin_actual / small_f, 3),
+                    small
+                );
+                // an empty overlay must say why (the view of the last frame decides, as for the image)
+                let shown = self.plot_bounds.unwrap_or(f.view_zoom);
+                if f.mesh_edges(shown).is_some_and(|e| e.len() > MESH_EDGE_LIMIT) {
+                    title += " - zoom in to see the triangles";
+                }
+            }
             (true, Some(a)) => {
                 title += &format!(
                     "mesh {} x {} = {} nodes (finest level), min. cell {} {}",
@@ -471,11 +488,23 @@ impl FieldView {
                 let (y_lo, y_hi) = (a[1].max(f.y[0]), b[1].min(f.y[f.ny() - 1]));
                 let (x_lo, x_hi) = (a[0].max(f.x[0]), b[0].min(f.x[f.nx() - 1]));
                 let mut segs = Vec::new();
-                for &x in f.x.iter().filter(|&&x| x >= a[0] && x <= b[0]) {
-                    segs.push(Shape::line_segment([to_screen([x, y_lo]), to_screen([x, y_hi])], stroke));
-                }
-                for &y in f.y.iter().filter(|&&y| y >= a[1] && y <= b[1]) {
-                    segs.push(Shape::line_segment([to_screen([x_lo, y]), to_screen([x_hi, y])], stroke));
+                if let Some(edges) = f.mesh_edges([a[0], b[0], a[1], b[1]]) {
+                    // too many triangles to see (and to draw) when zoomed out: show them from this many on
+                    if edges.len() <= MESH_EDGE_LIMIT {
+                        for e in edges {
+                            segs.push(Shape::line_segment(
+                                [to_screen([e[0], e[1]]), to_screen([e[2], e[3]])],
+                                stroke,
+                            ));
+                        }
+                    }
+                } else {
+                    for &x in f.x.iter().filter(|&&x| x >= a[0] && x <= b[0]) {
+                        segs.push(Shape::line_segment([to_screen([x, y_lo]), to_screen([x, y_hi])], stroke));
+                    }
+                    for &y in f.y.iter().filter(|&&y| y >= a[1] && y <= b[1]) {
+                        segs.push(Shape::line_segment([to_screen([x_lo, y]), to_screen([x_hi, y])], stroke));
+                    }
                 }
                 painter.extend(segs);
             }
@@ -580,14 +609,42 @@ mod tests {
     }
 
     fn analysis(open: bool) -> (FieldData, Accuracy) {
+        analysis_with(open, false)
+    }
+
+    fn analysis_with(open: bool, fem: bool) -> (FieldData, Accuracy) {
         let m = CpwgInner;
         let mut set: ParamSet = m.defaults();
+        if fem {
+            set.set("solver", ParamValue::Num(1.0));
+        }
         if open {
             set.set("plane1", ParamValue::Bool(false));
             set.set("fence1", ParamValue::Bool(false));
         }
         let a = m.analyze(&set, &Ctl::new()).unwrap();
         (a.field.unwrap(), a.accuracy.unwrap())
+    }
+
+    #[test]
+    fn a_finite_element_result_renders_in_every_mode_with_its_triangle_mesh() {
+        let ctx = egui::Context::default();
+        let (f, acc) = analysis_with(false, true);
+        assert!(f.mesh.is_some() && acc.nx == 0);
+        let mut view = FieldView::default();
+        view.new_result();
+        view.show_mesh = true;
+        for mode in FieldMode::ALL {
+            for pending in [f.view_zoom, f.view_full] {
+                view.mode = mode;
+                view.pending_view = Some(pending);
+                run_frame(&ctx, &mut view, &f, Some(&acc), None);
+                run_frame(&ctx, &mut view, &f, Some(&acc), Some(Pos2::new(500.0, 350.0)));
+            }
+        }
+        view.mode = FieldMode::EDbLines;
+        frames(&ctx, &mut view, &f, &acc, 2);
+        assert!(view.render.as_ref().unwrap().lines.len() > 20);
     }
 
     fn close(a: Bounds, b: Bounds) -> bool {

@@ -333,3 +333,112 @@ fn split_summary_carries_what_the_return_current_tab_needs() {
     let info = &o.modes[0].split.as_ref().unwrap().info;
     assert!(info.contains("Domain boundary") && info.contains("NOT well below t"), "{info}");
 }
+
+// ---- the finite-element solver through the generic interface
+
+fn fem_set() -> ParamSet {
+    let mut s = CpwgInner.defaults();
+    s.set("solver", ParamValue::Num(1.0));
+    s
+}
+
+#[test]
+fn the_solver_choice_runs_the_finite_elements_and_gives_the_same_results() {
+    let (fd, fem) = (
+        CpwgInner.analyze(&CpwgInner.defaults(), &Ctl::new()).unwrap(),
+        CpwgInner.analyze(&fem_set(), &Ctl::new()).unwrap(),
+    );
+    let (a, b) = (&fd.modes[0], &fem.modes[0]);
+    assert!(rel(b.z0, a.z0) < 1e-3 && rel(b.eps_eff, a.eps_eff) < 1e-3, "{} vs {}", b.z0, a.z0);
+    assert!(rel(b.at_f.alpha_c, a.at_f.alpha_c) < 1e-3 && rel(b.at_f.alpha_d, a.at_f.alpha_d) < 1e-3);
+    let (sa, sb) = (a.split.as_ref().unwrap(), b.split.as_ref().unwrap());
+    assert_eq!(sa.rows.len(), sb.rows.len());
+    for (x, y) in sa.rows.iter().zip(&sb.rows) {
+        assert!(
+            (x.field_pct - y.field_pct).abs() < 0.5 && (x.current_pct - y.current_pct).abs() < 0.5,
+            "{}",
+            x.key
+        );
+    }
+    assert!(fem.report.contains("finite elements") && !fd.report.contains("finite elements"));
+    assert!(fem.report.contains("Accuracy"));
+    // the accuracy record of a triangle mesh has no grid size
+    let acc = fem.accuracy.unwrap();
+    assert!(acc.nodes > 1000 && acc.nx == 0 && acc.ny == 0 && acc.dmin_actual > 0.0);
+    assert!(acc.est_err.unwrap() < 5e-3);
+}
+
+#[test]
+fn mesh_field_data_answers_the_same_questions_as_grid_field_data() {
+    let f = CpwgInner.analyze(&fem_set(), &Ctl::new()).unwrap().field.unwrap();
+    let g = final_stackup_field();
+    assert!(f.mesh.is_some() && g.mesh.is_none() && g.mesh_edges(g.view_zoom).is_none());
+    assert_eq!(f.conductors.len(), g.conductors.len());
+    assert_eq!(f.view_zoom, g.view_zoom);
+    // the extent is in x and y, so that frontends can clip to it
+    assert!(f.x[0] <= f.view_zoom[0] && f.x[1] >= f.view_zoom[1] && f.y[0] < f.y[1]);
+    let grid_extent = [g.x[0], g.x[g.x.len() - 1], g.y[0], g.y[g.y.len() - 1]];
+    for (a, b) in [f.x[0], f.x[1], f.y[0], f.y[1]].into_iter().zip(grid_extent) {
+        assert!((a - b).abs() < 1e-12 * (g.x[g.x.len() - 1] - g.x[0]), "{a} vs {b}");
+    }
+    let lines = f.field_lines(f.view_zoom, (1.0, 1.0));
+    assert!(lines.len() > 20);
+    assert_eq!(f.equipotentials(&[0.3, 0.6]).len(), 2);
+    // mesh edges: all of them for the whole view, fewer for a small window
+    let all = f.mesh_edges(f.view_full).unwrap();
+    let w = f.mesh_edges([-0.1, 0.1, -0.05, 0.05]).unwrap();
+    assert!(all.len() > 3000 && !w.is_empty() && w.len() < all.len() / 4, "{} / {}", w.len(), all.len());
+    // the raster and the probe work on the mesh through the grid interface
+    use transverse_lines::render::raster::{FieldMode, RasterSpec, probe, render};
+    let spec = RasterSpec {
+        mode: FieldMode::EDb,
+        view: f.view_zoom,
+        scale_view: f.view_zoom,
+        system: transverse_core::units::UnitSystem::Metric,
+        db_range: 40.0,
+        width: 200,
+    };
+    let e = f.e_field(false);
+    let r = render(&f, &e, &spec);
+    assert!(r.width == 200 && r.rgba.chunks(4).filter(|p| p[3] != 0).count() > r.width * r.height / 3);
+    assert!(probe(&f, &e, 0.0, -0.1).is_some_and(|p| !p.in_conductor && p.v > 0.5));
+}
+
+#[test]
+fn synthesis_with_the_finite_elements_finds_the_reference_width() {
+    let mut s = fem_set();
+    s.set("w", ParamValue::Num(0.2));
+    let (set, a) = CpwgInner.synthesize(&s, "w", 35.0, None, &Ctl::new()).unwrap();
+    let w = CpwgParams::from_set(&set).unwrap().w;
+    // the reference (grid) result is w = 0.3605 mm for 35 Ohm
+    assert!(rel(w, 0.3605) < 3e-3, "w = {w}");
+    assert!(rel(a.modes[0].z0, 35.0) < 2e-3, "z0 = {}", a.modes[0].z0);
+    assert!(a.field.unwrap().mesh.is_some());
+    // the solver choice survives in the returned parameters
+    assert_eq!(CpwgParams::from_set(&set).unwrap().solver, transverse_lines::cpwg_inner::Solver::Fem);
+}
+
+/// The drawing must not cover any of the solved region: conductors are drawn where the solution has none.
+#[test]
+fn via_fences_are_drawn_outside_the_wall_they_stand_for() {
+    let p = CpwgParams::default();
+    let wall = p.w / 2.0 + p.s + p.g;
+    for set in [CpwgInner.defaults(), fem_set()] {
+        let f = CpwgInner.analyze(&set, &Ctl::new()).unwrap().field.unwrap();
+        // the fences are the narrow upright rectangles
+        let fences: Vec<_> = f.conductors.iter().filter(|c| c.y1 - c.y0 > 4.0 * (c.x1 - c.x0)).collect();
+        assert_eq!(fences.len(), 4);
+        for c in &fences {
+            let inner = c.x0.abs().min(c.x1.abs());
+            assert!((inner - wall).abs() < 1e-12 * wall && c.x0 < c.x1, "{c:?}, wall at {wall}");
+        }
+        // the closed structure ends at the walls; planes and coplanar ground close the corners, and the full
+        // view shows the fences completely
+        assert!((f.x[f.x.len() - 1] - wall).abs() < 1e-12 * wall);
+        let face = fences.iter().map(|c| c.x1).fold(0.0, f64::max);
+        assert!(face > wall && f.view_full[1] >= face && f.view_full[0] <= -face);
+        let widest = f.conductors.iter().map(|c| c.x1).fold(0.0, f64::max);
+        assert_eq!(widest, face);
+        assert_eq!(f.conductors.iter().filter(|c| c.x1 == face && c.x1 - c.x0 > c.y1 - c.y0).count(), 3);
+    }
+}

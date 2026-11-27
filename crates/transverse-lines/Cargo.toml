@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 transverse-core.workspace = true
+transverse-geom.workspace = true
+transverse-mesh.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

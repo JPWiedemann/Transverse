@@ -3,6 +3,7 @@
 pub mod control;
 pub mod error;
 pub mod fd2d;
+pub mod fem;
 pub mod losses;
 pub mod postproc;
 pub mod quasistatic;

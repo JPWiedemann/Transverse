@@ -22,7 +22,7 @@ let worst = 0;
 function close(what, got, want, tol = TOL) {
   checks += 1;
   const err = Math.abs(got - want) / Math.max(Math.abs(want), 1e-300);
-  worst = Math.max(worst, err);
+  if (tol <= TOL) worst = Math.max(worst, err); // the looser checks (finite elements) are not part of the parity figure
   if (!(err <= tol)) {
     failures += 1;
     console.error(`FAIL ${what}: got ${got}, want ${want} (rel. error ${err.toExponential(2)})`);
@@ -108,6 +108,37 @@ for (const c of cases.synthesis) {
   close('phase synthesis: phase', m.phase_deg, 90);
   close('phase synthesis: z0 still reached', m.z0, c.z0);
   a.free();
+}
+
+// the finite-element solver through the same interface: the default stack-up against the grid reference value,
+// the field as a triangle mesh (edges for the overlay), a raster and a probe on it
+{
+  const c = cases.cases.find((k) => k.name === 'final_stackup');
+  const set = toSet(c.params);
+  set.solver = 1;
+  const a = analyze(LINE, JSON.stringify(set), undefined);
+  const s = JSON.parse(a.summary());
+  const m = s.modes[0];
+  close('fem z0 against the grid reference', m.z0, c.z0, 1e-3);
+  close('fem eps_eff', m.eps_eff, c.eeff, 1e-3);
+  close('fem alpha_c', m.at_f.alpha_c, c.loss.alpha_c, 1e-3);
+  same('fem accuracy has no grid size', s.accuracy.nx === 0 && s.accuracy.nodes > 1000, true);
+  const info = JSON.parse(a.field_info());
+  same('fem field is a mesh', info.mesh, true);
+  const edges = a.field_mesh_edges(new Float64Array(info.view_full));
+  same('fem mesh edges are segments', edges.length > 4000 && edges.length % 4 === 0, true);
+  same('fem mesh edges of a small window', a.field_mesh_edges(new Float64Array([-0.1, 0.1, -0.05, 0.05])).length < edges.length / 4, true);
+  const r = a.field_raster('e_db_lines', info.view_zoom, info.view_zoom, false, 40, 300);
+  same('fem raster bytes', r.rgba().length, r.width() * r.height() * 4);
+  r.free();
+  const [x0, x1, y0, y1] = info.view_zoom;
+  same('fem probe', JSON.parse(a.field_probe((x0 + x1) / 2, (y0 + y1) / 2)) !== null, true);
+  same('fem field lines', JSON.parse(a.field_lines(new Float64Array(info.view_zoom), 1, 1)).length > 20, true);
+  a.free();
+  // the grid solution has no triangle edges
+  const g = analyze(LINE, JSON.stringify(toSet(c.params)), undefined);
+  same('grid field has no mesh edges', g.field_mesh_edges(new Float64Array(JSON.parse(g.field_info()).view_full)).length, 0);
+  g.free();
 }
 
 console.log(`${checks} checks, ${failures} failed, worst relative deviation ${worst.toExponential(2)}`);

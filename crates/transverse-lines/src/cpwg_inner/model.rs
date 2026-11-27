@@ -4,10 +4,14 @@ use transverse_core::units::format_g;
 use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
-    CpwgAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SchematicFlags, SynthVar,
-    analysis_from_solution, field_data, full_analysis, report, schematic, synthesize,
+    CpwgAnalysis, CpwgFemAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SchematicFlags,
+    Solver, Split, SynthVar, analysis_from_solution, fem_accuracy, field_data, field_data_fem, full_analysis,
+    full_analysis_fem, ground_split_fem, loss_model_fem, report, report_fem, schematic, synthesize,
+    synthesize_fem,
 };
 use crate::model::*;
+use transverse_core::losses::LossModel;
+use transverse_core::quasistatic::Accuracy;
 
 const GEO: &str = "Geometry";
 const UP: &str = "Upper dielectric / plane 1";
@@ -36,9 +40,10 @@ const fn num(default: f64, unit: &'static str) -> ParamKind {
 
 const GAP_CHOICES: &[&str] = &["upper", "lower", "custom"];
 const MESH_CHOICES: &[&str] = &["Auto (target error)", "Manual"];
+const SOLVER_CHOICES: &[&str] = &["Finite differences", "Finite elements"];
 
 /// Parameter form of the CPWG line (defaults equal [`CpwgParams::default`]).
-static SPECS: [ParamSpec; 28] = [
+static SPECS: [ParamSpec; 29] = [
     spec("w", "Trace width w", GEO, len(0.3605, "mm")),
     spec("s", "Gap s", GEO, len(0.11, "mm")),
     spec("t", "Copper thickness t", GEO, len(0.018, "µm")),
@@ -60,6 +65,7 @@ static SPECS: [ParamSpec; 28] = [
     spec("rq", "Roughness Rq", COND, len(0.0, "µm")),
     spec("f", "Frequency", FREQ, ParamKind::Frequency { default_hz: 1e9, unit: "GHz" }),
     spec("length", "Line length", FREQ, len(100.0, "mm")),
+    spec("solver", "Solver", MESH, ParamKind::Choice(SOLVER_CHOICES, 0)),
     spec("mesh_mode", "Mode", MESH, ParamKind::Choice(MESH_CHOICES, 0)),
     spec("tol", "Target error", MESH, num(0.5, "%")),
     when(
@@ -116,6 +122,7 @@ impl CpwgParams {
         let d = Self::default();
         let gap_mode = [GapMode::Upper, GapMode::Lower, GapMode::Custom][get_choice(s, "gap_mode", 0, 3)?];
         let mesh_mode = [MeshMode::Auto, MeshMode::Manual][get_choice(s, "mesh_mode", 0, 2)?];
+        let solver = [Solver::Fd, Solver::Fem][get_choice(s, "solver", 0, 2)?];
         let max_nodes = get_num(s, "max_nodes", d.max_nodes as f64)?;
         if max_nodes < 1.0 || max_nodes.fract() != 0.0 {
             return Err(TvError::InvalidParam("max_nodes must be a positive integer".into()));
@@ -142,6 +149,7 @@ impl CpwgParams {
             rq: get_num(s, "rq", d.rq)?,
             f: get_num(s, "f", d.f)?,
             length: get_num(s, "length", d.length)?,
+            solver,
             mesh_mode,
             tol: get_num(s, "tol", d.tol)?,
             dmin: get_num(s, "dmin", d.dmin)?,
@@ -191,12 +199,13 @@ impl CpwgParams {
         }
         s.set("gap_mode", Num(self.gap_mode as usize as f64));
         s.set("mesh_mode", Num(self.mesh_mode as usize as f64));
+        s.set("solver", Num(self.solver as usize as f64));
         s
     }
 }
 
-fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
-    let (fd, cur) = (&a.split.field, &a.split.current);
+fn split_summary(p: &CpwgParams, split: &Split, loss: &LossModel, margin: f64) -> SplitSummary {
+    let (fd, cur) = (&split.field, &split.current);
     let row = |c: GroundCat, indent: u8| SplitRow {
         key: c.key().into(),
         label: c.label().into(),
@@ -234,10 +243,10 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
         rows.push(row(GroundCat::Boundary, 0));
     }
     let mut x90 = Vec::new();
-    if let Some(x) = a.split.x90_planes {
+    if let Some(x) = split.x90_planes {
         x90.push(("90 % of plane current within |x| <=".to_string(), x));
     }
-    x90.push(("90 % of coplanar current within (from the gap edge)".to_string(), a.split.x90_cop));
+    x90.push(("90 % of coplanar current within (from the gap edge)".to_string(), split.x90_cop));
 
     let (w2, sw) = (p.w / 2.0, p.w / 2.0 + p.s);
     let plot = ProfilePlot {
@@ -245,20 +254,20 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
             "HF return-current density (coplanar gap flank {:.1} %, not shown as a curve)",
             cur.get(GroundCat::CopFlank)
         ),
-        half_width: (sw + p.g.min(1.5 * sw)).min(p.geometry(a.sol.accuracy.margin).xd),
+        half_width: (sw + p.g.min(1.5 * sw)).min(p.geometry(margin).xd),
         signal: Some([-w2, w2]),
         markers: vec![-sw, -w2, w2, sw],
         labels: vec![(0.0, "signal".into()), (-(w2 + p.s / 2.0), "s".into()), (w2 + p.s / 2.0, "s".into())],
     };
-    let delta_um = a.loss.at(p.f).delta * 1e6;
+    let delta_um = loss.at(p.f).delta * 1e6;
     let valid = p.t > 0.0 && delta_um * 1e-3 < p.t / 3.0;
     let mut info = String::new();
-    if let Some(x) = a.split.x90_planes {
+    if let Some(x) = split.x90_planes {
         info += &format!("90 % of the plane return current flows within |x| <= {x:.3} mm; ");
     }
     info += &format!(
         "90 % of the coplanar return current within {:.3} mm of the gap edge.\nE-field share = where the field lines end (solution with dielectrics). Return current = HF distribution (skin depth << t). Skin depth at {} GHz: {:.2} um -> {}",
-        a.split.x90_cop,
+        split.x90_cop,
         format_g(p.f / 1e9),
         delta_um,
         if valid { "valid." } else { "NOT well below t: the real current spreads more widely." }
@@ -272,8 +281,7 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
         GroundCat::CopBottom => "Coplanar bottom face",
         _ => c.label(),
     };
-    let profiles = a
-        .split
+    let profiles = split
         .profiles
         .iter()
         .map(|pr| CurrentProfile {
@@ -294,28 +302,73 @@ fn split_summary(p: &CpwgParams, a: &CpwgAnalysis) -> SplitSummary {
     SplitSummary { rows, x90, profiles, plot, info }
 }
 
-fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
-    let wavelength_mm = guided_wavelength_mm(p.f, a.sol.eeff);
+/// The solver-independent parts of a result.
+struct Parts {
+    z0: f64,
+    eeff: f64,
+    l: f64,
+    c: f64,
+    margin: f64,
+    report: String,
+    field: FieldData,
+    accuracy: Accuracy,
+}
+
+fn assemble(p: &CpwgParams, parts: Parts, loss: LossModel, split: &Split) -> Analysis {
+    let wavelength_mm = guided_wavelength_mm(p.f, parts.eeff);
     let mode = ModeResult {
         name: "single".into(),
-        z0: a.sol.z0,
-        eps_eff: a.sol.eeff,
-        l: a.sol.l,
-        c: a.sol.c,
+        z0: parts.z0,
+        eps_eff: parts.eeff,
+        l: parts.l,
+        c: parts.c,
         f_hz: p.f,
         wavelength_mm,
         phase_deg: phase_deg(p.length, wavelength_mm),
-        at_f: a.loss.at(p.f),
-        split: Some(split_summary(p, &a)),
+        at_f: loss.at(p.f),
+        split: Some(split_summary(p, split, &loss, parts.margin)),
     };
     Analysis {
-        report: report(title, p, &a),
-        field: Some(field_data(p, &a.sol)),
-        accuracy: Some(a.sol.accuracy.clone()),
-        freq: Box::new(a.loss),
+        report: parts.report,
+        field: Some(parts.field),
+        accuracy: Some(parts.accuracy),
+        freq: Box::new(loss),
         modes: vec![mode],
     }
 }
+
+fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
+    let s = &a.sol;
+    let parts = Parts {
+        z0: s.z0,
+        eeff: s.eeff,
+        l: s.l,
+        c: s.c,
+        margin: s.accuracy.margin,
+        report: report(title, p, &a),
+        field: field_data(p, s),
+        accuracy: s.accuracy.clone(),
+    };
+    assemble(p, parts, a.loss, &a.split)
+}
+
+fn to_analysis_fem(title: &str, p: &CpwgParams, a: CpwgFemAnalysis) -> TvResult<Analysis> {
+    let s = &a.sol;
+    let parts = Parts {
+        z0: s.z0,
+        eeff: s.eeff,
+        l: s.l,
+        c: s.c,
+        margin: s.margin,
+        report: report_fem(title, p, &a),
+        field: FieldData::from_mesh(field_data_fem(p, s)?),
+        accuracy: fem_accuracy(s),
+    };
+    Ok(assemble(p, parts, a.loss, &a.split))
+}
+
+/// Completes a synthesis: losses, split and the generic result for the geometry that was found.
+type Finish<'a> = Box<dyn FnOnce(&CpwgParams, &str) -> TvResult<Analysis> + 'a>;
 
 /// CPWG / stripline-type coplanar waveguide in a PCB inner layer.
 pub struct CpwgInner;
@@ -355,8 +408,10 @@ impl LineModel for CpwgInner {
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis> {
         let p = CpwgParams::from_set(p)?;
-        let a = full_analysis(&p, ctl)?;
-        Ok(to_analysis("Analysis", &p, a))
+        match p.solver {
+            Solver::Fd => Ok(to_analysis("Analysis", &p, full_analysis(&p, ctl)?)),
+            Solver::Fem => to_analysis_fem("Analysis (finite elements)", &p, full_analysis_fem(&p, ctl)?),
+        }
     }
 
     fn synthesize(
@@ -380,15 +435,40 @@ impl LineModel for CpwgInner {
             _ => SynthVar::WTotal,
         };
         let p = CpwgParams::from_set(p)?;
-        let (mut pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+        // the solution of the found geometry, as the pieces of whichever solver ran
+        let (mut pp, eeff, finish): (CpwgParams, f64, Finish<'_>) = match p.solver {
+            Solver::Fd => {
+                let (pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+                let eeff = sol.eeff;
+                (
+                    pp,
+                    eeff,
+                    Box::new(move |pp: &CpwgParams, title: &str| {
+                        Ok(to_analysis(title, pp, analysis_from_solution(pp, sol, ctl)?))
+                    }),
+                )
+            }
+            Solver::Fem => {
+                let (pp, sol) = synthesize_fem(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+                let eeff = sol.eeff;
+                (
+                    pp,
+                    eeff,
+                    Box::new(move |pp: &CpwgParams, title: &str| {
+                        let loss = loss_model_fem(pp, &sol, ctl)?;
+                        let split = ground_split_fem(pp, &sol)?;
+                        to_analysis_fem(title, pp, CpwgFemAnalysis { sol, loss, split })
+                    }),
+                )
+            }
+        };
         // the length follows from the solution: eps_eff does not depend on it
         let mut title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(z0_target), t.label);
         if let Some(ph) = phase_deg {
-            pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
+            pp.length = length_for_phase_mm(pp.f, eeff, ph);
             title += &format!(", phase = {} deg at {} GHz -> length", format_g(ph), format_g(pp.f / 1e9));
         }
-        let a = analysis_from_solution(&pp, sol, ctl)?;
-        let analysis = to_analysis(&title, &pp, a);
+        let analysis = finish(&pp, &title)?;
         // only the dimensions (and the length, if a phase was asked for) change; the domain margin
         // found during synthesis stays internal
         let out = CpwgParams { w: pp.w, s: pp.s, length: pp.length, ..p };

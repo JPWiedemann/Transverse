@@ -20,6 +20,17 @@ pub enum MeshMode {
     Manual,
 }
 
+/// Numerical method of the field solution.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Solver {
+    /// Finite volumes on a tensor grid (the reference).
+    #[default]
+    Fd,
+    /// Quadratic finite elements on an adaptively refined triangle mesh.
+    Fem,
+}
+
 /// Parameters of the CPWG inner-layer line (field names match the Python reference).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -54,7 +65,8 @@ pub struct CpwgParams {
     // frequency / length
     pub f: f64,
     pub length: f64,
-    // mesh
+    // solver and mesh
+    pub solver: Solver,
     pub mesh_mode: MeshMode,
     /// Target relative error [%] (auto mesh, domain size).
     pub tol: f64,
@@ -93,6 +105,7 @@ impl Default for CpwgParams {
             rq: 0.0,
             f: 1e9,
             length: 100.0,
+            solver: Solver::Fd,
             mesh_mode: MeshMode::Auto,
             tol: 0.5,
             dmin: 0.002,

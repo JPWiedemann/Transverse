@@ -2,13 +2,85 @@
 
 use std::fmt::Write;
 
-use super::{CpwgAnalysis, CpwgParams, GroundCat, analytic};
+use super::{CpwgAnalysis, CpwgFemAnalysis, CpwgParams, GroundCat, Split, analytic};
+use transverse_core::losses::LossModel;
 use transverse_core::units::format_g;
 use transverse_core::{C_LIGHT, NP2DB, guided_wavelength_mm, phase_deg};
 
+/// The lumped values of a solution (any solver).
+struct Lumped {
+    z0: f64,
+    eeff: f64,
+    l: f64,
+    c: f64,
+}
+
 pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
     let sol = &a.sol;
-    let lo = a.loss.at(p.f);
+    let mut s = body(title, p, &Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c }, &a.loss, &a.split);
+    let acc = &sol.accuracy;
+    let _ = writeln!(
+        s,
+        "Mesh            : {} x {} = {} nodes, min. cell {:.2} um",
+        acc.nx,
+        acc.ny,
+        acc.nodes,
+        acc.dmin_actual * 1e3
+    );
+    if let (Some(e), Some((za, zb))) = (acc.est_err, acc.levels) {
+        let _ = writeln!(
+            s,
+            "Accuracy        : levels {za:.3} / {zb:.3} Ohm -> extrapolated {:.3} Ohm (fine-level error {:.2} %, extrapolated value better)",
+            sol.z0,
+            e * 100.0
+        );
+    }
+    domain_line(&mut s, p, acc.margin);
+    s
+}
+
+/// Report of a finite-element analysis.
+pub fn report_fem(title: &str, p: &CpwgParams, a: &CpwgFemAnalysis) -> String {
+    let sol = &a.sol;
+    let mut s = body(title, p, &Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c }, &a.loss, &a.split);
+    let acc = &sol.accuracy;
+    let (nodes, elements) = (sol.mesh.pts.len(), sol.mesh.tris.len());
+    let _ = writeln!(
+        s,
+        "Mesh            : finite elements (quadratic), {nodes} nodes, {elements} triangles, min. edge {:.2} um",
+        super::fem_summary::min_edge(&sol.mesh) * 1e3
+    );
+    if acc.nodes.len() >= 2 {
+        let k = acc.z0.len();
+        let how = match (sol.adaptive, acc.order) {
+            (true, _) => format!("adaptive refinement, {k} meshes"),
+            (false, Some(_)) => format!("{k} mesh levels, extrapolated"),
+            (false, None) => format!("{k} mesh levels"),
+        };
+        let _ = writeln!(
+            s,
+            "Accuracy        : {how}; Z0 of the last two {:.3} / {:.3} Ohm (estimated error {:.2} %)",
+            acc.z0[k - 2],
+            acc.z0[k - 1],
+            acc.est_err * 100.0
+        );
+    }
+    domain_line(&mut s, p, sol.margin);
+    s
+}
+
+fn domain_line(s: &mut String, p: &CpwgParams, margin: f64) {
+    if margin > 0.0 {
+        let _ = writeln!(
+            s,
+            "Domain          : open structure, extension {margin:.3} mm (converged to < {} %)",
+            p.tol / 4.0
+        );
+    }
+}
+
+fn body(title: &str, p: &CpwgParams, sol: &Lumped, loss: &LossModel, split: &Split) -> String {
+    let lo = loss.at(p.f);
     let to_db_mm = NP2DB / 1000.0;
     let (ac, ad) = (lo.alpha_c * to_db_mm, lo.alpha_d * to_db_mm);
     let tot = ac + ad;
@@ -72,7 +144,7 @@ pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
         p.length / lambda
     );
 
-    let (fd, cur) = (&a.split.field, &a.split.current);
+    let (fd, cur) = (&split.field, &split.current);
     let _ = writeln!(w, "Ground split                     E-field   Return current (HF)");
     let row = |w: &mut String, indent: &str, width: usize, c: GroundCat| {
         let _ = writeln!(
@@ -106,38 +178,13 @@ pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
     if !p.closed() {
         row(w, "  ", 31, GroundCat::Boundary);
     }
-    if let Some(x) = a.split.x90_planes {
+    if let Some(x) = split.x90_planes {
         let _ = writeln!(w, "  90 % of plane current within |x| <= {x:.3} mm");
     }
-    let _ = writeln!(w, "  90 % of coplanar current within {:.3} mm of the gap edge\n", a.split.x90_cop);
+    let _ = writeln!(w, "  90 % of coplanar current within {:.3} mm of the gap edge\n", split.x90_cop);
 
     let (za, ea, exact) = analytic(p);
     let rough = if exact { "" } else { "  (rough: open side treated as filled half-space)" };
     let _ = writeln!(w, "Analytic (t=0)  : Z0 = {za:.2} Ohm, eps_eff = {ea:.3}{rough}");
-    let acc = &sol.accuracy;
-    let _ = writeln!(
-        w,
-        "Mesh            : {} x {} = {} nodes, min. cell {:.2} um",
-        acc.nx,
-        acc.ny,
-        acc.nodes,
-        acc.dmin_actual * 1e3
-    );
-    if let (Some(e), Some((za, zb))) = (acc.est_err, acc.levels) {
-        let _ = writeln!(
-            w,
-            "Accuracy        : levels {za:.3} / {zb:.3} Ohm -> extrapolated {:.3} Ohm (fine-level error {:.2} %, extrapolated value better)",
-            sol.z0,
-            e * 100.0
-        );
-    }
-    if acc.margin > 0.0 {
-        let _ = writeln!(
-            w,
-            "Domain          : open structure, extension {:.3} mm (converged to < {} %)",
-            acc.margin,
-            p.tol / 4.0
-        );
-    }
     s
 }
