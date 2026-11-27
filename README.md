@@ -69,7 +69,7 @@ echo '{}' | transverse analyze                       # default stack-up, full re
 echo '{"w": 0.3, "s": 0.1, "f": 2e9}' | transverse analyze --json
 echo '{}' | transverse synth w 35                    # width for 35 Ohm; also: s, w_total
 echo '{"f":2.4e9}' | transverse synth w 35 --phase 90  # ... and the line length for 90 degrees at 2.4 GHz
-echo '{}' | transverse analyze --solver fem         # finite elements instead of the grid (experimental)
+echo '{}' | transverse analyze --solver fem         # finite elements instead of the grid
 echo '{}' | transverse compare                      # both solvers, relative differences
 transverse selftest --solver fem                     # FEM against the reference cases
 transverse --version
@@ -79,7 +79,7 @@ The parameters are `w`, `s`, `t`, `g`, `h1`, `er1`, `tand1`, `plane1`, `fence1`,
 
 ## Method
 
-The default solver is the finite-difference grid described below. An experimental finite-element backend (`--solver fem`, command line only for now) meshes the cross-section with a generic triangle mesher and solves with quadratic elements; it produces the same outputs (Z0, ε_eff, losses, ground split, field data) and agrees with the grid to better than 0.3 % in Z0 and 1 % in the conductor loss on the reference cases. It is the basis for geometries a grid cannot follow (slanted edges, round conductors).
+The default solver is the finite-difference grid described below. A finite-element backend (the Solver field of the form in the desktop app and the web page, `--solver fem` on the command line) meshes the cross-section with a generic triangle mesher, refines it adaptively and solves with quadratic elements; it produces the same outputs (Z0, ε_eff, losses, ground split, field data) and agrees with the grid to better than 0.3 % in Z0 and 1 % in the conductor loss on the reference cases. It is the basis for geometries a grid cannot follow (slanted edges, round conductors).
 
 A quasi-static (quasi-TEM) solution of the Laplace equation ∇·(εr∇V) = 0 on a graded non-uniform tensor grid (finite volume, 5-point stencil), solved with a sparse Cholesky factorisation. The capacitance with and without the dielectrics gives Z0 = 1/(c·√(C·C0)) and ε_eff = C/C0. Two mesh levels are extrapolated (Richardson), and the mesh is refined until the estimated error is below the target.
 

@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use transverse_core::{C_LIGHT, Ctl, guided_wavelength_mm, length_for_phase_mm, phase_deg};
-use transverse_lines::cpwg_inner::{self, CpwgParams, SynthVar, full_analysis};
+use transverse_lines::cpwg_inner::{self, CpwgParams, Solver, SynthVar, full_analysis};
 
 const USAGE: &str = "usage:
   transverse analyze [params.json|-] [--solver fd|fem] [--json]
@@ -109,23 +109,23 @@ fn cmd_compare(args: &[String]) -> Result<ExitCode, String> {
 
 fn cmd_analyze(args: &[String]) -> Result<ExitCode, String> {
     let json_out = args.iter().any(|a| a == "--json");
-    // --solver fd|fem (default fd)
-    let mut fem = false;
+    // --solver fd|fem; without it the "solver" of the parameters decides (default fd)
+    let mut fem = None;
     let mut path: Option<&String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" => {}
             "--solver" => match it.next().map(String::as_str) {
-                Some("fd") => fem = false,
-                Some("fem") => fem = true,
+                Some("fd") => fem = Some(false),
+                Some("fem") => fem = Some(true),
                 _ => return Err("--solver needs fd or fem".to_string()),
             },
             _ => path = Some(a),
         }
     }
     let p = read_params(path.map(String::as_str))?;
-    if fem {
+    if fem.unwrap_or(p.solver == Solver::Fem) {
         fem_cmd::analyze_command(&p, json_out)?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -169,6 +169,17 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
 
     let ctl = progress();
     let t0 = Instant::now();
+
+    if p.solver == Solver::Fem {
+        let (mut pp, sol) = cpwg_inner::synthesize_fem(&p, target, var, cpwg_inner::DEFAULT_RTOL, &ctl)
+            .map_err(|e| e.to_string())?;
+        eprintln!("Synthesis done: w = {:.4} mm, s = {:.4} mm, running full analysis ...", pp.w, pp.s);
+        if let Some(ph) = phase {
+            pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
+        }
+        fem_cmd::analyze_command(&pp, json_out)?;
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let (mut pp, sol) =
         cpwg_inner::synthesize(&p, target, var, cpwg_inner::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;

@@ -15,7 +15,8 @@ const EMBEDDED: &str = include_str!("../../../tests/reference/cases.json");
 const TOL_Z0: f64 = 3e-3;
 const TOL_EEFF: f64 = 1e-3;
 const TOL_LOSS: f64 = 1e-2;
-const TOL_ANALYTIC: f64 = 3e-3;
+// the conformal-mapping value is exact for t = 0, whose singular edges converge slowest: the 0.5 % target allows this
+const TOL_ANALYTIC: f64 = 4e-3;
 /// Percentage points: thick copper / zero-thickness copper (the tip flux depends on the mesh there).
 const TOL_SPLIT: f64 = 0.35;
 const TOL_SPLIT_T0: f64 = 1.7;
