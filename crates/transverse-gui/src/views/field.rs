@@ -580,8 +580,8 @@ impl FieldView {
 mod tests {
     use super::*;
     use transverse_core::Ctl;
-    use transverse_lines::cpwg_inner::CpwgInner;
     use transverse_lines::model::{LineModel, ParamSet, ParamValue};
+    use transverse_lines::planar::PlanarLine;
 
     fn run_frame(
         ctx: &egui::Context,
@@ -613,7 +613,7 @@ mod tests {
     }
 
     fn analysis_with(open: bool, fem: bool) -> (FieldData, Accuracy) {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut set: ParamSet = m.defaults();
         if fem {
             set.set("solver", ParamValue::Num(1.0));

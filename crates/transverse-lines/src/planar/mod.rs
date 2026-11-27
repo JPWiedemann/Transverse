@@ -31,7 +31,7 @@ mod synthesis;
 mod wheeler;
 
 pub use fem::{FemOptions, FemSolution, analyze_fem};
-pub use fem_analysis::{CpwgFemAnalysis, full_analysis_fem};
+pub use fem_analysis::{PlanarFemAnalysis, full_analysis_fem};
 pub use fem_field::field_data_fem;
 pub use fem_loss::{loss_model_fem, wheeler_dzdn_fem};
 pub use fem_split::ground_split_fem;
@@ -39,8 +39,8 @@ pub use fem_summary::fem_accuracy;
 pub use field::field_data;
 pub use grid::*;
 pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
-pub use model::CpwgInner;
-pub use params::{CpwgParams, GapMode, MeshMode, Solver, analytic};
+pub use model::PlanarLine;
+pub use params::{GapMode, MeshMode, PlanarParams, Solver, analytic};
 pub use report::{report, report_fem};
 pub use schematic::{SchematicFlags, schematic};
 pub use section::{GROWTH, MAT_AIR, MAT_GAP, MAT_LOWER, MAT_UPPER};
@@ -52,21 +52,21 @@ use transverse_core::quasistatic::{self, Solution};
 use transverse_core::{Ctl, TvResult};
 
 /// Full analysis of one geometry (Z0, eps_eff, L', C', G'/omega, fields).
-pub fn analyze(p: &CpwgParams, ctl: &Ctl) -> TvResult<Solution> {
+pub fn analyze(p: &PlanarParams, ctl: &Ctl) -> TvResult<Solution> {
     p.validate()?;
     quasistatic::solve(p, &p.fd_options(), ctl)
 }
 
-/// Analysis with losses and ground split (CPWG-specific; [`CpwgInner`] converts it to the generic
+/// Analysis with losses and ground split (CPWG-specific; [`PlanarLine`] converts it to the generic
 /// [`crate::model::Analysis`]).
-pub struct CpwgAnalysis {
+pub struct PlanarAnalysis {
     pub sol: Solution,
     pub loss: LossModel,
     pub split: Split,
 }
 
 /// Wheeler conductor loss and ground split for an existing solution.
-pub fn analysis_from_solution(p: &CpwgParams, sol: Solution, ctl: &Ctl) -> TvResult<CpwgAnalysis> {
+pub fn analysis_from_solution(p: &PlanarParams, sol: Solution, ctl: &Ctl) -> TvResult<PlanarAnalysis> {
     let dzdn = wheeler_dzdn(p, &sol, ctl)?;
     let loss = LossModel {
         z0: sol.z0,
@@ -77,10 +77,10 @@ pub fn analysis_from_solution(p: &CpwgParams, sol: Solution, ctl: &Ctl) -> TvRes
         rq_mm: p.rq,
     };
     let split = ground_split(p, &sol);
-    Ok(CpwgAnalysis { sol, loss, split })
+    Ok(PlanarAnalysis { sol, loss, split })
 }
 
 /// Field solution + Wheeler conductor loss + dielectric loss model + ground split.
-pub fn full_analysis(p: &CpwgParams, ctl: &Ctl) -> TvResult<CpwgAnalysis> {
+pub fn full_analysis(p: &PlanarParams, ctl: &Ctl) -> TvResult<PlanarAnalysis> {
     analysis_from_solution(p, analyze(p, ctl)?, ctl)
 }

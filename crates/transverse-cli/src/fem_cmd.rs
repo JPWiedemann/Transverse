@@ -4,15 +4,15 @@ use std::time::Instant;
 
 use transverse_core::Ctl;
 use transverse_core::NP2DB;
-use transverse_lines::cpwg_inner::{
-    CpwgFemAnalysis, CpwgParams, GroundCat, analyze, analyze_fem, full_analysis_fem,
+use transverse_lines::planar::{
+    GroundCat, PlanarFemAnalysis, PlanarParams, analyze, analyze_fem, full_analysis_fem,
 };
 
 fn progress() -> Ctl {
     Ctl::new().with_progress(|m| eprintln!("{m}"))
 }
 
-fn print_fem(p: &CpwgParams, a: &CpwgFemAnalysis, secs: f64) {
+fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
     let s = &a.sol;
     println!("=== FEM analysis (quadratic elements) ===");
     println!("Z0              = {:8.3} Ohm", s.z0);
@@ -46,7 +46,7 @@ fn print_fem(p: &CpwgParams, a: &CpwgFemAnalysis, secs: f64) {
 }
 
 /// `analyze --solver fem`.
-pub fn analyze_command(p: &CpwgParams, json_out: bool) -> Result<(), String> {
+pub fn analyze_command(p: &PlanarParams, json_out: bool) -> Result<(), String> {
     let t0 = Instant::now();
     let a = full_analysis_fem(p, &progress()).map_err(|e| e.to_string())?;
     let (s, secs) = (&a.sol, t0.elapsed().as_secs_f64());
@@ -67,12 +67,12 @@ pub fn analyze_command(p: &CpwgParams, json_out: bool) -> Result<(), String> {
 
 /// `compare`: both solvers on one geometry, relative differences. The FEM uses the domain extension the grid
 /// found, so the difference shows the discretisation only.
-pub fn compare_command(p: &CpwgParams) -> Result<(), String> {
+pub fn compare_command(p: &PlanarParams) -> Result<(), String> {
     let ctl = progress();
     let t0 = Instant::now();
     let fd = analyze(p, &ctl).map_err(|e| e.to_string())?;
     let t_fd = t0.elapsed().as_secs_f64();
-    let q = CpwgParams { margin: fd.accuracy.margin, ..p.clone() };
+    let q = PlanarParams { margin: fd.accuracy.margin, ..p.clone() };
     let t1 = Instant::now();
     let fem = analyze_fem(&q, &q.fem_options(), &ctl).map_err(|e| e.to_string())?;
     let t_fem = t1.elapsed().as_secs_f64();

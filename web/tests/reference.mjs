@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 initSync({ module: readFileSync(join(here, '../pkg/transverse_wasm_bg.wasm')) });
 const cases = JSON.parse(readFileSync(join(here, '../../tests/reference/cases.json'), 'utf8'));
 
-const LINE = 'cpwg_inner';
+const LINE = 'planar';
 const TOL = 1e-6; // native and wasm agree to ~1e-12 in practice; same algorithm as the Python tool
 const TOL_LOSS = 1e-6;
 

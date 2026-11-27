@@ -5,7 +5,7 @@ use transverse_core::quasistatic::{self, Solution};
 use transverse_core::synthesis::{self as root, SynthSpec};
 use transverse_core::{Ctl, TvResult};
 
-use super::{CpwgParams, FemSolution, analyze, analyze_fem};
+use super::{FemSolution, PlanarParams, analyze, analyze_fem};
 
 /// Which dimension is varied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,12 +26,12 @@ pub const DEFAULT_RTOL: f64 = 1e-4;
 
 /// Returns the geometry that gives `target` Ohm and its solution.
 pub fn synthesize(
-    p: &CpwgParams,
+    p: &PlanarParams,
     target: f64,
     var: SynthVar,
     rtol: f64,
     ctl: &Ctl,
-) -> TvResult<(CpwgParams, Solution)> {
+) -> TvResult<(PlanarParams, Solution)> {
     synthesize_with(
         p,
         target,
@@ -47,14 +47,14 @@ pub fn synthesize(
 /// As [`synthesize`] with the finite-element solver. Its Z0 carries some mesh noise, so the solves ask for a
 /// tighter mesh tolerance than the user's and the search stops at the larger of `rtol` and what that noise allows.
 pub fn synthesize_fem(
-    p: &CpwgParams,
+    p: &PlanarParams,
     target: f64,
     var: SynthVar,
     rtol: f64,
     ctl: &Ctl,
-) -> TvResult<(CpwgParams, FemSolution)> {
-    let tight = CpwgParams { tol: p.tol / 4.0, ..p.clone() };
-    let solve = |q: &CpwgParams| analyze_fem(q, &q.fem_options(), ctl);
+) -> TvResult<(PlanarParams, FemSolution)> {
+    let tight = PlanarParams { tol: p.tol / 4.0, ..p.clone() };
+    let solve = |q: &PlanarParams| analyze_fem(q, &q.fem_options(), ctl);
     let (mut out, sol) = synthesize_with(
         &tight,
         target,
@@ -71,15 +71,15 @@ pub fn synthesize_fem(
 
 #[allow(clippy::too_many_arguments)]
 fn synthesize_with<S>(
-    p: &CpwgParams,
+    p: &PlanarParams,
     target: f64,
     var: SynthVar,
     rtol: f64,
     ctl: &Ctl,
-    margin_of: impl FnOnce(&CpwgParams) -> TvResult<f64>,
-    solve: impl Fn(&CpwgParams) -> TvResult<S>,
+    margin_of: impl FnOnce(&PlanarParams) -> TvResult<f64>,
+    solve: impl Fn(&PlanarParams) -> TvResult<S>,
     z0_of: impl Fn(&S) -> f64,
-) -> TvResult<(CpwgParams, S)> {
+) -> TvResult<(PlanarParams, S)> {
     p.validate()?;
     let mut p = p.clone();
     if p.margin <= 0.0 && !p.closed() {
@@ -88,9 +88,9 @@ fn synthesize_with<S>(
     }
     let total = 2.0 * p.s + p.w;
     let mk = |x: f64| match var {
-        SynthVar::W => CpwgParams { w: x, ..p.clone() },
-        SynthVar::S => CpwgParams { s: x, ..p.clone() },
-        SynthVar::WTotal => CpwgParams { w: x, s: (total - x) / 2.0, ..p.clone() },
+        SynthVar::W => PlanarParams { w: x, ..p.clone() },
+        SynthVar::S => PlanarParams { s: x, ..p.clone() },
+        SynthVar::WTotal => PlanarParams { w: x, s: (total - x) / 2.0, ..p.clone() },
     };
 
     let scale = p.w + 2.0 * p.s; // all limits relative to the geometry

@@ -65,7 +65,7 @@ impl Geo {
         });
         SizeSpec { dmin, dmax, growth: 1.25, power: 1.0, far }
     }
-    /// The cross-section like `CpwgParams` would produce it (same domain and painting rules as the FD grid).
+    /// The cross-section like `PlanarParams` would produce it (same domain and painting rules as the FD grid).
     fn section(&self) -> CrossSection {
         let (xe, t) = (self.xe(), self.t);
         let (ytop, ybot) = (t + self.h1, -self.h2);

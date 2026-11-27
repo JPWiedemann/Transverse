@@ -34,7 +34,7 @@ pub enum Solver {
 /// Parameters of the CPWG inner-layer line (field names match the Python reference).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct CpwgParams {
+pub struct PlanarParams {
     // geometry
     pub w: f64,
     pub s: f64,
@@ -81,7 +81,7 @@ pub struct CpwgParams {
     pub margin: f64,
 }
 
-impl Default for CpwgParams {
+impl Default for PlanarParams {
     fn default() -> Self {
         Self {
             w: 0.3605,
@@ -117,7 +117,7 @@ impl Default for CpwgParams {
     }
 }
 
-impl CpwgParams {
+impl PlanarParams {
     /// (er, tand) of the material between signal and coplanar ground.
     pub fn gap_props(&self) -> (f64, f64) {
         match self.gap_mode {
@@ -187,7 +187,7 @@ impl CpwgParams {
 ///
 /// A missing plane is treated as a half-space filled with that layer's er (exact only if that
 /// er = 1). Returns (Z0, eps_eff, exact).
-pub fn analytic(p: &CpwgParams) -> (f64, f64, bool) {
+pub fn analytic(p: &PlanarParams) -> (f64, f64, bool) {
     use std::f64::consts::PI;
     let k0 = p.w / (p.w + 2.0 * p.s);
     let q = |h: f64, plane: bool| {

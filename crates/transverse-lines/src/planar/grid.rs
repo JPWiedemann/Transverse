@@ -4,7 +4,7 @@ use transverse_core::fd2d::axis::{axis, graded_out};
 use transverse_core::fd2d::{Grid, TOL_GEO};
 use transverse_core::quasistatic::GridSource;
 
-use super::CpwgParams;
+use super::PlanarParams;
 
 // node categories (0 = free and 1 = signal are fixed by the core)
 pub const C_FREE: u8 = 0;
@@ -27,7 +27,7 @@ pub struct Geometry {
     pub ymax: f64,
 }
 
-impl CpwgParams {
+impl PlanarParams {
     pub fn geometry(&self, m: f64) -> Geometry {
         let xe = self.w / 2.0 + self.s + self.g;
         let ytop = self.t + self.h1;
@@ -43,7 +43,7 @@ impl CpwgParams {
     }
 }
 
-impl GridSource for CpwgParams {
+impl GridSource for PlanarParams {
     fn axes(&self, dmin: f64, dmax: f64, m: f64) -> (Vec<f64>, Vec<f64>) {
         let g = self.geometry(m);
         let (w, s) = (self.w, self.s);

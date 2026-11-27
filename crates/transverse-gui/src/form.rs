@@ -244,7 +244,7 @@ pub struct SavedField {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transverse_lines::cpwg_inner::{CpwgInner, CpwgParams};
+    use transverse_lines::planar::{PlanarLine, PlanarParams};
 
     fn text(f: &FormState, k: &str) -> (String, String) {
         match &f.fields[k] {
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn defaults_show_in_their_display_units_and_convert_back() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let f = FormState::new(&m);
         assert_eq!(text(&f, "w"), ("0.3605".into(), "mm".into()));
         assert_eq!(text(&f, "t"), ("18".into(), "µm".into()));
@@ -265,8 +265,8 @@ mod tests {
         assert_eq!(f.fields["plane1"], FieldState::Flag(true));
         assert_eq!(f.fields["mesh_mode"], FieldState::Choice(0));
         let set = f.to_params(&m).unwrap();
-        let p = CpwgParams::from_set(&set).unwrap();
-        let d = CpwgParams::default();
+        let p = PlanarParams::from_set(&set).unwrap();
+        let d = PlanarParams::default();
         assert!(
             (p.t - d.t).abs() < 1e-15 && (p.sigma - d.sigma).abs() < 1.0 && (p.dmin - d.dmin).abs() < 1e-15
         );
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn unit_change_converts_the_shown_value() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         f.change_unit(&m, "w", "mil");
         assert_eq!(text(&f, "w").1, "mil");
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn lambda_units_refer_to_the_wavelength_of_the_other_fields() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         assert!(unit_options(m.params().iter().find(|p| p.key == "dmin").unwrap()).contains(&"λ"));
         assert!(!unit_options(m.params().iter().find(|p| p.key == "w").unwrap()).contains(&"λ"));
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn errors_name_the_field() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         if let Some(FieldState::Quantity { text, .. }) = f.fields.get_mut("h1") {
             *text = "".into();
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn set_params_keeps_units_and_save_load_round_trips() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         f.change_unit(&m, "t", "mil");
         f.change_unit(&m, "f", "MHz");
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn loading_ignores_garbage() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         let before = f.clone();
         let mut saved = BTreeMap::new();

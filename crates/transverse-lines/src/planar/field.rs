@@ -2,7 +2,7 @@
 
 use transverse_core::quasistatic::Solution;
 
-use super::CpwgParams;
+use super::PlanarParams;
 use crate::model::{DrawRect, FieldData, ShapeKind};
 
 /// Conductor drawing, guide lines and view limits of a CPWG, for a domain extension `margin`.
@@ -14,7 +14,7 @@ pub(super) struct Drawing {
     pub view_full: [f64; 4],
 }
 
-pub(super) fn drawing(p: &CpwgParams, margin: f64) -> Drawing {
+pub(super) fn drawing(p: &PlanarParams, margin: f64) -> Drawing {
     let g = p.geometry(margin);
     let hmax = p.h1.max(p.h2);
 
@@ -71,7 +71,7 @@ pub(super) fn drawing(p: &CpwgParams, margin: f64) -> Drawing {
     }
 }
 
-pub fn field_data(p: &CpwgParams, sol: &Solution) -> FieldData {
+pub fn field_data(p: &PlanarParams, sol: &Solution) -> FieldData {
     let d = drawing(p, sol.accuracy.margin);
     FieldData {
         x: sol.grid.x.clone(),

@@ -3,8 +3,8 @@
 use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::postproc::percentile;
-use transverse_lines::cpwg_inner::{CpwgInner, CpwgParams};
 use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamValue, ShapeKind, is_enabled};
+use transverse_lines::planar::{PlanarLine, PlanarParams};
 
 fn rel(a: f64, b: f64) -> f64 {
     (a / b - 1.0).abs()
@@ -12,16 +12,16 @@ fn rel(a: f64, b: f64) -> f64 {
 
 #[test]
 fn defaults_equal_the_params_defaults_and_round_trip() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let set = m.defaults();
-    assert_eq!(CpwgParams::from_set(&set).unwrap(), CpwgParams::default());
-    assert_eq!(CpwgParams::default().to_set(), set);
+    assert_eq!(PlanarParams::from_set(&set).unwrap(), PlanarParams::default());
+    assert_eq!(PlanarParams::default().to_set(), set);
 }
 
 #[test]
 fn spec_keys_match_the_parameter_set_exactly() {
-    let m = CpwgInner;
-    let set = CpwgParams::default().to_set();
+    let m = PlanarLine;
+    let set = PlanarParams::default().to_set();
     let mut spec_keys: Vec<&str> = m.params().iter().map(|p| p.key).collect();
     let mut set_keys: Vec<&str> = set.0.keys().map(String::as_str).collect();
     spec_keys.sort_unstable();
@@ -40,7 +40,7 @@ fn spec_keys_match_the_parameter_set_exactly() {
 
 #[test]
 fn enable_when_follows_choices() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     let find = |k: &str| *m.params().iter().find(|p| p.key == k).unwrap();
     assert!(!is_enabled(&find("dmin"), &set) && !is_enabled(&find("richardson"), &set));
@@ -55,9 +55,9 @@ fn enable_when_follows_choices() {
 #[test]
 fn invalid_sets_are_rejected_and_partial_sets_use_defaults() {
     let mut set = ParamSet::default();
-    assert_eq!(CpwgParams::from_set(&set).unwrap(), CpwgParams::default());
+    assert_eq!(PlanarParams::from_set(&set).unwrap(), PlanarParams::default());
     set.set("w", ParamValue::Num(0.5));
-    assert_eq!(CpwgParams::from_set(&set).unwrap().w, 0.5);
+    assert_eq!(PlanarParams::from_set(&set).unwrap().w, 0.5);
     for (k, v) in [
         ("gap_mode", ParamValue::Num(5.0)),
         ("gap_mode", ParamValue::Num(0.5)),
@@ -67,13 +67,13 @@ fn invalid_sets_are_rejected_and_partial_sets_use_defaults() {
     ] {
         let mut s = ParamSet::default();
         s.set(k, v);
-        assert!(CpwgParams::from_set(&s).is_err(), "{k} = {v:?} accepted");
+        assert!(PlanarParams::from_set(&s).is_err(), "{k} = {v:?} accepted");
     }
 }
 
 #[test]
 fn param_set_json_round_trip() {
-    let set = CpwgInner.defaults();
+    let set = PlanarLine.defaults();
     let text = serde_json::to_string(&set).unwrap();
     assert!(text.contains("\"plane1\":true") && text.contains("\"w\":0.3605"));
     assert_eq!(serde_json::from_str::<ParamSet>(&text).unwrap(), set);
@@ -81,7 +81,7 @@ fn param_set_json_round_trip() {
 
 #[test]
 fn wavelength_follows_frequency_and_permittivity() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let l1 = m.wavelength_mm(&m.defaults()).unwrap();
     let mut s = m.defaults();
     s.set("f", ParamValue::Num(2e9));
@@ -92,7 +92,7 @@ fn wavelength_follows_frequency_and_permittivity() {
 
 #[test]
 fn analysis_through_the_trait_matches_the_reference() {
-    let a = CpwgInner.analyze(&CpwgInner.defaults(), &Ctl::new()).unwrap();
+    let a = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap();
     assert_eq!(a.modes.len(), 1);
     let m = &a.modes[0];
     assert!(rel(m.z0, 35.001) < 5e-4 && rel(m.eps_eff, 3.58) < 5e-3);
@@ -109,7 +109,7 @@ fn analysis_through_the_trait_matches_the_reference() {
 
 #[test]
 fn synthesis_through_the_trait_keeps_other_parameters() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     set.set("plane1", ParamValue::Bool(false));
     set.set("fence1", ParamValue::Bool(false));
@@ -126,7 +126,7 @@ fn synthesis_through_the_trait_keeps_other_parameters() {
 
 #[test]
 fn analysis_reports_wavelength_and_phase_of_the_entered_length() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     set.set("length", ParamValue::Num(50.0));
     let a = m.analyze(&set, &Ctl::new()).unwrap();
@@ -145,7 +145,7 @@ fn analysis_reports_wavelength_and_phase_of_the_entered_length() {
 
 #[test]
 fn synthesis_with_a_phase_sets_the_length_from_the_solution() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     set.set("f", ParamValue::Num(2.4e9));
     let (out, a) = m.synthesize(&set, "w", 35.0, Some(90.0), &Ctl::new()).unwrap();
@@ -209,7 +209,7 @@ struct NodeRef {
 }
 
 fn final_stackup_field() -> transverse_lines::model::FieldData {
-    CpwgInner.analyze(&CpwgInner.defaults(), &Ctl::new()).unwrap().field.unwrap()
+    PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap().field.unwrap()
 }
 
 #[test]
@@ -247,10 +247,10 @@ fn field_data_geometry_for_the_default_stackup() {
     assert!(fx1 >= zx1 && fy0 <= zy0 && fy1 >= zy1);
     assert!(zy0 < -0.254 && zy1 > 0.018 + 0.204);
     // open variant: missing planes show dashed board-surface lines and the domain is extended
-    let mut s = CpwgInner.defaults();
+    let mut s = PlanarLine.defaults();
     s.set("plane1", ParamValue::Bool(false));
     s.set("fence1", ParamValue::Bool(false));
-    let o = CpwgInner.analyze(&s, &Ctl::new()).unwrap().field.unwrap();
+    let o = PlanarLine.analyze(&s, &Ctl::new()).unwrap().field.unwrap();
     assert_eq!(o.dashed_y.len(), 1);
     assert!(o.view_full[3] > f.view_full[3]);
 }
@@ -282,7 +282,7 @@ fn equipotentials_and_field_lines_of_a_real_solution() {
 #[test]
 fn schematic_follows_the_form_values() {
     use transverse_lines::model::SchemItem;
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     let all = m.schematic(&set).unwrap();
     assert_eq!((all.width, all.height), (700.0, 340.0));
@@ -302,7 +302,7 @@ fn schematic_follows_the_form_values() {
 
 #[test]
 fn split_summary_carries_what_the_return_current_tab_needs() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let a = m.analyze(&m.defaults(), &Ctl::new()).unwrap();
     assert_eq!(a.modes[0].f_hz, 1e9);
     let s = a.modes[0].split.as_ref().unwrap();
@@ -337,7 +337,7 @@ fn split_summary_carries_what_the_return_current_tab_needs() {
 // ---- the finite-element solver through the generic interface
 
 fn fem_set() -> ParamSet {
-    let mut s = CpwgInner.defaults();
+    let mut s = PlanarLine.defaults();
     s.set("solver", ParamValue::Num(1.0));
     s
 }
@@ -345,8 +345,8 @@ fn fem_set() -> ParamSet {
 #[test]
 fn the_solver_choice_runs_the_finite_elements_and_gives_the_same_results() {
     let (fd, fem) = (
-        CpwgInner.analyze(&CpwgInner.defaults(), &Ctl::new()).unwrap(),
-        CpwgInner.analyze(&fem_set(), &Ctl::new()).unwrap(),
+        PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap(),
+        PlanarLine.analyze(&fem_set(), &Ctl::new()).unwrap(),
     );
     let (a, b) = (&fd.modes[0], &fem.modes[0]);
     assert!(rel(b.z0, a.z0) < 1e-3 && rel(b.eps_eff, a.eps_eff) < 1e-3, "{} vs {}", b.z0, a.z0);
@@ -370,7 +370,7 @@ fn the_solver_choice_runs_the_finite_elements_and_gives_the_same_results() {
 
 #[test]
 fn mesh_field_data_answers_the_same_questions_as_grid_field_data() {
-    let f = CpwgInner.analyze(&fem_set(), &Ctl::new()).unwrap().field.unwrap();
+    let f = PlanarLine.analyze(&fem_set(), &Ctl::new()).unwrap().field.unwrap();
     let g = final_stackup_field();
     assert!(f.mesh.is_some() && g.mesh.is_none() && g.mesh_edges(g.view_zoom).is_none());
     assert_eq!(f.conductors.len(), g.conductors.len());
@@ -408,23 +408,23 @@ fn mesh_field_data_answers_the_same_questions_as_grid_field_data() {
 fn synthesis_with_the_finite_elements_finds_the_reference_width() {
     let mut s = fem_set();
     s.set("w", ParamValue::Num(0.2));
-    let (set, a) = CpwgInner.synthesize(&s, "w", 35.0, None, &Ctl::new()).unwrap();
-    let w = CpwgParams::from_set(&set).unwrap().w;
+    let (set, a) = PlanarLine.synthesize(&s, "w", 35.0, None, &Ctl::new()).unwrap();
+    let w = PlanarParams::from_set(&set).unwrap().w;
     // the reference (grid) result is w = 0.3605 mm for 35 Ohm
     assert!(rel(w, 0.3605) < 3e-3, "w = {w}");
     assert!(rel(a.modes[0].z0, 35.0) < 2e-3, "z0 = {}", a.modes[0].z0);
     assert!(a.field.unwrap().mesh.is_some());
     // the solver choice survives in the returned parameters
-    assert_eq!(CpwgParams::from_set(&set).unwrap().solver, transverse_lines::cpwg_inner::Solver::Fem);
+    assert_eq!(PlanarParams::from_set(&set).unwrap().solver, transverse_lines::planar::Solver::Fem);
 }
 
 /// The drawing must not cover any of the solved region: conductors are drawn where the solution has none.
 #[test]
 fn via_fences_are_drawn_outside_the_wall_they_stand_for() {
-    let p = CpwgParams::default();
+    let p = PlanarParams::default();
     let wall = p.w / 2.0 + p.s + p.g;
-    for set in [CpwgInner.defaults(), fem_set()] {
-        let f = CpwgInner.analyze(&set, &Ctl::new()).unwrap().field.unwrap();
+    for set in [PlanarLine.defaults(), fem_set()] {
+        let f = PlanarLine.analyze(&set, &Ctl::new()).unwrap().field.unwrap();
         // the fences are the narrow upright rectangles
         let fences: Vec<_> = f.conductors.iter().filter(|c| c.y1 - c.y0 > 4.0 * (c.x1 - c.x0)).collect();
         assert_eq!(fences.len(), 4);

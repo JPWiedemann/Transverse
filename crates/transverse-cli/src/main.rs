@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use transverse_core::{C_LIGHT, Ctl, guided_wavelength_mm, length_for_phase_mm, phase_deg};
-use transverse_lines::cpwg_inner::{self, CpwgParams, Solver, SynthVar, full_analysis};
+use transverse_lines::planar::{self, PlanarParams, Solver, SynthVar, full_analysis};
 
 const USAGE: &str = "usage:
   transverse analyze [params.json|-] [--solver fd|fem] [--json]
@@ -48,7 +48,7 @@ fn main() -> ExitCode {
 }
 
 /// Parameters from a file, stdin ("-" or no argument); missing fields use the defaults.
-fn read_params(path: Option<&str>) -> Result<CpwgParams, String> {
+fn read_params(path: Option<&str>) -> Result<PlanarParams, String> {
     let text = match path {
         None | Some("-") => {
             let mut s = String::new();
@@ -65,7 +65,7 @@ fn progress() -> Ctl {
     Ctl::new().with_progress(|m| eprintln!("{m}"))
 }
 
-fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::CpwgAnalysis, secs: f64, json_out: bool) {
+fn print_analysis(title: &str, p: &PlanarParams, a: &planar::PlanarAnalysis, secs: f64, json_out: bool) {
     if json_out {
         let delay_ps = p.length * 1e-3 * a.sol.eeff.sqrt() / C_LIGHT * 1e12;
         let wavelength_mm = guided_wavelength_mm(p.f, a.sol.eeff);
@@ -79,7 +79,7 @@ fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::CpwgAnalysis, sec
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     } else {
-        print!("{}", cpwg_inner::report(title, p, a));
+        print!("{}", planar::report(title, p, a));
         println!("Time            : {secs:.2} s");
     }
 }
@@ -171,8 +171,8 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
     let t0 = Instant::now();
 
     if p.solver == Solver::Fem {
-        let (mut pp, sol) = cpwg_inner::synthesize_fem(&p, target, var, cpwg_inner::DEFAULT_RTOL, &ctl)
-            .map_err(|e| e.to_string())?;
+        let (mut pp, sol) =
+            planar::synthesize_fem(&p, target, var, planar::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
         eprintln!("Synthesis done: w = {:.4} mm, s = {:.4} mm, running full analysis ...", pp.w, pp.s);
         if let Some(ph) = phase {
             pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
@@ -182,7 +182,7 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
     }
 
     let (mut pp, sol) =
-        cpwg_inner::synthesize(&p, target, var, cpwg_inner::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
+        planar::synthesize(&p, target, var, planar::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
     let mut title = format!("Synthesis: Z0 = {target} Ohm");
     if let Some(ph) = phase {
         pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);

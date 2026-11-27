@@ -6,14 +6,14 @@
 use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::TvError;
-use transverse_lines::cpwg_inner::{
-    CpwgParams, FemOptions, GroundCat, MeshMode, analyze, analyze_fem, ground_split_fem, loss_model_fem,
+use transverse_lines::planar::{
+    FemOptions, GroundCat, MeshMode, PlanarParams, analyze, analyze_fem, ground_split_fem, loss_model_fem,
 };
 
 #[derive(Deserialize)]
 struct Case {
     name: String,
-    params: CpwgParams,
+    params: PlanarParams,
     z0: f64,
     eeff: f64,
     c: f64,
@@ -55,14 +55,14 @@ fn rel(a: f64, b: f64) -> f64 {
 }
 
 /// The reference value belongs to the converged solution, so run the FEM in automatic mode.
-fn auto(p: &CpwgParams) -> CpwgParams {
-    CpwgParams { mesh_mode: MeshMode::Auto, tol: 0.5, ..p.clone() }
+fn auto(p: &PlanarParams) -> PlanarParams {
+    PlanarParams { mesh_mode: MeshMode::Auto, tol: 0.5, ..p.clone() }
 }
 
 /// The FD domain extension is part of the reference value (an open structure is truncated at it), so the FEM
 /// runs with the same one; this isolates the discretisation error.
-fn same_domain(c: &Case) -> CpwgParams {
-    CpwgParams { margin: c.margin, ..auto(&c.params) }
+fn same_domain(c: &Case) -> PlanarParams {
+    PlanarParams { margin: c.margin, ..auto(&c.params) }
 }
 
 /// Reference cases whose stored values are converged (the two manual-mesh cases hold the FD value of a
@@ -103,7 +103,7 @@ fn a_tighter_tolerance_brings_the_fem_within_one_per_mille() {
         ["final_stackup", "closed_t0_w0.248_s0.15", "open_no_plane1_no_fence1", "no_fences_planes_kept"]
     {
         let case = load().into_iter().find(|c| c.name == name).unwrap();
-        let p = CpwgParams { tol: 0.2, ..same_domain(&case) };
+        let p = PlanarParams { tol: 0.2, ..same_domain(&case) };
         let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
         check(name, "z0", sol.z0, case.z0, 1e-3);
         check(name, "eeff", sol.eeff, case.eeff, 5e-4);
@@ -125,7 +125,7 @@ fn t0_cases_match_conformal_mapping() {
 
 #[test]
 fn the_fem_closed_stackup_has_the_reference_values_of_the_project() {
-    let p = CpwgParams::default();
+    let p = PlanarParams::default();
     let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
     assert!(rel(sol.z0, 35.001) < 2e-3, "z0 {}", sol.z0);
     assert!(rel(sol.eeff, 3.58) < 2e-3, "eeff {}", sol.eeff);
@@ -148,19 +148,19 @@ fn the_fem_closed_stackup_has_the_reference_values_of_the_project() {
 fn an_open_structure_finds_its_own_domain_size() {
     let case = load().into_iter().find(|c| c.name == "open_no_plane1_no_fence1").unwrap();
     // margin 0 = automatic, as for the grid
-    let p = CpwgParams { margin: 0.0, ..auto(&case.params) };
+    let p = PlanarParams { margin: 0.0, ..auto(&case.params) };
     let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
     assert!(sol.margin > 0.0, "an open structure needs a margin");
     // the domain truncation costs up to tol/4 on each side (FD and FEM), so allow the sum
     assert!(rel(sol.z0, case.z0) < 5e-3, "{} vs {}", sol.z0, case.z0);
     // an explicit margin is used as it is
-    let q = CpwgParams { margin: 3.0, ..p.clone() };
+    let q = PlanarParams { margin: 3.0, ..p.clone() };
     assert_eq!(analyze_fem(&q, &q.fem_options(), &Ctl::new()).unwrap().margin, 3.0);
 }
 
 #[test]
 fn limits_cancel_and_manual_meshes_are_honoured() {
-    let p = CpwgParams::default();
+    let p = PlanarParams::default();
     let mut opt = p.fem_options();
     opt.max_nodes = 300;
     assert!(matches!(analyze_fem(&p, &opt, &Ctl::new()), Err(TvError::MeshTooLarge { .. })));
@@ -168,9 +168,9 @@ fn limits_cancel_and_manual_meshes_are_honoured() {
     ctl.cancel();
     assert!(matches!(analyze_fem(&p, &p.fem_options(), &ctl), Err(TvError::Cancelled)));
     // a manual mesh is one level with the given sizes, and finer sizes give a closer result
-    let base = CpwgParams { mesh_mode: MeshMode::Manual, ..p.clone() };
-    let coarse = CpwgParams { dmin: 0.004, dmax: 0.05, ..base.clone() };
-    let fine = CpwgParams { dmin: 0.001, dmax: 0.0125, ..base };
+    let base = PlanarParams { mesh_mode: MeshMode::Manual, ..p.clone() };
+    let coarse = PlanarParams { dmin: 0.004, dmax: 0.05, ..base.clone() };
+    let fine = PlanarParams { dmin: 0.001, dmax: 0.0125, ..base };
     let (c, f) = (
         analyze_fem(&coarse, &coarse.fem_options(), &Ctl::new()).unwrap(),
         analyze_fem(&fine, &fine.fem_options(), &Ctl::new()).unwrap(),
@@ -180,7 +180,7 @@ fn limits_cancel_and_manual_meshes_are_honoured() {
     let fd = analyze(&p, &Ctl::new()).unwrap().z0;
     assert!(rel(f.z0, fd) < rel(c.z0, fd), "finer is closer: {} {} vs {fd}", c.z0, f.z0);
     // invalid parameters are reported
-    let bad = CpwgParams { w: -1.0, ..p };
+    let bad = PlanarParams { w: -1.0, ..p };
     assert!(analyze_fem(&bad, &bad.fem_options(), &Ctl::new()).is_err());
 }
 
@@ -284,7 +284,7 @@ fn fem_ground_split_matches_fd() {
 fn report_fem_against_fd() {
     for case in load() {
         let tol: f64 = std::env::var("FEM_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
-        let p = CpwgParams { tol, ..same_domain(&case) };
+        let p = PlanarParams { tol, ..same_domain(&case) };
         let t0 = std::time::Instant::now();
         let start = std::env::var("FEM_START").ok().and_then(|v| v.parse().ok());
         let opt = FemOptions {
@@ -339,7 +339,7 @@ fn report_levels() {
 fn report_losses() {
     for case in load().into_iter().filter(converged) {
         let tol: f64 = std::env::var("FEM_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
-        let p = CpwgParams { tol, ..same_domain(&case) };
+        let p = PlanarParams { tol, ..same_domain(&case) };
         let t0 = std::time::Instant::now();
         let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
         let lm = loss_model_fem(&p, &sol, &Ctl::new()).unwrap();
@@ -365,7 +365,7 @@ fn cat_key(c: GroundCat) -> &'static str {
 fn report_split() {
     for case in load().into_iter().filter(converged) {
         let tol: f64 = std::env::var("FEM_TOL").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
-        let p = CpwgParams { tol, ..same_domain(&case) };
+        let p = PlanarParams { tol, ..same_domain(&case) };
         let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
         let split = ground_split_fem(&p, &sol).unwrap();
         let (mut worst_f, mut worst_c) = (0.0f64, 0.0f64);
@@ -395,7 +395,7 @@ fn report_split() {
 #[test]
 fn adaptive_and_uniform_refinement_agree_and_the_adaptive_mesh_is_far_smaller() {
     let case = load().into_iter().find(|c| c.name == "final_stackup").unwrap();
-    let p = CpwgParams { tol: 0.1, ..same_domain(&case) };
+    let p = PlanarParams { tol: 0.1, ..same_domain(&case) };
     let run = |adaptive: bool| {
         let opt = if adaptive { p.fem_options() } else { p.fem_options().uniform() };
         analyze_fem(&p, &opt, &Ctl::new()).unwrap()
@@ -414,10 +414,10 @@ fn adaptive_and_uniform_refinement_agree_and_the_adaptive_mesh_is_far_smaller() 
 /// accuracy adds elements there and hardly any away from them.
 #[test]
 fn adaptive_refinement_goes_to_the_conductor_edges() {
-    let p = CpwgParams::default();
+    let p = PlanarParams::default();
     // triangles within 30 um of an edge of the strip or of the coplanar ground at the gap, and beyond 150 um
     let count = |tol: f64| {
-        let q = CpwgParams { tol, ..p.clone() };
+        let q = PlanarParams { tol, ..p.clone() };
         let sol = analyze_fem(&q, &q.fem_options(), &Ctl::new()).unwrap();
         let (mut near, mut far) = (0usize, 0usize);
         for t in &sol.mesh.tris {

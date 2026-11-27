@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use super::{CpwgAnalysis, CpwgFemAnalysis, CpwgParams, GroundCat, Split, analytic};
+use super::{GroundCat, PlanarAnalysis, PlanarFemAnalysis, PlanarParams, Split, analytic};
 use transverse_core::losses::LossModel;
 use transverse_core::units::format_g;
 use transverse_core::{C_LIGHT, NP2DB, guided_wavelength_mm, phase_deg};
@@ -15,7 +15,7 @@ struct Lumped {
     c: f64,
 }
 
-pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
+pub fn report(title: &str, p: &PlanarParams, a: &PlanarAnalysis) -> String {
     let sol = &a.sol;
     let mut s = body(title, p, &Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c }, &a.loss, &a.split);
     let acc = &sol.accuracy;
@@ -40,7 +40,7 @@ pub fn report(title: &str, p: &CpwgParams, a: &CpwgAnalysis) -> String {
 }
 
 /// Report of a finite-element analysis.
-pub fn report_fem(title: &str, p: &CpwgParams, a: &CpwgFemAnalysis) -> String {
+pub fn report_fem(title: &str, p: &PlanarParams, a: &PlanarFemAnalysis) -> String {
     let sol = &a.sol;
     let mut s = body(title, p, &Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c }, &a.loss, &a.split);
     let acc = &sol.accuracy;
@@ -69,7 +69,7 @@ pub fn report_fem(title: &str, p: &CpwgParams, a: &CpwgFemAnalysis) -> String {
     s
 }
 
-fn domain_line(s: &mut String, p: &CpwgParams, margin: f64) {
+fn domain_line(s: &mut String, p: &PlanarParams, margin: f64) {
     if margin > 0.0 {
         let _ = writeln!(
             s,
@@ -79,7 +79,7 @@ fn domain_line(s: &mut String, p: &CpwgParams, margin: f64) {
     }
 }
 
-fn body(title: &str, p: &CpwgParams, sol: &Lumped, loss: &LossModel, split: &Split) -> String {
+fn body(title: &str, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &Split) -> String {
     let lo = loss.at(p.f);
     let to_db_mm = NP2DB / 1000.0;
     let (ac, ad) = (lo.alpha_c * to_db_mm, lo.alpha_d * to_db_mm);

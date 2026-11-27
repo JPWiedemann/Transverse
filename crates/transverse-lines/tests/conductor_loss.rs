@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use transverse_core::fem::{FemInput, corner_gradients};
 use transverse_core::{Ctl, EPS0};
 use transverse_geom::SIGNAL;
-use transverse_lines::cpwg_inner::{
-    C_BND, CpwgParams, FemSolution, analyze, analyze_fem, wheeler_dzdn, wheeler_dzdn_fem,
+use transverse_lines::planar::{
+    C_BND, FemSolution, PlanarParams, analyze, analyze_fem, wheeler_dzdn, wheeler_dzdn_fem,
 };
 
 /// Impedance of free space [Ohm].
@@ -23,7 +23,7 @@ const ETA0: f64 = 376.730_313;
 
 /// `dZ0_air/dn` [Ohm/m] from the air solution `sol`, with the corners handled analytically within `r0` [mm].
 /// The grounded box far from an open structure is no conductor and is left out.
-fn from_surface_current(p: &CpwgParams, sol: &FemSolution, r0: f64) -> f64 {
+fn from_surface_current(p: &PlanarParams, sol: &FemSolution, r0: f64) -> f64 {
     let m = &sol.mesh;
     let volt = |id: u8| if id == SIGNAL { 1.0 } else { 0.0 };
     let (er, tand) = (vec![1.0; m.tris.len()], vec![0.0; m.tris.len()]);
@@ -88,18 +88,18 @@ fn from_surface_current(p: &CpwgParams, sol: &FemSolution, r0: f64) -> f64 {
 
 #[test]
 fn wheeler_agrees_with_the_integral_of_the_surface_current() {
-    let base = CpwgParams::default();
+    let base = PlanarParams::default();
     let cases = [
         ("default stack-up", base.clone()),
-        ("narrow strip, 50 Ohm", CpwgParams { w: 0.18, s: 0.15, ..base.clone() }),
-        ("tight gap", CpwgParams { w: 0.2, s: 0.075, ..base.clone() }),
-        ("wide gap", CpwgParams { w: 0.3, s: 0.5, ..base.clone() }),
-        ("35 um copper", CpwgParams { t: 0.035, ..base.clone() }),
-        ("no plane 1, no fence 1", CpwgParams { plane1: false, fence1: false, ..base }),
+        ("narrow strip, 50 Ohm", PlanarParams { w: 0.18, s: 0.15, ..base.clone() }),
+        ("tight gap", PlanarParams { w: 0.2, s: 0.075, ..base.clone() }),
+        ("wide gap", PlanarParams { w: 0.3, s: 0.5, ..base.clone() }),
+        ("35 um copper", PlanarParams { t: 0.035, ..base.clone() }),
+        ("no plane 1, no fence 1", PlanarParams { plane1: false, fence1: false, ..base }),
     ];
     for (name, p) in cases {
         // a fine mesh for the integral; the loss itself is taken at the default accuracy, as the apps do
-        let fine = CpwgParams { tol: 0.005, ..p.clone() };
+        let fine = PlanarParams { tol: 0.005, ..p.clone() };
         let air = analyze_fem(&fine, &fine.fem_options(), &Ctl::new()).unwrap();
         // 0.5 um is small against the copper thickness, where the power law holds
         let reference = from_surface_current(&p, &air, 0.5e-3);

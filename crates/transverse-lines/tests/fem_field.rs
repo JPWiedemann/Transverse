@@ -4,8 +4,8 @@
 use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::units::UnitSystem;
-use transverse_lines::cpwg_inner::{CpwgParams, FemOptions, analyze, analyze_fem, field_data_fem};
 use transverse_lines::mesh_field::MeshFieldData;
+use transverse_lines::planar::{FemOptions, PlanarParams, analyze, analyze_fem, field_data_fem};
 use transverse_lines::render::mesh_raster::{probe_mesh, render_mesh};
 use transverse_lines::render::raster::{FieldMode, RasterSpec, render};
 
@@ -38,8 +38,8 @@ fn reference_nodes() -> Vec<NodeRef> {
 }
 
 /// The default stack-up (the FD "final stack-up" case) solved with FEM at a tight tolerance.
-fn stackup() -> (CpwgParams, MeshFieldData) {
-    let p = CpwgParams { tol: 0.2, ..CpwgParams::default() };
+fn stackup() -> (PlanarParams, MeshFieldData) {
+    let p = PlanarParams { tol: 0.2, ..PlanarParams::default() };
     let sol = analyze_fem(
         &p,
         &FemOptions {
@@ -56,9 +56,9 @@ fn stackup() -> (CpwgParams, MeshFieldData) {
     (p, f)
 }
 
-fn fd_field(p: &CpwgParams) -> (transverse_lines::model::FieldData, transverse_core::postproc::EField) {
+fn fd_field(p: &PlanarParams) -> (transverse_lines::model::FieldData, transverse_core::postproc::EField) {
     let sol = analyze(p, &Ctl::new()).unwrap();
-    let f = transverse_lines::cpwg_inner::field_data(p, &sol);
+    let f = transverse_lines::planar::field_data(p, &sol);
     let e = f.e_field(false);
     (f, e)
 }

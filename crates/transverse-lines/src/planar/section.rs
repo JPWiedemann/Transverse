@@ -9,7 +9,7 @@
 use transverse_core::quasistatic::GridSource;
 use transverse_geom::{CrossSection, Far, GROUND, Item, Material, Paint, SIGNAL, Shape, SizeSpec};
 
-use super::CpwgParams;
+use super::PlanarParams;
 use super::grid::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, C_SIG};
 
 pub const MAT_AIR: u16 = 0;
@@ -22,7 +22,7 @@ pub const GROWTH: f64 = 1.25;
 /// Grading exponent towards conductor edges (1 = linear).
 pub const TIP_POWER: f64 = 1.0;
 
-impl CpwgParams {
+impl PlanarParams {
     /// The cross-section for a domain extension `margin` of the open regions.
     pub fn cross_section(&self, margin: f64) -> CrossSection {
         let g = self.geometry(margin);
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn the_default_stackup_is_a_valid_closed_section_with_all_conductor_pieces() {
-        let p = CpwgParams::default();
+        let p = PlanarParams::default();
         let cs = p.cross_section(0.0);
         cs.validate().unwrap();
         let g = p.geometry(0.0);
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn missing_planes_and_fences_open_the_domain_and_t_zero_uses_segments() {
-        let p = CpwgParams { plane1: false, fence1: false, t: 0.0, ..CpwgParams::default() };
+        let p = PlanarParams { plane1: false, fence1: false, t: 0.0, ..PlanarParams::default() };
         let cs = p.cross_section(3.0);
         cs.validate().unwrap();
         let g = p.geometry(3.0);
@@ -134,12 +134,12 @@ mod tests {
         );
         // far field only where the structure is open
         assert!(p.size_spec(3.0).far.is_some());
-        assert!(CpwgParams::default().size_spec(0.0).far.is_none());
+        assert!(PlanarParams::default().size_spec(0.0).far.is_none());
     }
 
     #[test]
     fn the_first_level_uses_the_grid_base_sizes() {
-        let p = CpwgParams::default();
+        let p = PlanarParams::default();
         let (dmin, dmax) = p.base_sizes();
         let s = p.size_spec(0.0);
         assert_eq!((s.dmin, s.dmax, s.growth), (dmin, dmax, GROWTH));

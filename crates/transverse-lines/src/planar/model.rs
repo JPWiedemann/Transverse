@@ -4,10 +4,10 @@ use transverse_core::units::format_g;
 use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
-    CpwgAnalysis, CpwgFemAnalysis, CpwgParams, DEFAULT_RTOL, GapMode, GroundCat, MeshMode, SchematicFlags,
-    Solver, Split, SynthVar, analysis_from_solution, fem_accuracy, field_data, field_data_fem, full_analysis,
-    full_analysis_fem, ground_split_fem, loss_model_fem, report, report_fem, schematic, synthesize,
-    synthesize_fem,
+    DEFAULT_RTOL, GapMode, GroundCat, MeshMode, PlanarAnalysis, PlanarFemAnalysis, PlanarParams,
+    SchematicFlags, Solver, Split, SynthVar, analysis_from_solution, fem_accuracy, field_data,
+    field_data_fem, full_analysis, full_analysis_fem, ground_split_fem, loss_model_fem, report, report_fem,
+    schematic, synthesize, synthesize_fem,
 };
 use crate::model::*;
 use transverse_core::losses::LossModel;
@@ -42,7 +42,7 @@ const GAP_CHOICES: &[&str] = &["upper", "lower", "custom"];
 const MESH_CHOICES: &[&str] = &["Auto (target error)", "Manual"];
 const SOLVER_CHOICES: &[&str] = &["Finite differences", "Finite elements"];
 
-/// Parameter form of the CPWG line (defaults equal [`CpwgParams::default`]).
+/// Parameter form of the CPWG line (defaults equal [`PlanarParams::default`]).
 static SPECS: [ParamSpec; 29] = [
     spec("w", "Trace width w", GEO, len(0.3605, "mm")),
     spec("s", "Gap s", GEO, len(0.11, "mm")),
@@ -116,7 +116,7 @@ fn get_choice(s: &ParamSet, k: &str, d: usize, n: usize) -> TvResult<usize> {
     if i < n { Ok(i) } else { Err(TvError::InvalidParam(format!("{k}: choice {i} out of range"))) }
 }
 
-impl CpwgParams {
+impl PlanarParams {
     /// Parameters from a form value set; missing keys keep their defaults.
     pub fn from_set(s: &ParamSet) -> TvResult<Self> {
         let d = Self::default();
@@ -204,7 +204,7 @@ impl CpwgParams {
     }
 }
 
-fn split_summary(p: &CpwgParams, split: &Split, loss: &LossModel, margin: f64) -> SplitSummary {
+fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64) -> SplitSummary {
     let (fd, cur) = (&split.field, &split.current);
     let row = |c: GroundCat, indent: u8| SplitRow {
         key: c.key().into(),
@@ -314,7 +314,7 @@ struct Parts {
     accuracy: Accuracy,
 }
 
-fn assemble(p: &CpwgParams, parts: Parts, loss: LossModel, split: &Split) -> Analysis {
+fn assemble(p: &PlanarParams, parts: Parts, loss: LossModel, split: &Split) -> Analysis {
     let wavelength_mm = guided_wavelength_mm(p.f, parts.eeff);
     let mode = ModeResult {
         name: "single".into(),
@@ -337,7 +337,7 @@ fn assemble(p: &CpwgParams, parts: Parts, loss: LossModel, split: &Split) -> Ana
     }
 }
 
-fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
+fn to_analysis(title: &str, p: &PlanarParams, a: PlanarAnalysis) -> Analysis {
     let s = &a.sol;
     let parts = Parts {
         z0: s.z0,
@@ -352,7 +352,7 @@ fn to_analysis(title: &str, p: &CpwgParams, a: CpwgAnalysis) -> Analysis {
     assemble(p, parts, a.loss, &a.split)
 }
 
-fn to_analysis_fem(title: &str, p: &CpwgParams, a: CpwgFemAnalysis) -> TvResult<Analysis> {
+fn to_analysis_fem(title: &str, p: &PlanarParams, a: PlanarFemAnalysis) -> TvResult<Analysis> {
     let s = &a.sol;
     let parts = Parts {
         z0: s.z0,
@@ -368,18 +368,18 @@ fn to_analysis_fem(title: &str, p: &CpwgParams, a: CpwgFemAnalysis) -> TvResult<
 }
 
 /// Completes a synthesis: losses, split and the generic result for the geometry that was found.
-type Finish<'a> = Box<dyn FnOnce(&CpwgParams, &str) -> TvResult<Analysis> + 'a>;
+type Finish<'a> = Box<dyn FnOnce(&PlanarParams, &str) -> TvResult<Analysis> + 'a>;
 
 /// CPWG / stripline-type coplanar waveguide in a PCB inner layer.
-pub struct CpwgInner;
+pub struct PlanarLine;
 
-impl LineModel for CpwgInner {
+impl LineModel for PlanarLine {
     fn id(&self) -> &'static str {
-        "cpwg_inner"
+        "planar"
     }
 
     fn name(&self) -> &'static str {
-        "CPWG, inner layer"
+        "Planar line"
     }
 
     fn params(&self) -> &'static [ParamSpec] {
@@ -391,7 +391,7 @@ impl LineModel for CpwgInner {
     }
 
     fn wavelength_mm(&self, p: &ParamSet) -> Option<f64> {
-        let p = CpwgParams::from_set(p).ok()?;
+        let p = PlanarParams::from_set(p).ok()?;
         (p.f > 0.0 && p.er1 > 0.0 && p.er2 > 0.0).then(|| p.wavelength())
     }
 
@@ -407,7 +407,7 @@ impl LineModel for CpwgInner {
     }
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis> {
-        let p = CpwgParams::from_set(p)?;
+        let p = PlanarParams::from_set(p)?;
         match p.solver {
             Solver::Fd => Ok(to_analysis("Analysis", &p, full_analysis(&p, ctl)?)),
             Solver::Fem => to_analysis_fem("Analysis (finite elements)", &p, full_analysis_fem(&p, ctl)?),
@@ -434,16 +434,16 @@ impl LineModel for CpwgInner {
             "s" => SynthVar::S,
             _ => SynthVar::WTotal,
         };
-        let p = CpwgParams::from_set(p)?;
+        let p = PlanarParams::from_set(p)?;
         // the solution of the found geometry, as the pieces of whichever solver ran
-        let (mut pp, eeff, finish): (CpwgParams, f64, Finish<'_>) = match p.solver {
+        let (mut pp, eeff, finish): (PlanarParams, f64, Finish<'_>) = match p.solver {
             Solver::Fd => {
                 let (pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
                 let eeff = sol.eeff;
                 (
                     pp,
                     eeff,
-                    Box::new(move |pp: &CpwgParams, title: &str| {
+                    Box::new(move |pp: &PlanarParams, title: &str| {
                         Ok(to_analysis(title, pp, analysis_from_solution(pp, sol, ctl)?))
                     }),
                 )
@@ -454,10 +454,10 @@ impl LineModel for CpwgInner {
                 (
                     pp,
                     eeff,
-                    Box::new(move |pp: &CpwgParams, title: &str| {
+                    Box::new(move |pp: &PlanarParams, title: &str| {
                         let loss = loss_model_fem(pp, &sol, ctl)?;
                         let split = ground_split_fem(pp, &sol)?;
-                        to_analysis_fem(title, pp, CpwgFemAnalysis { sol, loss, split })
+                        to_analysis_fem(title, pp, PlanarFemAnalysis { sol, loss, split })
                     }),
                 )
             }
@@ -471,7 +471,7 @@ impl LineModel for CpwgInner {
         let analysis = finish(&pp, &title)?;
         // only the dimensions (and the length, if a phase was asked for) change; the domain margin
         // found during synthesis stays internal
-        let out = CpwgParams { w: pp.w, s: pp.s, length: pp.length, ..p };
+        let out = PlanarParams { w: pp.w, s: pp.s, length: pp.length, ..p };
         Ok((out.to_set(), analysis))
     }
 }

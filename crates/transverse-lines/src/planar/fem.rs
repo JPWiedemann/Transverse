@@ -8,7 +8,7 @@ use transverse_core::{Ctl, TvResult};
 use transverse_geom::{CrossSection, SIGNAL, SizeSpec};
 use transverse_mesh::Mesh;
 
-use super::{CpwgParams, MeshMode};
+use super::{MeshMode, PlanarParams};
 
 /// Options of the FEM analysis.
 #[derive(Clone, Copy, Debug)]
@@ -51,7 +51,7 @@ impl FemOptions {
     }
 }
 
-impl CpwgParams {
+impl PlanarParams {
     pub fn fem_options(&self) -> FemOptions {
         FemOptions {
             tol_pct: self.tol,
@@ -136,7 +136,7 @@ impl InputData {
 }
 
 /// Size field of a level: the first-level sizes (or the manual ones) scaled by `scale`.
-fn level_spec(p: &CpwgParams, margin: f64, sizes: Option<(f64, f64)>, scale: f64) -> SizeSpec {
+fn level_spec(p: &PlanarParams, margin: f64, sizes: Option<(f64, f64)>, scale: f64) -> SizeSpec {
     match sizes {
         Some((dmin, dmax)) => p.size_spec_for(margin, dmin, dmax),
         None => p.size_spec(margin),
@@ -146,7 +146,7 @@ fn level_spec(p: &CpwgParams, margin: f64, sizes: Option<(f64, f64)>, scale: f64
 
 /// Mesh and solve one level with the size field `spec`.
 pub(super) fn solve_level(
-    p: &CpwgParams,
+    p: &PlanarParams,
     margin: f64,
     spec: &SizeSpec,
     max_nodes: usize,
@@ -174,7 +174,7 @@ pub(super) fn solve_mesh(
 
 /// Solve, then split the elements with the largest error indicators, until Z0 has settled.
 fn refine_adaptively(
-    p: &CpwgParams,
+    p: &PlanarParams,
     margin: f64,
     spec: &SizeSpec,
     opt: &FemOptions,
@@ -195,7 +195,7 @@ fn refine_adaptively(
 }
 
 /// Analyse one geometry with the FEM backend.
-pub fn analyze_fem(p: &CpwgParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<FemSolution> {
+pub fn analyze_fem(p: &PlanarParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<FemSolution> {
     p.validate()?;
     let margin = if p.closed() {
         0.0

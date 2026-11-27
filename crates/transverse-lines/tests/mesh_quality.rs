@@ -2,12 +2,12 @@
 //! asks for. (A point placed almost on an interface or a conductor edge would leave a knot of tiny elements.)
 
 use transverse_core::Ctl;
-use transverse_lines::cpwg_inner::{CpwgParams, GapMode};
+use transverse_lines::planar::{GapMode, PlanarParams};
 use transverse_mesh::planar::build;
 use transverse_mesh::sizefield::SizeField;
 
 /// Smallest edge length relative to the size wanted there, and where it is.
-fn smallest_edge(p: &CpwgParams, sizes: Option<(f64, f64)>, scale: f64) -> (f64, [f64; 2]) {
+fn smallest_edge(p: &PlanarParams, sizes: Option<(f64, f64)>, scale: f64) -> (f64, [f64; 2]) {
     let margin = if p.closed() { 0.0 } else { 1.0 };
     let cs = p.cross_section(margin);
     let spec = match sizes {
@@ -33,9 +33,9 @@ fn smallest_edge(p: &CpwgParams, sizes: Option<(f64, f64)>, scale: f64) -> (f64,
 
 #[test]
 fn no_knots_of_tiny_elements_anywhere() {
-    let base = CpwgParams::default();
+    let base = PlanarParams::default();
     // the geometry and manual sizes of a reported knot in the gap, at 61.9 um from the strip on the copper surface
-    let reported = CpwgParams { w: 0.359971, g: 0.2, ..base.clone() };
+    let reported = PlanarParams { w: 0.359971, g: 0.2, ..base.clone() };
     let mut cases = vec![
         ("reported, manual".to_string(), reported.clone(), Some((0.002, 0.2)), 1.0),
         ("default, adaptive start".to_string(), base.clone(), None, 4.0),
@@ -45,13 +45,13 @@ fn no_knots_of_tiny_elements_anywhere() {
             .into_iter()
             .enumerate()
     {
-        let p = CpwgParams { w, s, g, ..base.clone() };
+        let p = PlanarParams { w, s, g, ..base.clone() };
         for scale in [1.0, 2.0, 4.0] {
             cases.push((format!("closed {i} scale {scale}"), p.clone(), None, scale));
         }
-        let zero = CpwgParams { t: 0.0, ..p.clone() };
+        let zero = PlanarParams { t: 0.0, ..p.clone() };
         cases.push((format!("zero thickness {i}"), zero, None, 2.0));
-        let open = CpwgParams { plane1: false, fence1: false, gap_mode: GapMode::Lower, ..p };
+        let open = PlanarParams { plane1: false, fence1: false, gap_mode: GapMode::Lower, ..p };
         cases.push((format!("open {i}"), open, None, 2.0));
     }
     let mut bad = Vec::new();

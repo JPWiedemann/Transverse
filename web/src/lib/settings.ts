@@ -49,13 +49,28 @@ export function loadSettings(): Settings {
         showEq: typeof s.showEq === 'boolean' ? s.showEq : true,
         showMesh: typeof s.showMesh === 'boolean' ? s.showMesh : false,
         dbRange: typeof s.dbRange === 'number' && s.dbRange >= 5 && s.dbRange <= 200 ? s.dbRange : 40,
-        lines: typeof s.lines === 'object' && s.lines !== null ? s.lines : {},
+        lines: typeof s.lines === 'object' && s.lines !== null ? migrateLines(s.lines) : {},
       };
     }
   } catch {
     // unreadable or blocked: start with defaults
   }
   return defaults();
+}
+
+/** Ids that line types had before: settings saved under them are read under the current id. */
+const RENAMED_LINES: [string, string][] = [['cpwg_inner', 'planar']];
+
+export function migrateLines(lines: Record<string, LineSettings>): Record<string, LineSettings> {
+  const out = { ...lines };
+  for (const [old, now] of RENAMED_LINES) {
+    const saved = out[old];
+    if (saved) {
+      out[now] ??= saved;
+      delete out[old];
+    }
+  }
+  return out;
 }
 
 function defaults(): Settings {

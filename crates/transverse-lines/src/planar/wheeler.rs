@@ -5,9 +5,9 @@
 use transverse_core::quasistatic::Solution;
 use transverse_core::{Ctl, TvResult};
 
-use super::{CpwgParams, GapMode, MeshMode, analyze};
+use super::{GapMode, MeshMode, PlanarParams, analyze};
 
-impl CpwgParams {
+impl PlanarParams {
     /// The structure with every metal surface moved by `d` into its metal (`d < 0`: out of it), as new
     /// dimensions. The heights h1 and h2 are measured from the copper surfaces, which move as well, so a plane
     /// that recedes gets `2 d` further from a thick copper layer (`d` from a zero-thickness one, whose faces
@@ -27,14 +27,14 @@ impl CpwgParams {
 }
 
 /// dZ0_air/dn [Ohm/m] with the same mesh settings and domain as `sol`.
-pub fn wheeler_dzdn(p: &CpwgParams, sol: &Solution, ctl: &Ctl) -> TvResult<f64> {
+pub fn wheeler_dzdn(p: &PlanarParams, sol: &Solution, ctl: &Ctl) -> TvResult<f64> {
     // wall shift relative to the geometry
     let mut dn = (p.s / 20.0).min(p.w / 20.0);
     if p.t > 0.0 {
         dn = dn.min(p.t / 8.0);
     }
     let (dmin, dmax, richardson) = sol.accuracy.mesh_used;
-    let pa = CpwgParams {
+    let pa = PlanarParams {
         er1: 1.0,
         er2: 1.0,
         gap_mode: GapMode::Custom,
@@ -59,7 +59,7 @@ mod tests {
 
     /// Where the metal surfaces of `p` are [mm], with `y0` the height of the bottom of the signal layer. In the
     /// order: signal side face, coplanar face at the gap, via fence, copper bottom, copper top, plane 1, plane 2.
-    fn surfaces(p: &CpwgParams, y0: f64) -> [f64; 7] {
+    fn surfaces(p: &PlanarParams, y0: f64) -> [f64; 7] {
         let g = p.geometry(0.0);
         [p.w / 2.0, p.w / 2.0 + p.s, g.xe, y0, y0 + p.t, y0 + g.ytop, y0 + g.ybot]
     }
@@ -69,7 +69,7 @@ mod tests {
     fn every_metal_surface_recedes_into_its_metal() {
         let d = 1e-3;
         for (t, faces) in [(0.018, 1.0), (0.035, 1.0), (0.0, 0.0)] {
-            let p = CpwgParams { t, ..CpwgParams::default() };
+            let p = PlanarParams { t, ..PlanarParams::default() };
             let q = p.walls_receded(d);
             // the bottom face of thick copper recedes upwards, and the dimensions of `q` are measured from it
             let (before, after) = (surfaces(&p, 0.0), surfaces(&q, faces * d));
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn a_missing_plane_has_no_surface_to_move() {
-        let p = CpwgParams { plane1: false, fence1: false, ..CpwgParams::default() };
+        let p = PlanarParams { plane1: false, fence1: false, ..PlanarParams::default() };
         let q = p.walls_receded(1e-3);
         assert_eq!((q.h1, q.h2), (p.h1, p.h2 + 2e-3));
     }
