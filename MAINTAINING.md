@@ -18,12 +18,13 @@ Both branches are protected by rulesets: no direct pushes, no force pushes, no d
 | `pr-title`      | `pr-title.yml`      | `dev`         |
 | `source-branch` | `source-branch.yml` | `main`        |
 
-- `check` is a small job that waits for three parallel jobs: `rust` (`cargo fmt --check`, clippy with `-D warnings`, the tests including the parity tests against the Python reference), `licenses` (the dependency license check with `cargo deny`, allowlist in `deny.toml`, and the generation of the third-party notices) and `scripts` (the tests of the release script and the checks of the Python reference implementation: ruff, pytest). It runs on every pull request and on pushes to `dev` and `main` (feature branches are only built through their pull request, so open it early, as a draft). Require only `check`, not the individual jobs.
-- `build` runs for `main`, `dev` and pull requests targeting them. It is a small job that waits for three build jobs that run in parallel with `check` (not after it): `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the WebAssembly module with the reference cases run through it in Node, then the web frontend: type check, tests, build, and the browser tests with Playwright in headless Chromium). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
+- `check` is a small job that waits for three parallel jobs: `rust` (`cargo fmt --check`, clippy with `-D warnings`, the tests including the parity tests against the Python reference), `licenses` (the dependency license check with `cargo deny`, allowlist in `deny.toml`, and the generation of the third-party notices) and `scripts` (the tests of the release script and the checks of the Python reference implementation: ruff, pytest). It runs on every pull request and on pushes to `dev` (feature branches are only built through their pull request, so open it early, as a draft). Require only `check`, not the individual jobs.
+- `build` runs on pushes to `dev` and for pull requests targeting `dev` or `main`. It is a small job that waits for three build jobs that run in parallel with `check` (not after it): `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the WebAssembly module with the reference cases run through it in Node, then the web frontend: type check, tests, build, and the browser tests with Playwright in headless Chromium). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
 - `pr-title` validates that the PR title is a conventional commit.
 - `source-branch` fails for pull requests into `main` that don't come from `dev` of this repository.
 - Require the `(pull_request)` runs, not the `(push)` runs, where a check exists for both.
-- The Rust build cache is only written by runs on `dev` (`save-if` in `ci.yml`); pull requests and `main` read it. This keeps the repository's cache quota free for the cache that is actually reused.
+- While the release PR (`dev` -> `main`) is a draft, its `(pull_request)` jobs of `ci.yml` are skipped: it is a draft between releases, and every merge into `dev` would otherwise run everything twice on the same code. The `(push)` runs shown on it are those of `dev`'s latest commit. Marking it ready for review starts the full run, which is the one to wait for before merging. There is no CI run on `main` after the merge; the release workflow builds it.
+- The Rust build cache is only written by runs on `dev` (`save-if` in `ci.yml`); pull requests read it. This keeps the repository's cache quota free for the cache that is actually reused.
 - Do not enable "Require branches to be up to date" for `main`. After a release, `dev` is one merge commit behind `main`, and that setting would force a back-merge each time.
 
 ## Reviewing and merging a pull request
@@ -40,7 +41,7 @@ Because the version and the notes are derived from the squash commit, a wrong ti
 Everything except the final merge is automatic.
 
 1. Whenever `dev` contains a releasable change (`feat`, `fix`, `perf` or a breaking change since the last release), the `Release preview` workflow opens a **draft** pull request `chore(release): next release` from `dev` to `main`. On every further push to `dev` it updates the description with the next version and the notes. With only `chore`, `ci`, `docs`, `refactor`, `test` or `build` changes, no PR is opened.
-2. When you want to release, review the version and notes in the description, mark the PR **Ready for review**, wait for the checks and merge it with a **merge commit**.
+2. When you want to release, review the version and notes in the description, mark the PR **Ready for review**, wait for the checks that this starts (the skipped ones from the draft already count as passed, so wait for the new run to appear and finish) and merge it with a **merge commit**.
 3. The `Release` workflow runs on the push to `main`. It computes the version and the notes again, builds the desktop app for Linux and Windows, runs the self-test of the Windows build on a Windows runner, and only when everything succeeded creates the tag and the GitHub release (with the notes and all files). If a build fails, nothing is released: fix the cause, or re-run the failed jobs from the Actions tab, and the release follows.
 
 The release contains:
@@ -102,7 +103,7 @@ Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to
 
 | File                  | Trigger                          | Purpose                                                          |
 | --------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `ci.yml`              | pull requests, push to dev/main  | format, lints, tests, licenses, Python, builds (incl. wasm) |
+| `ci.yml`              | pull requests, push to dev       | format, lints, tests, licenses, Python, builds (incl. wasm) |
 | `pr-title.yml`        | pull requests                    | conventional commit check for the PR title                       |
 | `source-branch.yml`   | pull requests into `main`        | only `dev` may be merged into `main`                             |
 | `release-preview.yml` | push to `dev`, release PR events | opens/updates the draft release PR                               |
