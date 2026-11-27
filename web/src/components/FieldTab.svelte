@@ -189,7 +189,7 @@
 
   // ---- triangle mesh of a finite-element solution: the edges around the visible region, asked for again when the
   // view leaves the region they cover
-  const MESH_EDGE_LIMIT = 60000;
+  const MESH_EDGE_LIMIT = 300000;
   let meshEdges = $state<{ covered: Bounds; segs: Float64Array; generation: number } | undefined>();
   let meshBusy = false;
   $effect(() => {
@@ -198,7 +198,13 @@
     const g = generation;
     if (!i?.mesh || !meshOn || !canSample) return;
     const have = meshEdges;
-    if (meshBusy || (have && have.generation === g && contains(have.covered, visible))) return;
+    if (meshBusy) return;
+    if (have && have.generation === g && contains(have.covered, visible)) {
+      // enough, unless there were too many edges to draw and the view has since become much smaller
+      const tooMany = have.segs.length / 4 > MESH_EDGE_LIMIT;
+      const zoomedIn = (visible[1] - visible[0]) * (1 + 2 * MARGIN) < 0.8 * (have.covered[1] - have.covered[0]);
+      if (!(tooMany && zoomedIn)) return;
+    }
     meshBusy = true;
     const covered = expand(visible, MARGIN);
     engine

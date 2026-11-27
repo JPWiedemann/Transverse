@@ -32,7 +32,7 @@ const RERENDER_RATIO: (f64, f64) = (0.6, 1.4);
 /// Height reserved for the title (two lines) and the readout line, so toggling options never
 /// changes the plot size.
 /// Mesh edges drawn at most (a finite-element mesh has tens of thousands of them).
-const MESH_EDGE_LIMIT: usize = 60_000;
+const MESH_EDGE_LIMIT: usize = 300_000;
 const READOUT_HEIGHT: f32 = 24.0;
 
 /// Field lines as polylines in mm.
@@ -318,6 +318,11 @@ impl FieldView {
                     format_sig(a.dmin_actual / small_f, 3),
                     small
                 );
+                // an empty overlay must say why (the view of the last frame decides, as for the image)
+                let shown = self.plot_bounds.unwrap_or(f.view_zoom);
+                if f.mesh_edges(shown).is_some_and(|e| e.len() > MESH_EDGE_LIMIT) {
+                    title += " - zoom in to see the triangles";
+                }
             }
             (true, Some(a)) => {
                 title += &format!(
