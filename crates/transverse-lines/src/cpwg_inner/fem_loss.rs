@@ -1,20 +1,19 @@
 //! Conductor and dielectric loss of the FEM backend.
 //!
 //! Conductor loss by Wheeler's incremental-inductance rule, exactly as for the grid ([`super::wheeler`]):
-//! all metal walls move by +dn / -dn in the air solution and dZ0/dn gives the loss. Both shifted
-//! geometries are meshed with the size field of the finest level of the main solution (a single level, no
-//! extrapolation), so their discretisation errors are alike and largely cancel in the difference.
+//! all metal walls move by +dn / -dn in the air solution and dZ0/dn gives the loss. The shifted geometries are
+//! not meshed anew: the final mesh of the main solution is moved with the walls ([`super::fem_morph`]). Both
+//! solves then have the same elements, so their discretisation errors cancel in the difference.
 
 use transverse_core::losses::LossModel;
 use transverse_core::{Ctl, TvResult};
 
-use transverse_mesh::Hint;
-
-use super::fem::{FemSolution, solve_level};
+use super::fem::{FemSolution, solve_mesh};
+use super::fem_morph::move_mesh;
 use super::{CpwgParams, GapMode, MeshMode};
 
 /// dZ0_air/dn [Ohm/m] with the mesh settings and domain of `sol`.
-pub fn wheeler_dzdn_fem(p: &CpwgParams, sol: &FemSolution, max_nodes: usize, ctl: &Ctl) -> TvResult<f64> {
+pub fn wheeler_dzdn_fem(p: &CpwgParams, sol: &FemSolution, ctl: &Ctl) -> TvResult<f64> {
     // wall shift relative to the geometry (the same rule as for the grid)
     let mut dn = (p.s / 20.0).min(p.w / 20.0);
     if p.t > 0.0 {
@@ -41,23 +40,20 @@ pub fn wheeler_dzdn_fem(p: &CpwgParams, sol: &FemSolution, max_nodes: usize, ctl
             g: if fence { p.g + d } else { p.g },
             ..pa.clone()
         };
-        // the same absolute sizes as the finest level of the main solution (the shifted geometry would have its
-        // own base sizes, a few percent different, and its own mesh noise)
-        let spec = q.size_spec_like(q.margin, &sol.spec);
-        let hint = sol.refined.as_ref().map(|size| Hint { pts: &sol.mesh.pts, tris: &sol.mesh.tris, size });
-        let run = solve_level(&q, q.margin, &spec, hint, max_nodes, sol.order, ctl)?;
+        let mesh = move_mesh(&sol.mesh, p, &q, sol.margin, q.margin);
+        let run = solve_mesh(&q.cross_section(q.margin), mesh, sol.order, ctl)?;
         Ok(run.lumped.z0())
     };
     Ok((z(dn)? - z(-dn)?) / (2.0 * dn * 1e-3))
 }
 
 /// The loss model of a FEM solution: dielectric loss from G/omega, conductor loss from Wheeler.
-pub fn loss_model_fem(p: &CpwgParams, sol: &FemSolution, max_nodes: usize, ctl: &Ctl) -> TvResult<LossModel> {
+pub fn loss_model_fem(p: &CpwgParams, sol: &FemSolution, ctl: &Ctl) -> TvResult<LossModel> {
     Ok(LossModel {
         z0: sol.z0,
         eeff: sol.eeff,
         g_over_omega: sol.g_over_omega,
-        dzdn: wheeler_dzdn_fem(p, sol, max_nodes, ctl)?,
+        dzdn: wheeler_dzdn_fem(p, sol, ctl)?,
         sigma: p.sigma,
         rq_mm: p.rq,
     })

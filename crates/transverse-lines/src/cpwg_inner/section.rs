@@ -86,17 +86,6 @@ impl CpwgParams {
         self.size_spec_for(margin, dmin, dmax)
     }
 
-    /// The sizes of `like` (absolute, e.g. from the finest level of another solution) with the far field of this
-    /// geometry: shifted copies of a structure are meshed alike.
-    pub fn size_spec_like(&self, margin: f64, like: &SizeSpec) -> SizeSpec {
-        let g = self.geometry(margin);
-        let far = (!self.closed()).then(|| Far {
-            core: [-g.xe, g.xe, g.ybot, g.ytop],
-            dfar: like.far.map_or((margin / 6.0).max(like.dmax), |f| f.dfar).max(like.dmax),
-        });
-        SizeSpec { far, ..*like }
-    }
-
     /// As [`Self::size_spec`] with given sizes (manual mesh).
     pub fn size_spec_for(&self, margin: f64, dmin: f64, dmax: f64) -> SizeSpec {
         let g = self.geometry(margin);

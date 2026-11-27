@@ -86,11 +86,11 @@ fn fem_matches_fd_on_the_reference_cases() {
     for case in load().iter().filter(|c| converged(c)) {
         let p = same_domain(case);
         let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
-        check(&case.name, "z0", sol.z0, case.z0, 3e-3);
+        check(&case.name, "z0", sol.z0, case.z0, 1e-3);
         check(&case.name, "eeff", sol.eeff, case.eeff, 1e-3);
-        check(&case.name, "C", sol.c, case.c, 3e-3);
-        check(&case.name, "C0", sol.c0, case.c0, 3e-3);
-        check(&case.name, "G/omega", sol.g_over_omega, case.g_over_omega, 3e-3);
+        check(&case.name, "C", sol.c, case.c, 1e-3);
+        check(&case.name, "C0", sol.c0, case.c0, 1e-3);
+        check(&case.name, "G/omega", sol.g_over_omega, case.g_over_omega, 1.2e-3);
         assert!(sol.accuracy.nodes.len() >= 3, "{}: at least three levels", case.name);
         assert!(sol.accuracy.est_err < 5e-3, "{}: estimated error {}", case.name, sol.accuracy.est_err);
     }
@@ -117,8 +117,7 @@ fn a_tighter_tolerance_brings_the_fem_within_one_per_mille() {
 fn t0_cases_match_conformal_mapping() {
     for case in load() {
         let Some(za) = case.analytic_z0 else { continue };
-        // the singular edges of the zero-thickness conductors converge slowly: ask for more than the default
-        let p = CpwgParams { tol: 0.2, ..same_domain(&case) };
+        let p = same_domain(&case);
         let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
         assert!(rel(sol.z0, za) < 3e-3, "{}: FEM {} vs analytic {za}", case.name, sol.z0);
     }
@@ -131,7 +130,7 @@ fn the_fem_closed_stackup_has_the_reference_values_of_the_project() {
     assert!(rel(sol.z0, 35.001) < 2e-3, "z0 {}", sol.z0);
     assert!(rel(sol.eeff, 3.58) < 2e-3, "eeff {}", sol.eeff);
     assert_eq!(sol.margin, 0.0);
-    assert!(sol.refined.is_some() && sol.accuracy.est_err < 5e-3);
+    assert!(sol.adaptive && sol.accuracy.est_err < 5e-3);
     // the finest mesh and its potentials are kept: nodes, then one value per edge for quadratic elements
     assert_eq!(sol.v.len(), sol.mesh.pts.len() + sol.edges.len());
     assert_eq!(sol.v.len(), sol.v0.len());
@@ -203,10 +202,10 @@ fn fem_losses_match_fd() {
     for case in load().iter().filter(|c| names.contains(&c.name.as_str())) {
         let p = same_domain(case);
         let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
-        let lm = loss_model_fem(&p, &sol, p.max_nodes, &Ctl::new()).unwrap();
+        let lm = loss_model_fem(&p, &sol, &Ctl::new()).unwrap();
         let at = lm.at(p.f);
-        check(&case.name, "dZ0/dn", lm.dzdn, case.dzdn, 1e-2);
-        check(&case.name, "alpha_c", at.alpha_c, case.loss.alpha_c, 1e-2);
+        check(&case.name, "dZ0/dn", lm.dzdn, case.dzdn, 2e-3);
+        check(&case.name, "alpha_c", at.alpha_c, case.loss.alpha_c, 1e-3);
         check(&case.name, "alpha_d", at.alpha_d, case.loss.alpha_d, 1e-3);
         // roughness and skin depth are independent of the solver
         assert_eq!(lm.sigma, p.sigma);
@@ -343,7 +342,7 @@ fn report_losses() {
         let p = CpwgParams { tol, ..same_domain(&case) };
         let t0 = std::time::Instant::now();
         let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
-        let lm = loss_model_fem(&p, &sol, p.max_nodes, &Ctl::new()).unwrap();
+        let lm = loss_model_fem(&p, &sol, &Ctl::new()).unwrap();
         let at = lm.at(p.f);
         println!(
             "{:28} dzdn {:+.2e} alpha_c {:+.2e} alpha_d {:+.2e} | {:.1}s",
@@ -394,7 +393,7 @@ fn report_split() {
 }
 
 #[test]
-fn adaptive_and_uniform_refinement_agree_and_the_adaptive_mesh_is_not_larger() {
+fn adaptive_and_uniform_refinement_agree_and_the_adaptive_mesh_is_far_smaller() {
     let case = load().into_iter().find(|c| c.name == "final_stackup").unwrap();
     let p = CpwgParams { tol: 0.1, ..same_domain(&case) };
     let run = |adaptive: bool| {
@@ -403,12 +402,38 @@ fn adaptive_and_uniform_refinement_agree_and_the_adaptive_mesh_is_not_larger() {
     };
     let (a, u) = (run(true), run(false));
     for (name, s) in [("adaptive", &a), ("uniform", &u)] {
-        check("final_stackup", name, s.z0, case.z0, 1.5e-3);
+        check("final_stackup", name, s.z0, case.z0, 1e-3);
     }
-    assert!(a.refined.is_some() && u.refined.is_none());
-    assert!(rel(a.z0, u.z0) < 1.5e-3, "adaptive {} vs uniform {}", a.z0, u.z0);
-    // measured: 26k and 25k nodes (the adaptive one starts from a finer size field than the uniform levels
-    // do, so that the coarse regions still give smooth images; it is 2-3 times faster on the larger cases)
-    assert!(a.mesh.pts.len() < 2 * u.mesh.pts.len(), "{} vs {} nodes", a.mesh.pts.len(), u.mesh.pts.len());
-    assert!(a.accuracy.est_err < 1e-3, "{}", a.accuracy.est_err);
+    assert!(a.adaptive && !u.adaptive);
+    assert!(rel(a.z0, u.z0) < 1e-3, "adaptive {} vs uniform {}", a.z0, u.z0);
+    // measured: 6.6k against 24.7k nodes
+    assert!(a.mesh.pts.len() * 3 < u.mesh.pts.len(), "{} vs {} nodes", a.mesh.pts.len(), u.mesh.pts.len());
+}
+
+/// The refinement goes where the error is: to the conductor edges, where the field is singular. Asking for more
+/// accuracy adds elements there and hardly any away from them.
+#[test]
+fn adaptive_refinement_goes_to_the_conductor_edges() {
+    let p = CpwgParams::default();
+    // triangles within 30 um of an edge of the strip or of the coplanar ground at the gap, and beyond 150 um
+    let count = |tol: f64| {
+        let q = CpwgParams { tol, ..p.clone() };
+        let sol = analyze_fem(&q, &q.fem_options(), &Ctl::new()).unwrap();
+        let (mut near, mut far) = (0usize, 0usize);
+        for t in &sol.mesh.tris {
+            let [x, y] = [0, 1].map(|k| t.iter().map(|&i| sol.mesh.pts[i as usize][k]).sum::<f64>() / 3.0);
+            let distance = [p.w / 2.0, p.w / 2.0 + p.s]
+                .iter()
+                .flat_map(|&edge| [0.0, p.t].map(|ye| (x.abs() - edge).hypot(y - ye)))
+                .fold(f64::INFINITY, f64::min);
+            near += usize::from(distance < 0.03);
+            far += usize::from(distance > 0.15);
+        }
+        (near, far, sol.mesh.pts.len())
+    };
+    let (coarse, fine) = (count(0.5), count(0.05));
+    // measured: 2.7k -> 4.7k near the edges, 3.7k -> 3.9k far from them, 4.8k -> 6.6k nodes
+    assert!(coarse.2 < 8_000, "{} nodes at the default tolerance", coarse.2);
+    assert!(fine.0 as f64 > 1.5 * coarse.0 as f64, "near the edges: {} -> {}", coarse.0, fine.0);
+    assert!((fine.1 as f64) < 1.15 * coarse.1 as f64, "far from them: {} -> {}", coarse.1, fine.1);
 }

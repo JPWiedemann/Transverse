@@ -71,15 +71,19 @@ impl TriIndex {
     }
 }
 
-/// Continuous nodal vectors from piecewise-constant element vectors: the area-weighted average of the
-/// elements around each node (nodes without elements get zero).
-pub fn recover_nodal(pts: &[[f64; 2]], tris: &[[u32; 3]], per_tri: &[[f64; 2]]) -> Vec<[f64; 2]> {
+/// Continuous nodal vectors from element vectors given at the element corners: each node gets the area-weighted
+/// average of what its elements say at that corner (nodes without elements get zero).
+pub fn recover_nodal_corners(
+    pts: &[[f64; 2]],
+    tris: &[[u32; 3]],
+    at_corners: &[[[f64; 2]; 3]],
+) -> Vec<[f64; 2]> {
     let mut sum = vec![[0.0; 2]; pts.len()];
     let mut area = vec![0.0; pts.len()];
-    for (t, g) in tris.iter().zip(per_tri) {
+    for (t, g) in tris.iter().zip(at_corners) {
         let (a, b, c) = (pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]);
         let ar = 0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs();
-        for &n in t {
+        for (&n, g) in t.iter().zip(g) {
             sum[n as usize][0] += ar * g[0];
             sum[n as usize][1] += ar * g[1];
             area[n as usize] += ar;
@@ -151,16 +155,16 @@ mod tests {
     #[test]
     fn recovery_of_a_constant_field_is_constant_and_weights_by_area() {
         let (pts, tris) = unit_mesh();
-        let g = vec![[2.0, -3.0]; tris.len()];
+        let g = vec![[[2.0, -3.0]; 3]; tris.len()];
         assert!(
-            recover_nodal(&pts, &tris, &g)
+            recover_nodal_corners(&pts, &tris, &g)
                 .iter()
                 .all(|v| (v[0] - 2.0).abs() < 1e-12 && (v[1] + 3.0).abs() < 1e-12)
         );
         // two triangles of different area share a node: the larger one counts more
         let pts = vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [-3.0, 0.0], [0.0, -1.0]];
         let tris = vec![[0, 1, 2], [0, 3, 4]];
-        let r = recover_nodal(&pts, &tris, &[[1.0, 0.0], [4.0, 0.0]]);
+        let r = recover_nodal_corners(&pts, &tris, &[[[1.0, 0.0]; 3], [[4.0, 0.0]; 3]]);
         // areas 0.5 and 1.5 -> (0.5 * 1 + 1.5 * 4) / 2 = 3.25
         assert!((r[0][0] - 3.25).abs() < 1e-12);
         assert_eq!(r[1], [1.0, 0.0]);

@@ -13,7 +13,7 @@ use transverse_core::{TvError, TvResult};
 use transverse_geom::GROUND;
 
 use super::fem::{FemSolution, InputData};
-use super::ground_split::{GroundCat, Profile, Shares, Split, merge_equal_x, x90};
+use super::ground_split::{GroundCat, Profile, Shares, Split, merge_equal_x};
 use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, CpwgParams};
 
 /// One side of a ground boundary edge.
@@ -21,6 +21,8 @@ struct Contact {
     cat: GroundCat,
     /// Centre of the edge: x [mm].
     x: f64,
+    /// Range of |x| the edge covers [mm].
+    reach: (f64, f64),
     len: f64,
     flux_d: f64,
     flux_0: f64,
@@ -71,7 +73,11 @@ pub fn ground_split_fem(p: &CpwgParams, sol: &FemSolution) -> TvResult<Split> {
             C_COP => GroundCat::CopOuter,
             _ => continue,
         };
-        contacts.push(Contact { cat, x: mid[0], len: dx.hypot(dy), flux_d: d.flux, flux_0: z.flux });
+        // ground edges do not cross x = 0 unless they are planes, which are split there by symmetry of |x|
+        let (xa, xb) = (pa[0].abs(), pb[0].abs());
+        let low = if pa[0] * pb[0] < 0.0 { 0.0 } else { xa.min(xb) };
+        let reach = (low, xa.max(xb));
+        contacts.push(Contact { cat, x: mid[0], reach, len: dx.hypot(dy), flux_d: d.flux, flux_0: z.flux });
     }
 
     let sums = |pick: fn(&Contact) -> f64| {
@@ -85,11 +91,11 @@ pub fn ground_split_fem(p: &CpwgParams, sol: &FemSolution) -> TvResult<Split> {
     let (current, tot) = sums(|c| c.flux_0);
 
     // distribution of the air-solution (return) current
-    let pts = |cats: &[GroundCat]| -> Vec<(f64, f64)> {
-        contacts.iter().filter(|c| cats.contains(&c.cat)).map(|c| (c.x.abs(), c.flux_0)).collect()
+    let spread = |cats: &[GroundCat]| -> Vec<((f64, f64), f64)> {
+        contacts.iter().filter(|c| cats.contains(&c.cat)).map(|c| (c.reach, c.flux_0)).collect()
     };
-    let x90_planes = x90(pts(&[GroundCat::Plane1, GroundCat::Plane2]));
-    let x90_cop = x90(pts(&GroundCat::COPLANAR)).map_or(f64::NAN, |x| x - (p.w / 2.0 + p.s));
+    let x90_planes = x90_spread(&spread(&[GroundCat::Plane1, GroundCat::Plane2]));
+    let x90_cop = x90_spread(&spread(&GroundCat::COPLANAR)).map_or(f64::NAN, |x| x - (p.w / 2.0 + p.s));
 
     let mut profiles = Vec::new();
     for cat in [GroundCat::Plane1, GroundCat::Plane2, GroundCat::CopTop, GroundCat::CopBottom] {
@@ -103,4 +109,45 @@ pub fn ground_split_fem(p: &CpwgParams, sol: &FemSolution) -> TvResult<Split> {
         profiles.push(Profile { cat, x, js });
     }
     Ok(Split { field, current, x90_planes, x90_cop, profiles })
+}
+
+/// The |x| within which 90 % of the flux lies, with the flux of every edge spread evenly over the range of |x| the
+/// edge covers (edges across the plane of the cross-section are long where little happens, so the centre of an
+/// edge would be a coarse answer). `None` without flux.
+fn x90_spread(parts: &[((f64, f64), f64)]) -> Option<f64> {
+    let total: f64 = parts.iter().map(|p| p.1).sum();
+    if parts.is_empty() || total.abs() <= 0.0 {
+        return None;
+    }
+    let within = |x: f64| -> f64 {
+        parts
+            .iter()
+            .map(|&((lo, hi), f)| {
+                let part = if hi > lo { ((x - lo) / (hi - lo)).clamp(0.0, 1.0) } else { f64::from(x >= lo) };
+                f * part
+            })
+            .sum()
+    };
+    let (mut low, mut high) = (0.0, parts.iter().map(|p| p.0.1).fold(0.0, f64::max));
+    for _ in 0..60 {
+        let mid = 0.5 * (low + high);
+        if within(mid) < 0.9 * total { low = mid } else { high = mid }
+    }
+    Some(high)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x90_interpolates_inside_the_edge_that_crosses_ninety_percent() {
+        // two edges of equal flux, [0, 1] and [1, 5]: 90 % is reached 0.8 of the way along the second
+        let x = x90_spread(&[((0.0, 1.0), 1.0), ((1.0, 5.0), 1.0)]).unwrap();
+        assert!((x - 4.2).abs() < 1e-9, "{x}");
+        // a face parallel to y covers a single |x|
+        let x = x90_spread(&[((0.5, 0.5), 3.0), ((0.5, 1.5), 1.0)]).unwrap();
+        assert!((x - 1.1).abs() < 1e-9, "{x}");
+        assert!(x90_spread(&[]).is_none());
+    }
 }

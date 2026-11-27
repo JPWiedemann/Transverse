@@ -455,7 +455,7 @@ impl LineModel for CpwgInner {
                     pp,
                     eeff,
                     Box::new(move |pp: &CpwgParams, title: &str| {
-                        let loss = loss_model_fem(pp, &sol, pp.max_nodes, ctl)?;
+                        let loss = loss_model_fem(pp, &sol, ctl)?;
                         let split = ground_split_fem(pp, &sol)?;
                         to_analysis_fem(title, pp, CpwgFemAnalysis { sol, loss, split })
                     }),

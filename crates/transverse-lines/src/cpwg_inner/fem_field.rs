@@ -1,8 +1,8 @@
 //! Field data of a FEM solution: the recovered E field and the drawing information.
 
 use transverse_core::TvResult;
-use transverse_core::fem::{centroid_gradients, element_dofs};
-use transverse_core::postproc::mesh::{TriIndex, recover_nodal};
+use transverse_core::fem::{corner_gradients, element_dofs};
+use transverse_core::postproc::mesh::{TriIndex, recover_nodal_corners};
 
 use super::CpwgParams;
 use super::fem::{FemSolution, InputData};
@@ -16,9 +16,9 @@ pub fn field_data_fem(p: &CpwgParams, sol: &FemSolution) -> TvResult<MeshFieldDa
     let cs = p.cross_section(sol.margin);
     let data = InputData::new(&cs, mesh);
     let inp = data.input(mesh);
-    // E = -grad V, from the gradient at the centroid of every element
-    let e_tri: Vec<[f64; 2]> =
-        centroid_gradients(&inp, &sol.edges, &sol.v)?.into_iter().map(|g| [-g[0], -g[1]]).collect();
+    // E = -grad V, from the gradients of every element at its corners
+    let e_tri: Vec<[[f64; 2]; 3]> =
+        corner_gradients(&inp, &sol.edges, &sol.v)?.into_iter().map(|g| g.map(|g| [-g[0], -g[1]])).collect();
     let d = drawing(p, sol.margin);
     let mut bounds = [f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY];
     for q in &mesh.pts {
@@ -31,7 +31,7 @@ pub fn field_data_fem(p: &CpwgParams, sol: &FemSolution) -> TvResult<MeshFieldDa
         tri_er: data.er.clone(),
         v: sol.v.clone(),
         v0: sol.v0.clone(),
-        e_nodal: recover_nodal(&mesh.pts, &mesh.tris, &e_tri),
+        e_nodal: recover_nodal_corners(&mesh.pts, &mesh.tris, &e_tri),
         edges: sol.edges.clone(),
         index: TriIndex::new(&mesh.pts, &mesh.tris),
         bounds,

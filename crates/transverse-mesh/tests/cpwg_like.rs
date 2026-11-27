@@ -351,38 +351,66 @@ fn perturbed_geometries_keep_area_conformity_and_angles() {
 }
 
 #[test]
-fn a_hint_refines_where_it_asks_and_nowhere_else() {
-    use transverse_mesh::{Hint, mesh_hinted};
-    let g = Geo::stackup();
-    let (cs, spec) = (g.section(), g.spec().scaled(2.0));
-    let base = mesh(&cs, &spec, 1_000_000, &Ctl::new()).unwrap();
-    // ask for a quarter of the size in the triangles right of the strip centre, keep the others
-    let size: Vec<f64> = base
-        .tris
-        .iter()
-        .map(|t| {
-            let p = t.map(|i| base.pts[i as usize]);
-            let long = (0..3)
-                .map(|k| (p[k][0] - p[(k + 1) % 3][0]).hypot(p[k][1] - p[(k + 1) % 3][1]))
-                .fold(0.0, f64::max);
-            let cx = (p[0][0] + p[1][0] + p[2][0]) / 3.0;
-            if cx > 0.5 { 0.25 * long } else { 1.5 * long }
-        })
-        .collect();
-    let hint = Hint { pts: &base.pts, tris: &base.tris, size: &size };
-    let fine = mesh_hinted(&cs, &spec, Some(hint), 1_000_000, &Ctl::new()).unwrap();
-    let count = |m: &Mesh, right: bool| {
-        m.tris
-            .iter()
-            .filter(|t| {
-                let cx = t.iter().map(|&i| m.pts[i as usize][0]).sum::<f64>() / 3.0;
-                (cx > 0.5) == right
-            })
-            .count()
-    };
-    assert!(count(&fine, true) > 6 * count(&base, true), "{} vs {}", count(&fine, true), count(&base, true));
-    // the left half is not made finer than the size field asks (it may be coarser than before, never much finer)
-    assert!(count(&fine, false) < 2 * count(&base, false));
-    assert!((total_area(&fine) / total_area(&base) - 1.0).abs() < 1e-12);
-    assert!(min_angle_deg(&fine) > 24.0);
+fn marked_refinement_is_local_nested_and_keeps_the_mesh_valid() {
+    use transverse_mesh::refine_marked;
+    for g in [Geo::stackup(), Geo { t: 0.0, ..Geo::stackup() }] {
+        let base = mesh(&g.section(), &g.spec().scaled(3.0), 1_000_000, &Ctl::new()).unwrap();
+        let corner = [g.w / 2.0, 0.0];
+        let (mut m, start_angle) = (base.clone(), min_angle_deg(&base));
+        // six rounds towards one strip corner: the elements there get 2^6 times smaller
+        for _ in 0..6 {
+            let nearest = m
+                .tris
+                .iter()
+                .map(|t| t.iter().map(|&i| dist(m.pts[i as usize], corner)).fold(f64::MAX, f64::min))
+                .collect::<Vec<_>>();
+            let marked: Vec<bool> = nearest.iter().map(|d| *d < 1e-9).collect();
+            assert!(marked.iter().any(|m| *m));
+            let next = refine_marked(&m, &marked, 1_000_000).unwrap();
+            // nested: the old nodes are still there, unchanged
+            assert_eq!(&next.pts[..m.pts.len()], &m.pts[..]);
+            m = next;
+        }
+        // local: a few triangles per round, nothing far from the corner
+        assert!(m.tris.len() < base.tris.len() + 6 * 80, "{} from {}", m.tris.len(), base.tris.len());
+        let far = |q: &Mesh| {
+            q.tris.iter().filter(|t| t.iter().all(|&i| dist(q.pts[i as usize], corner) > 0.1)).count()
+        };
+        assert!(far(&m) <= far(&base) + base.tris.len() / 100, "{} vs {}", far(&m), far(&base));
+        assert!((total_area(&m) / total_area(&base) - 1.0).abs() < 1e-12);
+        assert!(min_angle_deg(&m) > 0.5 * start_angle - 1e-9, "{} from {start_angle}", min_angle_deg(&m));
+        // conforming: every edge belongs to two triangles, or to one and then it is on a conductor or the box
+        let key = |a: u32, b: u32| (a.min(b), a.max(b));
+        let mut count = std::collections::HashMap::new();
+        for t in &m.tris {
+            for k in 0..3 {
+                *count.entry(key(t[k], t[(k + 1) % 3])).or_insert(0) += 1;
+            }
+        }
+        let boundary: std::collections::HashSet<_> = m.edges.iter().map(|e| key(e.a, e.b)).collect();
+        for (e, n) in &count {
+            assert!(*n == 2 || (*n == 1 && boundary.contains(e)), "edge {e:?} with {n} triangles");
+        }
+        assert!(boundary.iter().all(|e| count.contains_key(e)), "boundary edges are mesh edges");
+        // the conductor pieces keep their lengths, and their new nodes are conductor nodes
+        for tag in [T_SIGNAL, T_COP, T_PLANE1] {
+            assert!((tag_length(&m, tag) / tag_length(&base, tag) - 1.0).abs() < 1e-12);
+        }
+        assert!(
+            m.edges
+                .iter()
+                .all(|e| m.node_cond[e.a as usize].is_some() && m.node_cond[e.b as usize].is_some())
+        );
+        // marking nothing changes nothing; the node limit is honoured
+        let same = refine_marked(&m, &vec![false; m.tris.len()], m.pts.len()).unwrap();
+        assert_eq!((same.pts.len(), same.tris), (m.pts.len(), m.tris.clone()));
+        assert!(matches!(
+            refine_marked(&m, &vec![true; m.tris.len()], m.pts.len() + 1),
+            Err(TvError::MeshTooLarge { .. })
+        ));
+    }
+}
+
+fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
 }

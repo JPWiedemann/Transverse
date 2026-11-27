@@ -349,8 +349,8 @@ fn the_solver_choice_runs_the_finite_elements_and_gives_the_same_results() {
         CpwgInner.analyze(&fem_set(), &Ctl::new()).unwrap(),
     );
     let (a, b) = (&fd.modes[0], &fem.modes[0]);
-    assert!(rel(b.z0, a.z0) < 3e-3 && rel(b.eps_eff, a.eps_eff) < 1e-3, "{} vs {}", b.z0, a.z0);
-    assert!(rel(b.at_f.alpha_c, a.at_f.alpha_c) < 1e-2 && rel(b.at_f.alpha_d, a.at_f.alpha_d) < 1e-3);
+    assert!(rel(b.z0, a.z0) < 1e-3 && rel(b.eps_eff, a.eps_eff) < 1e-3, "{} vs {}", b.z0, a.z0);
+    assert!(rel(b.at_f.alpha_c, a.at_f.alpha_c) < 1e-3 && rel(b.at_f.alpha_d, a.at_f.alpha_d) < 1e-3);
     let (sa, sb) = (a.split.as_ref().unwrap(), b.split.as_ref().unwrap());
     assert_eq!(sa.rows.len(), sb.rows.len());
     for (x, y) in sa.rows.iter().zip(&sb.rows) {
@@ -377,7 +377,10 @@ fn mesh_field_data_answers_the_same_questions_as_grid_field_data() {
     assert_eq!(f.view_zoom, g.view_zoom);
     // the extent is in x and y, so that frontends can clip to it
     assert!(f.x[0] <= f.view_zoom[0] && f.x[1] >= f.view_zoom[1] && f.y[0] < f.y[1]);
-    assert_eq!((f.x[0], f.x[1], f.y[0], f.y[1]), (g.x[0], g.x[g.x.len() - 1], g.y[0], g.y[g.y.len() - 1]));
+    let grid_extent = [g.x[0], g.x[g.x.len() - 1], g.y[0], g.y[g.y.len() - 1]];
+    for (a, b) in [f.x[0], f.x[1], f.y[0], f.y[1]].into_iter().zip(grid_extent) {
+        assert!((a - b).abs() < 1e-12 * (g.x[g.x.len() - 1] - g.x[0]), "{a} vs {b}");
+    }
     let lines = f.field_lines(f.view_zoom, (1.0, 1.0));
     assert!(lines.len() > 20);
     assert_eq!(f.equipotentials(&[0.3, 0.6]).len(), 2);

@@ -52,7 +52,7 @@ pub fn report_fem(title: &str, p: &CpwgParams, a: &CpwgFemAnalysis) -> String {
     );
     if acc.nodes.len() >= 2 {
         let k = acc.z0.len();
-        let how = match (sol.refined.is_some(), acc.order) {
+        let how = match (sol.adaptive, acc.order) {
             (true, _) => format!("adaptive refinement, {k} meshes"),
             (false, Some(_)) => format!("{k} mesh levels, extrapolated"),
             (false, None) => format!("{k} mesh levels"),

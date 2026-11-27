@@ -82,7 +82,7 @@ fn fem_potentials_and_e_field_match_fd_at_the_reference_nodes() {
             continue;
         }
         let em = f.e_mag(pos).unwrap();
-        assert!((em / e - 1.0).abs() < 5e-2, "|E| at {pos:?}: FEM {em} vs FD {e}");
+        assert!((em / e - 1.0).abs() < 3e-2, "|E| at {pos:?}: FEM {em} vs FD {e}");
         e_compared += 1;
     }
     assert!(compared > 15 && e_compared > 8, "only {compared} nodes, {e_compared} with |E| compared");

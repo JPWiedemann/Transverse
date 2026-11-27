@@ -6,6 +6,7 @@
 //! inside conductors are dropped and their boundary becomes Dirichlet. All interfaces and conductor
 //! edges are constraint edges, so no triangle straddles an interface.
 
+pub mod bisect;
 pub mod planar;
 pub mod quality;
 pub mod refine;
@@ -14,8 +15,8 @@ pub mod sizefield;
 use transverse_core::{Ctl, TvResult};
 use transverse_geom::{ConductorId, CrossSection, MaterialId, P2, Paint, Shape, SizeSpec, Tag};
 
+pub use crate::bisect::refine as refine_marked;
 use crate::planar::project;
-pub use crate::sizefield::Hint;
 use crate::sizefield::SizeField;
 
 /// Piece of conductor (or grounded box) boundary: a mesh edge with the conductor and tag it belongs to.
@@ -45,20 +46,9 @@ pub const MIN_ANGLE_DEG: f64 = 25.0;
 /// Mesh `cs` with element sizes from `spec`. `max_nodes` bounds the number of vertices
 /// (`TvError::MeshTooLarge` beyond it); `ctl` cancels and reports progress.
 pub fn mesh(cs: &CrossSection, spec: &SizeSpec, max_nodes: usize, ctl: &Ctl) -> TvResult<Mesh> {
-    mesh_hinted(cs, spec, None, max_nodes, ctl)
-}
-
-/// As [`mesh`], with additional local size targets from an earlier mesh (adaptive refinement).
-pub fn mesh_hinted(
-    cs: &CrossSection,
-    spec: &SizeSpec,
-    hint: Option<Hint<'_>>,
-    max_nodes: usize,
-    ctl: &Ctl,
-) -> TvResult<Mesh> {
     spec.validate()?;
     let pslg = planar::build(cs)?;
-    let field = SizeField::with_hint(&pslg, *spec, hint);
+    let field = SizeField::new(&pslg, *spec);
     let conductors: Vec<&Shape> = cs
         .items
         .iter()

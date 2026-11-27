@@ -119,9 +119,9 @@ for (const c of cases.synthesis) {
   const a = analyze(LINE, JSON.stringify(set), undefined);
   const s = JSON.parse(a.summary());
   const m = s.modes[0];
-  close('fem z0 against the grid reference', m.z0, c.z0, 3e-3);
+  close('fem z0 against the grid reference', m.z0, c.z0, 1e-3);
   close('fem eps_eff', m.eps_eff, c.eeff, 1e-3);
-  close('fem alpha_c', m.at_f.alpha_c, c.loss.alpha_c, 1e-2);
+  close('fem alpha_c', m.at_f.alpha_c, c.loss.alpha_c, 1e-3);
   same('fem accuracy has no grid size', s.accuracy.nx === 0 && s.accuracy.nodes > 1000, true);
   const info = JSON.parse(a.field_info());
   same('fem field is a mesh', info.mesh, true);

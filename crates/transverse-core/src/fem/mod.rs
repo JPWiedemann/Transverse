@@ -10,8 +10,8 @@ mod field;
 mod flux;
 mod solve;
 
-pub use adapt::{converge_adaptive, error_indicators, mark};
+pub use adapt::{converge_adaptive, error_indicators, mark, residual_indicators};
 pub use converge::{Level, LevelRun, auto_margin_with, converge};
-pub use field::{centroid_gradients, element_dofs, p2_values};
+pub use field::{corner_gradients, element_dofs, p2_values};
 pub use flux::{BoundaryFlux, boundary_fluxes};
 pub use solve::{FemInput, Lumped, Order, Solved, solve_lumped};

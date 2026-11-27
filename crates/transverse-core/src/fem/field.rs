@@ -12,24 +12,25 @@ pub fn element_dofs(inp: &FemInput<'_>, edges: &[[u32; 2]]) -> TvResult<Vec<[u32
     Ok(sys.dofs.iter().map(|d| d.map(|x| x as u32)).collect())
 }
 
-/// Gradient of the potential `v` (all degrees of freedom) at the centroid of every triangle [V/mm].
-pub fn centroid_gradients(inp: &FemInput<'_>, edges: &[[u32; 2]], v: &[f64]) -> TvResult<Vec<[f64; 2]>> {
+/// Gradient of the potential `v` at the three corners of every triangle [V/mm]. The gradient of a quadratic
+/// element is linear, so these describe it completely, and they are much closer to the field at the corners of
+/// a large element than its gradient at the centroid.
+pub fn corner_gradients(inp: &FemInput<'_>, edges: &[[u32; 2]], v: &[f64]) -> TvResult<Vec<[[f64; 2]; 3]>> {
     let dofs = element_dofs(inp, edges)?;
     if v.len() != inp.pts.len() + edges.len() {
         return Err(TvError::InvalidParam("fem: wrong number of potentials".into()));
     }
+    const CORNERS: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     Ok(inp
         .tris
         .iter()
         .zip(&dofs)
         .map(|(&t, d)| {
-            let gr = p2_gradients(&tri(inp.pts, t), [1.0 / 3.0; 3]);
-            let (mut gx, mut gy) = (0.0, 0.0);
-            for i in 0..6 {
-                gx += v[d[i] as usize] * gr[i][0];
-                gy += v[d[i] as usize] * gr[i][1];
-            }
-            [gx, gy]
+            let g = tri(inp.pts, t);
+            CORNERS.map(|l| {
+                let gr = p2_gradients(&g, l);
+                [0, 1].map(|c| (0..6).map(|i| v[d[i] as usize] * gr[i][c]).sum())
+            })
         })
         .collect())
 }
@@ -86,7 +87,7 @@ mod tests {
         }
         let inp = FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, fixed: &fixed, fixed_edges: &fe };
         let s = solve_lumped(&inp, Order::P2, &Ctl::new()).unwrap();
-        for g in centroid_gradients(&inp, &s.edges, &s.v).unwrap() {
+        for g in corner_gradients(&inp, &s.edges, &s.v).unwrap().into_iter().flatten() {
             assert!((g[0]).abs() < 1e-12 && (g[1] + 1.0).abs() < 1e-12, "{g:?}");
         }
         let dofs = element_dofs(&inp, &s.edges).unwrap();
@@ -96,6 +97,6 @@ mod tests {
             let y: f64 = (0..3).map(|i| l[i] * pts[t[i] as usize][1]).sum();
             assert!((p2_values(l, dof) - (1.0 - y)).abs() < 1e-12);
         }
-        assert!(centroid_gradients(&inp, &s.edges[1..], &s.v).is_err());
+        assert!(corner_gradients(&inp, &s.edges[1..], &s.v).is_err());
     }
 }

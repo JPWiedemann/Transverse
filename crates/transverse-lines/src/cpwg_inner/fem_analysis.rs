@@ -17,7 +17,7 @@ pub struct CpwgFemAnalysis {
 /// FEM solution, Wheeler conductor loss with the dielectric loss model, and the ground split.
 pub fn full_analysis_fem(p: &CpwgParams, ctl: &Ctl) -> TvResult<CpwgFemAnalysis> {
     let sol = analyze_fem(p, &p.fem_options(), ctl)?;
-    let loss = loss_model_fem(p, &sol, p.max_nodes, ctl)?;
+    let loss = loss_model_fem(p, &sol, ctl)?;
     let split = ground_split_fem(p, &sol)?;
     Ok(CpwgFemAnalysis { sol, loss, split })
 }

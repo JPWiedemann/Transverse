@@ -16,6 +16,7 @@ mod fem;
 mod fem_analysis;
 mod fem_field;
 mod fem_loss;
+mod fem_morph;
 mod fem_split;
 mod fem_summary;
 mod field;

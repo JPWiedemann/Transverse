@@ -1,45 +1,132 @@
-//! Adaptive refinement: a per-element error indicator from the jump between the element gradient and the
-//! recovered (continuous) gradient, a marking rule, and the loop that repeats solve and refine until Z0 has
-//! settled. Meshes are regenerated each round with smaller size targets at the marked elements (the mesher
-//! takes them as a hint), so no mesh surgery is needed.
+//! Adaptive refinement: a per-element error indicator, a marking rule, and the loop that repeats solve and
+//! local refinement until Z0 has settled. The meshes are nested (marked triangles are split, nothing is moved),
+//! so the capacitances fall monotonically towards their limits.
+
+use std::collections::{HashMap, HashSet};
 
 use super::converge::{Level, LevelRun};
-use super::field::centroid_gradients;
-use super::solve::{FemInput, Lumped};
+use super::field::element_dofs;
+use super::solve::{FemInput, Lumped, Tri, p2_gradients, tri};
+use crate::EPS0;
 use crate::control::Ctl;
 use crate::error::{TvError, TvResult};
-use crate::postproc::mesh::recover_nodal;
 
-/// Squared error indicator of every triangle: `er * area * |recovered gradient - element gradient|^2` at the
-/// centroid (the Zienkiewicz-Zhu estimator). Large where the field varies quickly compared to the element size,
-/// i.e. at singular conductor edges and corners and wherever the mesh is too coarse.
-pub fn error_indicators(inp: &FemInput<'_>, edges: &[[u32; 2]], v: &[f64]) -> TvResult<Vec<f64>> {
-    let g = centroid_gradients(inp, edges, v)?;
-    let nodal = recover_nodal(inp.pts, inp.tris, &g);
-    Ok(inp
-        .tris
-        .iter()
-        .zip(&g)
-        .zip(inp.er)
-        .map(|((t, g), er)| {
-            let [a, b, c] = t.map(|i| inp.pts[i as usize]);
-            let area = 0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs();
-            let r = t.map(|i| nodal[i as usize]);
-            let (rx, ry) = ((r[0][0] + r[1][0] + r[2][0]) / 3.0, (r[0][1] + r[1][1] + r[2][1]) / 3.0);
-            er * area * ((rx - g[0]).powi(2) + (ry - g[1]).powi(2))
-        })
-        .collect())
+/// Squared residual error indicator of every triangle for quadratic elements and the potential `v` with
+/// element weights `weight(k)` (the permittivity, or 1), in the energy norm:
+///
+/// * the interior residual `h^2 * area * (div(w grad V))^2 / w`, and
+/// * for every edge between two triangles, half to each, the jump of the normal flux `w dV/dn` across it,
+///   `length * integral(jump^2 ds) / w_mean`.
+///
+/// The exact solution has neither, also not on dielectric interfaces (the normal flux is continuous there
+/// although E is not). Edges on conductors are left out: the jump there is the surface charge. So the indicator
+/// measures the discretisation error alone, whatever the shapes of the triangles: it is large next to singular
+/// conductor edges and where strong fields vary over an element, and small where the field is weak or smooth.
+pub fn residual_indicators(
+    inp: &FemInput<'_>,
+    edges: &[[u32; 2]],
+    v: &[f64],
+    weight: &dyn Fn(usize) -> f64,
+) -> TvResult<Vec<f64>> {
+    let dofs = element_dofs(inp, edges)?;
+    if v.len() != inp.pts.len() + edges.len() {
+        return Err(TvError::InvalidParam("fem: wrong number of potentials".into()));
+    }
+    let conductor: HashSet<(u32, u32)> =
+        inp.fixed_edges.iter().map(|(e, _)| (e[0].min(e[1]), e[0].max(e[1]))).collect();
+    let geo: Vec<Tri> = inp.tris.iter().map(|&t| tri(inp.pts, t)).collect();
+    let gradient = |k: usize, l: [f64; 3]| {
+        let gr = p2_gradients(&geo[k], l);
+        let mut g = [0.0; 2];
+        for i in 0..6 {
+            let value = v[dofs[k][i] as usize];
+            g[0] += value * gr[i][0];
+            g[1] += value * gr[i][1];
+        }
+        g
+    };
+    let dist = |a: u32, b: u32| {
+        let (p, q) = (inp.pts[a as usize], inp.pts[b as usize]);
+        (p[0] - q[0]).hypot(p[1] - q[1])
+    };
+
+    let mut eta = vec![0.0; inp.tris.len()];
+    // interior edges, found at their second triangle
+    let mut first: HashMap<(u32, u32), usize> = HashMap::new();
+    for (k, t) in inp.tris.iter().enumerate() {
+        // the gradient of a quadratic is linear: its divergence is the sum of its changes along the barycentric
+        // coordinates, each in the direction of their gradients
+        let corner =
+            [gradient(k, [1.0, 0.0, 0.0]), gradient(k, [0.0, 1.0, 0.0]), gradient(k, [0.0, 0.0, 1.0])];
+        let (b, c, area) = (geo[k].b, geo[k].c, geo[k].area);
+        let div: f64 = (0..3).map(|i| (corner[i][0] * b[i] + corner[i][1] * c[i]) / (2.0 * area)).sum();
+        let h = (0..3).map(|m| dist(t[m], t[(m + 1) % 3])).fold(0.0, f64::max);
+        eta[k] += h * h * area * weight(k) * div * div;
+
+        for m in 0..3 {
+            let (a, b) = (t[(m + 1) % 3], t[(m + 2) % 3]);
+            let key = (a.min(b), a.max(b));
+            if conductor.contains(&key) {
+                continue;
+            }
+            let Some(&other) = first.get(&key) else {
+                first.insert(key, k);
+                continue;
+            };
+            let len = dist(a, b);
+            let (pa, pb) = (inp.pts[key.0 as usize], inp.pts[key.1 as usize]);
+            let normal = [(pb[1] - pa[1]) / len, (pa[0] - pb[0]) / len];
+            // normal flux of triangle q at the fraction s of the way from node key.0 to node key.1
+            let flux = |q: usize, s: f64| {
+                let tq = inp.tris[q];
+                let l = [0, 1, 2].map(|i| {
+                    if tq[i] == key.0 {
+                        1.0 - s
+                    } else if tq[i] == key.1 {
+                        s
+                    } else {
+                        0.0
+                    }
+                });
+                let g = gradient(q, l);
+                weight(q) * (g[0] * normal[0] + g[1] * normal[1])
+            };
+            // the jump is linear along the edge: Simpson's rule integrates its square exactly
+            let jump = [0.0, 0.5, 1.0].map(|s| flux(k, s) - flux(other, s));
+            let integral = len / 6.0 * (jump[0].powi(2) + 4.0 * jump[1].powi(2) + jump[2].powi(2));
+            let term = len * integral / (0.5 * (weight(k) + weight(other)));
+            eta[k] += 0.5 * term;
+            eta[other] += 0.5 * term;
+        }
+    }
+    Ok(eta)
 }
 
-/// Elements to refine: the largest indicators that together carry `fraction` of the total (Doerfler marking).
-pub fn mark(eta2: &[f64], fraction: f64) -> Vec<bool> {
+/// The indicators of both solutions (with dielectrics and in air; Z0 depends on both capacitances), each
+/// relative to the energy of its solution.
+pub fn error_indicators(
+    inp: &FemInput<'_>,
+    edges: &[[u32; 2]],
+    v: &[f64],
+    v0: &[f64],
+    lumped: &Lumped,
+) -> TvResult<Vec<f64>> {
+    let with = residual_indicators(inp, edges, v, &|k| inp.er[k])?;
+    let air = residual_indicators(inp, edges, v0, &|_| 1.0)?;
+    Ok(with.iter().zip(&air).map(|(a, b)| a * EPS0 / lumped.c + b * EPS0 / lumped.c0).collect())
+}
+
+/// Elements to refine: the largest indicators that together carry `fraction` of the total (Doerfler marking),
+/// and at least the fraction `min_count` of all elements.
+pub fn mark(eta2: &[f64], fraction: f64, min_count: f64) -> Vec<bool> {
     let total: f64 = eta2.iter().sum();
     let mut order: Vec<usize> = (0..eta2.len()).collect();
     order.sort_by(|&a, &b| eta2[b].total_cmp(&eta2[a]));
     let mut marked = vec![false; eta2.len()];
     let mut sum = 0.0;
-    for k in order {
-        if sum >= fraction * total {
+    let fewest = (min_count * eta2.len() as f64).ceil() as usize;
+    for (n, k) in order.into_iter().enumerate() {
+        if sum >= fraction * total && n >= fewest {
             break;
         }
         marked[k] = true;
@@ -48,23 +135,25 @@ pub fn mark(eta2: &[f64], fraction: f64) -> Vec<bool> {
     marked
 }
 
-/// Relative change of Z0 and the error estimate of the last step: the change times `r / (1 - r)` for the observed
-/// ratio `r` of the last two changes (clamped to 0.5..0.85, so a noisy sequence is not trusted).
-fn estimate(z: &[f64]) -> f64 {
-    let k = z.len();
-    let step = |i: usize| (z[i] - z[i - 1]).abs() / z[i];
-    let d = step(k - 1);
-    if k < 3 {
-        return d;
-    }
-    let prev = step(k - 2);
-    let r = if prev > 0.0 { (d / prev).clamp(0.5, 0.85) } else { 0.5 };
-    d * r / (1.0 - r)
+/// Growth of the node count over which the change of Z0 is measured.
+const WINDOW: f64 = 1.6;
+/// Fewest meshes before the loop may stop: the first ones are too coarse for their changes to mean much.
+const MIN_ROUNDS: usize = 4;
+
+/// Estimated relative error of the last Z0. It is compared with the latest mesh that had `WINDOW` times fewer
+/// nodes (one round can change very little by chance). With the error falling at least like `1 / nodes`
+/// (adaptive quadratic elements reach `1 / nodes^2` once the edges are resolved) the remaining error is at most
+/// that change divided by `growth - 1`.
+fn estimate(z: &[f64], nodes: &[usize]) -> f64 {
+    let k = z.len() - 1;
+    let ratio = |j: usize| nodes[k] as f64 / nodes[j] as f64;
+    let j = (0..k).rev().find(|&j| ratio(j) >= WINDOW).unwrap_or(0);
+    (z[k] - z[j]).abs() / z[k] / (ratio(j) - 1.0).max(0.1)
 }
 
 /// Round 0, 1, 2, ...: `solve(round, previous)` meshes and solves (round 0 gets `None`; later rounds get the
 /// payload of the previous one, to refine it) until the estimated error of Z0 is below `tol_pct / 100`, after
-/// at least three rounds. A round that hits the node limit ends the loop with the rounds so far.
+/// at least `MIN_ROUNDS` rounds. A round that hits the node limit ends the loop with the rounds so far.
 pub fn converge_adaptive<T>(
     tol_pct: f64,
     max_rounds: usize,
@@ -88,14 +177,14 @@ pub fn converge_adaptive<T>(
         last = Some((run.lumped, run.payload));
         let k = info.z0.len();
         if k >= 2 {
-            info.est_err = estimate(&info.z0);
+            info.est_err = estimate(&info.z0, &info.nodes);
             ctl.msg(&format!(
                 "Refinement {k} ({} nodes): Z0 = {:.4} Ohm, estimated error {:.3} %",
                 run.nodes,
                 info.z0[k - 1],
                 info.est_err * 100.0
             ));
-            if k >= 3 && info.est_err < tol_pct / 100.0 {
+            if k >= MIN_ROUNDS && info.est_err < tol_pct / 100.0 {
                 break;
             }
         }
@@ -108,24 +197,69 @@ pub fn converge_adaptive<T>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::solve::{Order, solve_lumped};
     use super::*;
 
     #[test]
     fn marking_takes_the_largest_indicators_up_to_the_fraction() {
         let eta = [1.0, 8.0, 0.5, 0.5];
-        assert_eq!(mark(&eta, 0.5), vec![false, true, false, false]);
-        assert_eq!(mark(&eta, 0.85), vec![true, true, false, false]);
-        assert!(mark(&eta, 1.0).iter().all(|m| *m));
+        assert_eq!(mark(&eta, 0.5, 0.0), vec![false, true, false, false]);
+        assert_eq!(mark(&eta, 0.85, 0.0), vec![true, true, false, false]);
+        assert!(mark(&eta, 1.0, 0.0).iter().all(|m| *m));
+        // the minimum count adds the next largest ones
+        assert_eq!(mark(&eta, 0.5, 0.5), vec![true, true, false, false]);
     }
 
     #[test]
-    fn the_estimate_follows_the_decay_of_the_changes() {
-        // changes halve: remaining error equals the last change
-        let z = [100.0, 99.0, 98.5, 98.25];
-        let e = estimate(&z);
-        assert!((e / (0.25 / 98.25) - 1.0).abs() < 1e-2, "{e}");
-        // changes that do not decay are not trusted: estimate well above the last change
-        let z = [100.0, 99.0, 98.1, 97.3];
-        assert!(estimate(&z) > 3.0 * (0.8 / 97.3));
+    fn the_estimate_compares_with_a_mesh_that_had_clearly_fewer_nodes() {
+        // doubling nodes: the change over the last doubling
+        let e = estimate(&[99.0, 99.5, 99.75], &[100, 200, 400]);
+        assert!((e - 0.25 / 99.75).abs() < 1e-12, "{e}");
+        // small steps: the last one is nearly zero by chance, the window still sees the change before it
+        let e = estimate(&[99.0, 99.5, 99.7, 99.7], &[100, 250, 400, 440]);
+        assert!(e > 0.1 / 99.7, "{e}");
+    }
+
+    /// A strip corner in a box: the indicator is largest next to the singular edge and nothing for an exact
+    /// solution, whatever the triangles look like and also across a dielectric interface.
+    #[test]
+    fn the_indicator_vanishes_for_an_exact_solution_across_an_interface() {
+        // two layers (er 4 below y = 1, er 1 above) between plates at y = 0 and y = 2, on a skewed mesh: the
+        // potential is linear in each layer, with different slopes, and quadratic elements hold it exactly
+        let pts = vec![
+            [0.0, 0.0],
+            [1.7, 0.0],
+            [3.0, 0.0],
+            [0.0, 1.0],
+            [0.4, 1.0],
+            [3.0, 1.0],
+            [0.0, 2.0],
+            [2.2, 2.0],
+            [3.0, 2.0],
+        ];
+        let tris: Vec<[u32; 3]> =
+            vec![[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4], [3, 4, 7], [3, 7, 6], [4, 5, 8], [4, 8, 7]];
+        let er: Vec<f64> = (0..8).map(|k| if k < 4 { 4.0 } else { 1.0 }).collect();
+        let tand = vec![0.0; 8];
+        let fixed: Vec<Option<f64>> = (0..9)
+            .map(|k| {
+                if k < 3 {
+                    Some(1.0)
+                } else if k >= 6 {
+                    Some(0.0)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let fe: Vec<([u32; 2], f64)> = vec![([0, 1], 1.0), ([1, 2], 1.0), ([6, 7], 0.0), ([7, 8], 0.0)];
+        let inp = FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, fixed: &fixed, fixed_edges: &fe };
+        // the sides of the box are open (no flux): their edges have one triangle only
+        let s = solve_lumped(&inp, Order::P2, &Ctl::new()).unwrap();
+        let eta = residual_indicators(&inp, &s.edges, &s.v, &|k| er[k]).unwrap();
+        assert!(eta.iter().all(|e| *e < 1e-20), "{eta:?}");
+        // the same potential judged with equal permittivities has a kink: a jump at the interface
+        let wrong = residual_indicators(&inp, &s.edges, &s.v, &|_| 1.0).unwrap();
+        assert!(wrong.iter().sum::<f64>() > 1e-2, "{wrong:?}");
     }
 }

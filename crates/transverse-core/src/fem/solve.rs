@@ -76,9 +76,9 @@ pub struct Solved {
 /// Gradient coefficients and area of a triangle: `grad lambda_i = (b_i, c_i) / (2 A)`.
 #[derive(Clone, Copy)]
 pub(super) struct Tri {
-    b: [f64; 3],
-    c: [f64; 3],
-    area: f64,
+    pub(super) b: [f64; 3],
+    pub(super) c: [f64; 3],
+    pub(super) area: f64,
 }
 
 pub(super) fn tri(pts: &[[f64; 2]], t: [u32; 3]) -> Tri {

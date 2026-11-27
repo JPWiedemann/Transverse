@@ -24,7 +24,7 @@ pub fn fem_accuracy(sol: &FemSolution) -> Accuracy {
         dmin_actual: min_edge(&sol.mesh),
         levels: (k >= 2).then(|| (sol.accuracy.z0[k - 2], sol.accuracy.z0[k - 1])),
         est_err: (k >= 2).then_some(sol.accuracy.est_err),
-        mesh_used: (sol.spec.dmin, sol.spec.dmax, sol.refined.is_some()),
+        mesh_used: (sol.spec.dmin, sol.spec.dmax, sol.adaptive),
         margin: sol.margin,
     }
 }
