@@ -20,17 +20,6 @@ pub enum MeshMode {
     Manual,
 }
 
-/// Numerical method of the field solution.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Solver {
-    /// Finite volumes on a tensor grid (the reference).
-    #[default]
-    Fd,
-    /// Quadratic finite elements on an adaptively refined triangle mesh.
-    Fem,
-}
-
 /// Parameters of the CPWG inner-layer line (field names match the Python reference).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -65,8 +54,7 @@ pub struct PlanarParams {
     // frequency / length
     pub f: f64,
     pub length: f64,
-    // solver and mesh
-    pub solver: Solver,
+    // mesh
     pub mesh_mode: MeshMode,
     /// Target relative error [%] (auto mesh, domain size).
     pub tol: f64,
@@ -74,7 +62,7 @@ pub struct PlanarParams {
     pub dmin: f64,
     /// Manual: largest cell in the core region [mm].
     pub dmax: f64,
-    /// Manual: second level with half cell size + extrapolation.
+    /// Grid solver (test reference) with a manual mesh: second level with half cell size + extrapolation.
     pub richardson: bool,
     pub max_nodes: usize,
     /// Domain extension for open structures [mm], 0 = auto.
@@ -105,7 +93,6 @@ impl Default for PlanarParams {
             rq: 0.0,
             f: 1e9,
             length: 100.0,
-            solver: Solver::Fd,
             mesh_mode: MeshMode::Auto,
             tol: 0.5,
             dmin: 0.002,

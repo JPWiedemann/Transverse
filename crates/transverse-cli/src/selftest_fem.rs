@@ -2,7 +2,6 @@
 //! values), compared with the tolerances of the FEM-vs-FD parity tests.
 
 use std::collections::HashMap;
-use std::process::ExitCode;
 use std::time::Instant;
 
 use serde::Deserialize;
@@ -52,7 +51,8 @@ fn rel(a: f64, b: f64) -> f64 {
     (a / b - 1.0).abs()
 }
 
-pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
+/// Whether every check passed.
+pub fn run(path: Option<&str>) -> Result<bool, String> {
     let text = match path {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
         None => EMBEDDED.to_string(),
@@ -108,5 +108,5 @@ pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
         );
     }
     println!("\n{} of {total} checks passed", total - failed);
-    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    Ok(failed == 0)
 }

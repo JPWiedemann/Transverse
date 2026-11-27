@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 // The built site in a real browser: wasm module, Web Worker, form, all tabs. The numbers are the
-// reference values of the project (default stack-up: Z0 = 35.001 ohm, synthesis 35 ohm -> w = 0.3605 mm).
+// reference values of the project (default stack-up: Z0 = 35.001 ohm, synthesis 35 ohm -> w = 0.3605 mm, from
+// the grid solver; the finite elements of the app give 34.98 ohm).
 
 /** Fail a test on errors in the page (uncaught exceptions, console errors). */
 function watchErrors(page: Page): string[] {
@@ -27,8 +28,8 @@ test.beforeEach(async ({ page }) => {
 test('analyzes the default stack-up', async ({ page }) => {
   const errors = watchErrors(page);
   await analyze(page);
-  await expect(status(page)).toContainText('Z0 = 35.001');
-  await expect(page.locator('.card', { hasText: 'Z0' }).first()).toContainText('35.001');
+  await expect(status(page)).toContainText(/Z0 = 34\.98/);
+  await expect(page.locator('.card', { hasText: 'Z0' }).first()).toContainText('34.98');
   await expect(page.locator('.report')).toContainText('Ground split');
   expect(errors).toEqual([]);
 });
@@ -74,7 +75,7 @@ test('synthesizes the trace width for 35 ohm', async ({ page }) => {
   await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
   await expect(status(page)).toContainText('Synthesis done', { timeout: 60_000 });
   const w = Number(await page.locator('#p-w').inputValue());
-  expect(Math.abs(w / 0.3605 - 1)).toBeLessThan(5e-4);
+  expect(Math.abs(w / 0.3605 - 1)).toBeLessThan(3e-3);
 });
 
 test('synthesis with a phase also sets the line length', async ({ page }) => {
@@ -105,12 +106,12 @@ test('synthesis with a phase also sets the line length', async ({ page }) => {
 test('cancel stops a long solve and the page keeps working', async ({ page }) => {
   await page.locator('#p-tol').fill('0.0001'); // a very tight target error makes the solve long
   await page.getByRole('button', { name: 'Analyze', exact: true }).click();
-  await expect(status(page)).toContainText('Refining', { timeout: 30_000 });
+  await expect(status(page)).toContainText(/Refinement|Meshing/, { timeout: 30_000 });
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(status(page)).toContainText('Cancelled');
   await page.locator('#p-tol').fill('0.5');
   await analyze(page);
-  await expect(status(page)).toContainText('Z0 = 35.001');
+  await expect(status(page)).toContainText(/Z0 = 34\.98/);
   // the cancel threw the old result away only until the new analysis finished
   await tab(page, 'Loss vs f').click();
   await expect(page.getByRole('img', { name: /loss versus frequency/ })).toBeVisible();
@@ -142,11 +143,10 @@ test('grayed fields follow their switch', async ({ page }) => {
   await expect(page.locator('#p-dmin')).toBeEnabled();
 });
 
-test('the finite-element solver gives the same Z0 and draws the triangle mesh', async ({ page }) => {
+test('the field views draw the triangle mesh', async ({ page }) => {
   const errors = watchErrors(page);
-  await page.getByLabel('Solver', { exact: true }).selectOption({ label: 'Finite elements' });
+  await expect(page.getByLabel('Solver', { exact: true })).toHaveCount(0);
   await analyze(page);
-  await expect(status(page)).toContainText(/Z0 = (34\.9|35\.0)/);
   await expect(page.locator('.report')).toContainText('finite elements');
   await tab(page, 'Field').click();
   await expect(page.locator('.bar canvas')).toBeVisible({ timeout: 20_000 });

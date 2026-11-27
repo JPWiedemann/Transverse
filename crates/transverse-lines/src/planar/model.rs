@@ -4,10 +4,9 @@ use transverse_core::units::format_g;
 use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
-    DEFAULT_RTOL, GapMode, GroundCat, MeshMode, PlanarAnalysis, PlanarFemAnalysis, PlanarParams,
-    SchematicFlags, Solver, Split, SynthVar, analysis_from_solution, fem_accuracy, field_data,
-    field_data_fem, full_analysis, full_analysis_fem, ground_split_fem, loss_model_fem, report, report_fem,
-    schematic, synthesize, synthesize_fem,
+    DEFAULT_RTOL, GapMode, GroundCat, MeshMode, PlanarFemAnalysis, PlanarParams, SchematicFlags, Split,
+    SynthVar, fem_accuracy, field_data_fem, full_analysis_fem, ground_split_fem, loss_model_fem, report_fem,
+    schematic, synthesize_fem,
 };
 use crate::model::*;
 use transverse_core::losses::LossModel;
@@ -40,10 +39,9 @@ const fn num(default: f64, unit: &'static str) -> ParamKind {
 
 const GAP_CHOICES: &[&str] = &["upper", "lower", "custom"];
 const MESH_CHOICES: &[&str] = &["Auto (target error)", "Manual"];
-const SOLVER_CHOICES: &[&str] = &["Finite differences", "Finite elements"];
 
 /// Parameter form of the CPWG line (defaults equal [`PlanarParams::default`]).
-static SPECS: [ParamSpec; 29] = [
+static SPECS: [ParamSpec; 27] = [
     spec("w", "Trace width w", GEO, len(0.3605, "mm")),
     spec("s", "Gap s", GEO, len(0.11, "mm")),
     spec("t", "Copper thickness t", GEO, len(0.018, "µm")),
@@ -65,7 +63,6 @@ static SPECS: [ParamSpec; 29] = [
     spec("rq", "Roughness Rq", COND, len(0.0, "µm")),
     spec("f", "Frequency", FREQ, ParamKind::Frequency { default_hz: 1e9, unit: "GHz" }),
     spec("length", "Line length", FREQ, len(100.0, "mm")),
-    spec("solver", "Solver", MESH, ParamKind::Choice(SOLVER_CHOICES, 0)),
     spec("mesh_mode", "Mode", MESH, ParamKind::Choice(MESH_CHOICES, 0)),
     spec("tol", "Target error", MESH, num(0.5, "%")),
     when(
@@ -85,11 +82,6 @@ static SPECS: [ParamSpec; 29] = [
             MESH,
             ParamKind::Length { default_mm: 0.02, unit: "µm", lambda: true },
         ),
-        "mesh_mode",
-        1,
-    ),
-    when(
-        spec("richardson", "Richardson (2nd level, half size)", MESH, ParamKind::Bool(true)),
         "mesh_mode",
         1,
     ),
@@ -122,7 +114,6 @@ impl PlanarParams {
         let d = Self::default();
         let gap_mode = [GapMode::Upper, GapMode::Lower, GapMode::Custom][get_choice(s, "gap_mode", 0, 3)?];
         let mesh_mode = [MeshMode::Auto, MeshMode::Manual][get_choice(s, "mesh_mode", 0, 2)?];
-        let solver = [Solver::Fd, Solver::Fem][get_choice(s, "solver", 0, 2)?];
         let max_nodes = get_num(s, "max_nodes", d.max_nodes as f64)?;
         if max_nodes < 1.0 || max_nodes.fract() != 0.0 {
             return Err(TvError::InvalidParam("max_nodes must be a positive integer".into()));
@@ -149,12 +140,12 @@ impl PlanarParams {
             rq: get_num(s, "rq", d.rq)?,
             f: get_num(s, "f", d.f)?,
             length: get_num(s, "length", d.length)?,
-            solver,
             mesh_mode,
             tol: get_num(s, "tol", d.tol)?,
             dmin: get_num(s, "dmin", d.dmin)?,
             dmax: get_num(s, "dmax", d.dmax)?,
-            richardson: get_flag(s, "richardson", d.richardson)?,
+            // only the grid solver uses it (the reference of the tests): not a form field
+            richardson: d.richardson,
             max_nodes: max_nodes as usize,
             margin: get_num(s, "margin", d.margin)?,
         })
@@ -193,13 +184,11 @@ impl PlanarParams {
             ("fence1", self.fence1),
             ("plane2", self.plane2),
             ("fence2", self.fence2),
-            ("richardson", self.richardson),
         ] {
             s.set(k, Bool(v));
         }
         s.set("gap_mode", Num(self.gap_mode as usize as f64));
         s.set("mesh_mode", Num(self.mesh_mode as usize as f64));
-        s.set("solver", Num(self.solver as usize as f64));
         s
     }
 }
@@ -337,22 +326,7 @@ fn assemble(p: &PlanarParams, parts: Parts, loss: LossModel, split: &Split) -> A
     }
 }
 
-fn to_analysis(title: &str, p: &PlanarParams, a: PlanarAnalysis) -> Analysis {
-    let s = &a.sol;
-    let parts = Parts {
-        z0: s.z0,
-        eeff: s.eeff,
-        l: s.l,
-        c: s.c,
-        margin: s.accuracy.margin,
-        report: report(title, p, &a),
-        field: field_data(p, s),
-        accuracy: s.accuracy.clone(),
-    };
-    assemble(p, parts, a.loss, &a.split)
-}
-
-fn to_analysis_fem(title: &str, p: &PlanarParams, a: PlanarFemAnalysis) -> TvResult<Analysis> {
+fn to_analysis(title: &str, p: &PlanarParams, a: PlanarFemAnalysis) -> TvResult<Analysis> {
     let s = &a.sol;
     let parts = Parts {
         z0: s.z0,
@@ -367,10 +341,7 @@ fn to_analysis_fem(title: &str, p: &PlanarParams, a: PlanarFemAnalysis) -> TvRes
     Ok(assemble(p, parts, a.loss, &a.split))
 }
 
-/// Completes a synthesis: losses, split and the generic result for the geometry that was found.
-type Finish<'a> = Box<dyn FnOnce(&PlanarParams, &str) -> TvResult<Analysis> + 'a>;
-
-/// CPWG / stripline-type coplanar waveguide in a PCB inner layer.
+/// Planar transmission lines, solved with finite elements.
 pub struct PlanarLine;
 
 impl LineModel for PlanarLine {
@@ -408,10 +379,7 @@ impl LineModel for PlanarLine {
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis> {
         let p = PlanarParams::from_set(p)?;
-        match p.solver {
-            Solver::Fd => Ok(to_analysis("Analysis", &p, full_analysis(&p, ctl)?)),
-            Solver::Fem => to_analysis_fem("Analysis (finite elements)", &p, full_analysis_fem(&p, ctl)?),
-        }
+        to_analysis("Analysis", &p, full_analysis_fem(&p, ctl)?)
     }
 
     fn synthesize(
@@ -435,40 +403,16 @@ impl LineModel for PlanarLine {
             _ => SynthVar::WTotal,
         };
         let p = PlanarParams::from_set(p)?;
-        // the solution of the found geometry, as the pieces of whichever solver ran
-        let (mut pp, eeff, finish): (PlanarParams, f64, Finish<'_>) = match p.solver {
-            Solver::Fd => {
-                let (pp, sol) = synthesize(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
-                let eeff = sol.eeff;
-                (
-                    pp,
-                    eeff,
-                    Box::new(move |pp: &PlanarParams, title: &str| {
-                        Ok(to_analysis(title, pp, analysis_from_solution(pp, sol, ctl)?))
-                    }),
-                )
-            }
-            Solver::Fem => {
-                let (pp, sol) = synthesize_fem(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
-                let eeff = sol.eeff;
-                (
-                    pp,
-                    eeff,
-                    Box::new(move |pp: &PlanarParams, title: &str| {
-                        let loss = loss_model_fem(pp, &sol, ctl)?;
-                        let split = ground_split_fem(pp, &sol)?;
-                        to_analysis_fem(title, pp, PlanarFemAnalysis { sol, loss, split })
-                    }),
-                )
-            }
-        };
+        let (mut pp, sol) = synthesize_fem(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
         // the length follows from the solution: eps_eff does not depend on it
         let mut title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(z0_target), t.label);
         if let Some(ph) = phase_deg {
-            pp.length = length_for_phase_mm(pp.f, eeff, ph);
+            pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
             title += &format!(", phase = {} deg at {} GHz -> length", format_g(ph), format_g(pp.f / 1e9));
         }
-        let analysis = finish(&pp, &title)?;
+        let loss = loss_model_fem(&pp, &sol, ctl)?;
+        let split = ground_split_fem(&pp, &sol)?;
+        let analysis = to_analysis(&title, &pp, PlanarFemAnalysis { sol, loss, split })?;
         // only the dimensions (and the length, if a phase was asked for) change; the domain margin
         // found during synthesis stays internal
         let out = PlanarParams { w: pp.w, s: pp.s, length: pp.length, ..p };

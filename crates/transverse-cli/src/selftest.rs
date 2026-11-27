@@ -1,7 +1,6 @@
 //! Self-test: re-run the reference cases exported from the Python implementation.
 
 use std::collections::HashMap;
-use std::process::ExitCode;
 use std::time::Instant;
 
 use serde::Deserialize;
@@ -82,7 +81,8 @@ fn key(c: GroundCat) -> &'static str {
     }
 }
 
-pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
+/// Whether every check passed.
+pub fn run(path: Option<&str>) -> Result<bool, String> {
     let text = match path {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
         None => EMBEDDED.to_string(),
@@ -164,5 +164,5 @@ pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
     }
     let total = all.cases.len() + all.synthesis.len();
     println!("\n{} of {total} checks passed", total - failed);
-    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    Ok(failed == 0)
 }

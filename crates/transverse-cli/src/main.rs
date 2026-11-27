@@ -1,11 +1,14 @@
 //! Command-line front end: batch analysis, synthesis and self-test.
 //!
 //! ```text
-//! transverse analyze [params.json|-] [--solver fd|fem] [--json]   analyse one geometry (missing fields use defaults)
+//! transverse analyze [params.json|-] [--solver fem|fd] [--json]   analyse one geometry (missing fields use defaults)
 //! transverse compare [params.json|-]                         finite difference vs finite elements on one geometry
-//! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
-//! transverse selftest [--solver fd|fem] [cases.json]          compare against the Python reference cases
+//! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+//! transverse selftest [--solver fem|fd] [cases.json]          compare against the Python reference cases
 //! ```
+//!
+//! The finite elements are the solver of the apps and the default here; `--solver fd` selects the finite-difference
+//! grid, the reference of the tests. `selftest` without `--solver` checks both.
 
 mod fem_cmd;
 mod selftest;
@@ -16,13 +19,13 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use transverse_core::{C_LIGHT, Ctl, guided_wavelength_mm, length_for_phase_mm, phase_deg};
-use transverse_lines::planar::{self, PlanarParams, Solver, SynthVar, full_analysis};
+use transverse_lines::planar::{self, PlanarParams, SynthVar, full_analysis};
 
 const USAGE: &str = "usage:
-  transverse analyze [params.json|-] [--solver fd|fem] [--json]
+  transverse analyze [params.json|-] [--solver fem|fd] [--json]
   transverse compare [params.json|-]
-  transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
-  transverse selftest [--solver fd|fem] [cases.json]
+  transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+  transverse selftest [--solver fem|fd] [cases.json]
   transverse --version";
 
 fn main() -> ExitCode {
@@ -84,21 +87,45 @@ fn print_analysis(title: &str, p: &PlanarParams, a: &planar::PlanarAnalysis, sec
     }
 }
 
-fn cmd_selftest(args: &[String]) -> Result<ExitCode, String> {
-    let mut fem = false;
-    let mut path: Option<&str> = None;
+/// The value of `--solver`: `true` for the finite elements, `None` if the option is not given.
+fn solver_option(args: &[String]) -> Result<Option<bool>, String> {
+    let Some(i) = args.iter().position(|a| a == "--solver") else { return Ok(None) };
+    match args.get(i + 1).map(String::as_str) {
+        Some("fem") => Ok(Some(true)),
+        Some("fd") => Ok(Some(false)),
+        _ => Err("--solver needs fem or fd".to_string()),
+    }
+}
+
+/// The arguments that are not options (nor the values of options).
+fn positional(args: &[String]) -> Vec<&String> {
+    let mut out = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--solver" => match it.next().map(String::as_str) {
-                Some("fd") => fem = false,
-                Some("fem") => fem = true,
-                _ => return Err("--solver needs fd or fem".to_string()),
-            },
-            _ => path = Some(a),
+            "--json" => {}
+            "--solver" | "--phase" => {
+                it.next();
+            }
+            _ => out.push(a),
         }
     }
-    if fem { selftest_fem::run(path) } else { selftest::run(path) }
+    out
+}
+
+fn cmd_selftest(args: &[String]) -> Result<ExitCode, String> {
+    let path = positional(args).first().map(|s| s.as_str());
+    let passed = match solver_option(args)? {
+        Some(true) => selftest_fem::run(path)?,
+        Some(false) => selftest::run(path)?,
+        None => {
+            let grid = selftest::run(path)?;
+            println!();
+            let elements = selftest_fem::run(path)?;
+            grid && elements
+        }
+    };
+    Ok(if passed { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
 fn cmd_compare(args: &[String]) -> Result<ExitCode, String> {
@@ -109,23 +136,9 @@ fn cmd_compare(args: &[String]) -> Result<ExitCode, String> {
 
 fn cmd_analyze(args: &[String]) -> Result<ExitCode, String> {
     let json_out = args.iter().any(|a| a == "--json");
-    // --solver fd|fem; without it the "solver" of the parameters decides (default fd)
-    let mut fem = None;
-    let mut path: Option<&String> = None;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--json" => {}
-            "--solver" => match it.next().map(String::as_str) {
-                Some("fd") => fem = Some(false),
-                Some("fem") => fem = Some(true),
-                _ => return Err("--solver needs fd or fem".to_string()),
-            },
-            _ => path = Some(a),
-        }
-    }
-    let p = read_params(path.map(String::as_str))?;
-    if fem.unwrap_or(p.solver == Solver::Fem) {
+    let fem = solver_option(args)?.unwrap_or(true);
+    let p = read_params(positional(args).first().map(|s| s.as_str()))?;
+    if fem {
         fem_cmd::analyze_command(&p, json_out)?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -147,17 +160,7 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
         ),
         None => None,
     };
-    let mut pos: Vec<&String> = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--json" => {}
-            "--phase" => {
-                it.next();
-            }
-            _ => pos.push(a),
-        }
-    }
+    let pos = positional(args);
     let var = match pos.first().map(|s| s.as_str()) {
         Some("w") => SynthVar::W,
         Some("s") => SynthVar::S,
@@ -170,7 +173,7 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
     let ctl = progress();
     let t0 = Instant::now();
 
-    if p.solver == Solver::Fem {
+    if solver_option(args)?.unwrap_or(true) {
         let (mut pp, sol) =
             planar::synthesize_fem(&p, target, var, planar::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
         eprintln!("Synthesis done: w = {:.4} mm, s = {:.4} mm, running full analysis ...", pp.w, pp.s);

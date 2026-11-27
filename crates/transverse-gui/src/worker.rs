@@ -175,8 +175,8 @@ mod tests {
         });
         let (progress, end) = run_to_end(&mut w);
         let Msg::Done(out) = end else { panic!("not done") };
-        assert!((out.analysis.modes[0].z0 / 35.001 - 1.0).abs() < 5e-4 && out.new_params.is_none());
-        assert!(progress.iter().any(|p| p.contains("mesh level 1")), "{progress:?}");
+        assert!((out.analysis.modes[0].z0 / 35.001 - 1.0).abs() < 1e-3 && out.new_params.is_none());
+        assert!(progress.iter().any(|p| p.starts_with("Refinement 2")), "{progress:?}");
         assert!(wakes.load(Ordering::Relaxed) > progress.len());
         assert!(w.is_finished() && w.recv().is_none() && w.poll().is_empty());
     }
@@ -216,7 +216,7 @@ mod tests {
         let (_, end) = run_to_end(&mut w);
         let Msg::Done(out) = end else { panic!("not done") };
         let p = out.new_params.unwrap();
-        assert!((p.num("w").unwrap() / 0.3605 - 1.0).abs() < 5e-4);
+        assert!((p.num("w").unwrap() / 0.3605 - 1.0).abs() < 3e-3);
         assert!(out.analysis.report.contains("Synthesis: Z0 = 35 Ohm"));
         // the length follows from the 90 degrees (a quarter wavelength), not from the old 100 mm
         let mode = &out.analysis.modes[0];

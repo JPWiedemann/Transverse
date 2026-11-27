@@ -4,7 +4,7 @@ use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::postproc::percentile;
 use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamValue, ShapeKind, is_enabled};
-use transverse_lines::planar::{PlanarLine, PlanarParams};
+use transverse_lines::planar::{GroundCat, PlanarLine, PlanarParams, analyze, field_data, full_analysis};
 
 fn rel(a: f64, b: f64) -> f64 {
     (a / b - 1.0).abs()
@@ -43,12 +43,12 @@ fn enable_when_follows_choices() {
     let m = PlanarLine;
     let mut set = m.defaults();
     let find = |k: &str| *m.params().iter().find(|p| p.key == k).unwrap();
-    assert!(!is_enabled(&find("dmin"), &set) && !is_enabled(&find("richardson"), &set));
+    assert!(!is_enabled(&find("dmin"), &set) && !is_enabled(&find("dmax"), &set));
     assert!(!is_enabled(&find("er_gap"), &set));
     set.set("mesh_mode", ParamValue::Num(1.0));
     set.set("gap_mode", ParamValue::Num(2.0));
     assert!(is_enabled(&find("dmin"), &set) && is_enabled(&find("dmax"), &set));
-    assert!(is_enabled(&find("richardson"), &set) && is_enabled(&find("tand_gap"), &set));
+    assert!(is_enabled(&find("tand_gap"), &set));
     assert!(is_enabled(&find("w"), &set));
 }
 
@@ -92,11 +92,13 @@ fn wavelength_follows_frequency_and_permittivity() {
 
 #[test]
 fn analysis_through_the_trait_matches_the_reference() {
+    // the finite elements through the interface; the reference values are the converged grid results
     let a = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap();
     assert_eq!(a.modes.len(), 1);
     let m = &a.modes[0];
-    assert!(rel(m.z0, 35.001) < 5e-4 && rel(m.eps_eff, 3.58) < 5e-3);
-    assert!(a.report.contains("Z0              =   35.001 Ohm"), "{}", a.report);
+    assert!(rel(m.z0, 35.001) < 1e-3 && rel(m.eps_eff, 3.58) < 5e-3);
+    assert!(a.report.contains(&format!("Z0              = {:8.3} Ohm", m.z0)), "{}", a.report);
+    assert!(a.report.contains("finite elements"), "{}", a.report);
     let s = m.split.as_ref().unwrap();
     assert!(s.rows.iter().any(|r| r.key == "plane1" && (r.current_pct - 39.2).abs() < 0.1));
     assert!(s.profiles.iter().any(|p| p.key == "cop_top") && !s.x90.is_empty());
@@ -114,7 +116,7 @@ fn synthesis_through_the_trait_keeps_other_parameters() {
     set.set("plane1", ParamValue::Bool(false));
     set.set("fence1", ParamValue::Bool(false));
     let (out, a) = m.synthesize(&set, "w", 50.0, None, &Ctl::new()).unwrap();
-    assert!(rel(a.modes[0].z0, 50.0) < 5e-4);
+    assert!(rel(a.modes[0].z0, 50.0) < 2e-3);
     assert!(a.report.starts_with("=== Synthesis: Z0 = 50 Ohm, vary w (s fixed) ==="));
     // only w changed; in particular the automatically found margin is not written back
     let mut expect = set.clone();
@@ -150,7 +152,7 @@ fn synthesis_with_a_phase_sets_the_length_from_the_solution() {
     set.set("f", ParamValue::Num(2.4e9));
     let (out, a) = m.synthesize(&set, "w", 35.0, Some(90.0), &Ctl::new()).unwrap();
     let mode = &a.modes[0];
-    assert!(rel(mode.z0, 35.0) < 5e-4);
+    assert!(rel(mode.z0, 35.0) < 2e-3);
     // a quarter wavelength of the guided wave at 2.4 GHz, with the eps_eff of the synthesised geometry
     let lambda = transverse_core::C_LIGHT / (2.4e9 * mode.eps_eff.sqrt()) * 1e3;
     assert!(rel(out.num("length").unwrap(), lambda / 4.0) < 1e-12);
@@ -208,8 +210,13 @@ struct NodeRef {
     e: Option<f64>,
 }
 
+/// The field data of the grid solver (the reference), which the stored values belong to.
+fn grid_field(p: &PlanarParams) -> transverse_lines::model::FieldData {
+    field_data(p, &analyze(p, &Ctl::new()).unwrap())
+}
+
 fn final_stackup_field() -> transverse_lines::model::FieldData {
-    PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap().field.unwrap()
+    grid_field(&PlanarParams::default())
 }
 
 #[test]
@@ -247,10 +254,7 @@ fn field_data_geometry_for_the_default_stackup() {
     assert!(fx1 >= zx1 && fy0 <= zy0 && fy1 >= zy1);
     assert!(zy0 < -0.254 && zy1 > 0.018 + 0.204);
     // open variant: missing planes show dashed board-surface lines and the domain is extended
-    let mut s = PlanarLine.defaults();
-    s.set("plane1", ParamValue::Bool(false));
-    s.set("fence1", ParamValue::Bool(false));
-    let o = PlanarLine.analyze(&s, &Ctl::new()).unwrap().field.unwrap();
+    let o = grid_field(&PlanarParams { plane1: false, fence1: false, ..PlanarParams::default() });
     assert_eq!(o.dashed_y.len(), 1);
     assert!(o.view_full[3] > f.view_full[3]);
 }
@@ -334,43 +338,45 @@ fn split_summary_carries_what_the_return_current_tab_needs() {
     assert!(info.contains("Domain boundary") && info.contains("NOT well below t"), "{info}");
 }
 
-// ---- the finite-element solver through the generic interface
-
-fn fem_set() -> ParamSet {
-    let mut s = PlanarLine.defaults();
-    s.set("solver", ParamValue::Num(1.0));
-    s
-}
+// ---- the model solves with finite elements; the grid solver is the reference
 
 #[test]
-fn the_solver_choice_runs_the_finite_elements_and_gives_the_same_results() {
-    let (fd, fem) = (
-        PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap(),
-        PlanarLine.analyze(&fem_set(), &Ctl::new()).unwrap(),
-    );
-    let (a, b) = (&fd.modes[0], &fem.modes[0]);
-    assert!(rel(b.z0, a.z0) < 1e-3 && rel(b.eps_eff, a.eps_eff) < 1e-3, "{} vs {}", b.z0, a.z0);
-    assert!(rel(b.at_f.alpha_c, a.at_f.alpha_c) < 1e-3 && rel(b.at_f.alpha_d, a.at_f.alpha_d) < 1e-3);
-    let (sa, sb) = (a.split.as_ref().unwrap(), b.split.as_ref().unwrap());
-    assert_eq!(sa.rows.len(), sb.rows.len());
-    for (x, y) in sa.rows.iter().zip(&sb.rows) {
+fn the_model_agrees_with_the_grid_solver() {
+    let grid = full_analysis(&PlanarParams::default(), &Ctl::new()).unwrap();
+    let a = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap();
+    let m = &a.modes[0];
+    assert!(rel(m.z0, grid.sol.z0) < 1e-3 && rel(m.eps_eff, grid.sol.eeff) < 1e-3, "{}", m.z0);
+    let at = grid.loss.at(1e9);
+    assert!(rel(m.at_f.alpha_c, at.alpha_c) < 1e-3 && rel(m.at_f.alpha_d, at.alpha_d) < 1e-3);
+    for row in &m.split.as_ref().unwrap().rows {
+        let Some(cat) = GroundCat::ALL.iter().find(|c| c.key() == row.key) else { continue };
+        let (field, current) = (grid.split.field.get(*cat), grid.split.current.get(*cat));
         assert!(
-            (x.field_pct - y.field_pct).abs() < 0.5 && (x.current_pct - y.current_pct).abs() < 0.5,
+            (row.field_pct - field).abs() < 0.5 && (row.current_pct - current).abs() < 0.5,
             "{}",
-            x.key
+            row.key
         );
     }
-    assert!(fem.report.contains("finite elements") && !fd.report.contains("finite elements"));
-    assert!(fem.report.contains("Accuracy"));
+    assert!(a.report.contains("Accuracy"));
     // the accuracy record of a triangle mesh has no grid size
-    let acc = fem.accuracy.unwrap();
+    let acc = a.accuracy.unwrap();
     assert!(acc.nodes > 1000 && acc.nx == 0 && acc.ny == 0 && acc.dmin_actual > 0.0);
     assert!(acc.est_err.unwrap() < 5e-3);
 }
 
 #[test]
+fn old_parameter_sets_with_solver_keys_still_load() {
+    let mut s = PlanarLine.defaults();
+    s.set("solver", ParamValue::Num(0.0));
+    s.set("richardson", ParamValue::Bool(false));
+    assert_eq!(PlanarParams::from_set(&s).unwrap(), PlanarParams::default());
+    let json: PlanarParams = serde_json::from_str(r#"{"solver": "fd", "w": 0.3}"#).unwrap();
+    assert_eq!(json.w, 0.3);
+}
+
+#[test]
 fn mesh_field_data_answers_the_same_questions_as_grid_field_data() {
-    let f = PlanarLine.analyze(&fem_set(), &Ctl::new()).unwrap().field.unwrap();
+    let f = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap().field.unwrap();
     let g = final_stackup_field();
     assert!(f.mesh.is_some() && g.mesh.is_none() && g.mesh_edges(g.view_zoom).is_none());
     assert_eq!(f.conductors.len(), g.conductors.len());
@@ -406,7 +412,7 @@ fn mesh_field_data_answers_the_same_questions_as_grid_field_data() {
 
 #[test]
 fn synthesis_with_the_finite_elements_finds_the_reference_width() {
-    let mut s = fem_set();
+    let mut s = PlanarLine.defaults();
     s.set("w", ParamValue::Num(0.2));
     let (set, a) = PlanarLine.synthesize(&s, "w", 35.0, None, &Ctl::new()).unwrap();
     let w = PlanarParams::from_set(&set).unwrap().w;
@@ -414,8 +420,6 @@ fn synthesis_with_the_finite_elements_finds_the_reference_width() {
     assert!(rel(w, 0.3605) < 3e-3, "w = {w}");
     assert!(rel(a.modes[0].z0, 35.0) < 2e-3, "z0 = {}", a.modes[0].z0);
     assert!(a.field.unwrap().mesh.is_some());
-    // the solver choice survives in the returned parameters
-    assert_eq!(PlanarParams::from_set(&set).unwrap().solver, transverse_lines::planar::Solver::Fem);
 }
 
 /// The drawing must not cover any of the solved region: conductors are drawn where the solution has none.
@@ -423,8 +427,8 @@ fn synthesis_with_the_finite_elements_finds_the_reference_width() {
 fn via_fences_are_drawn_outside_the_wall_they_stand_for() {
     let p = PlanarParams::default();
     let wall = p.w / 2.0 + p.s + p.g;
-    for set in [PlanarLine.defaults(), fem_set()] {
-        let f = PlanarLine.analyze(&set, &Ctl::new()).unwrap().field.unwrap();
+    let mesh = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap().field.unwrap();
+    for f in [final_stackup_field(), mesh] {
         // the fences are the narrow upright rectangles
         let fences: Vec<_> = f.conductors.iter().filter(|c| c.y1 - c.y0 > 4.0 * (c.x1 - c.x0)).collect();
         assert_eq!(fences.len(), 4);
