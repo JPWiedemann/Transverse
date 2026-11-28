@@ -80,11 +80,14 @@ for (const c of cases.cases.filter((k) => !k.name.startsWith('manual_mesh'))) {
   // loss over frequency through the typed-array path: the same model as the mode result
   const row = a.sample(new Float64Array([c.params.f]));
   close(`${c.name} sample alpha_c`, row[2], m.at_f.alpha_c, 1e-12);
-  // measured: up to 0.35 points (the field share of the gap flank with a custom gap material), 1.5 for t = 0
+  // measured: up to 0.4 points, 1.5 for t = 0, and one exception: the field share of the gap flank with an air
+  // gap, where the reference grid is not converged (3.86 %; 3.45 % at a target error of 0.03 % and still
+  // falling; the finite elements give 3.33 % here and 3.18 % at 0.01 %)
   const limit = c.params.t === 0 ? 1.7 : 0.4;
+  const fieldLimit = (key) => (c.name === 'gap_custom_air' && key === 'cop_flank' ? 0.6 : limit);
   for (const r of m.split.rows) {
     if (r.key in c.split.field) {
-      points(`${c.name} field share ${r.key}`, r.field_pct, c.split.field[r.key], limit);
+      points(`${c.name} field share ${r.key}`, r.field_pct, c.split.field[r.key], fieldLimit(r.key));
       points(`${c.name} current share ${r.key}`, r.current_pct, c.split.current[r.key], limit);
     }
   }
