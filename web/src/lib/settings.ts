@@ -5,7 +5,6 @@ import type { SavedForm } from './form';
 import type { UnitSystem } from './loss';
 
 export type Theme = 'system' | 'light' | 'dark';
-export type Tab = 'results' | 'cross-section' | 'return-current' | 'loss' | 'field';
 export type FieldMode = 'e_db_lines' | 'e_db' | 'e_linear' | 'potential' | 'permittivity' | 'mesh';
 export const FIELD_MODES: FieldMode[] = ['e_db_lines', 'e_db', 'e_linear', 'potential', 'permittivity', 'mesh'];
 
@@ -20,7 +19,6 @@ export interface LineSettings {
 export interface Settings {
   theme: Theme;
   units: UnitSystem;
-  tab: Tab;
   lossFmaxText: string;
   lossFmaxUnit: string;
   fieldMode: FieldMode;
@@ -42,7 +40,6 @@ export function loadSettings(): Settings {
         ...defaults(),
         theme,
         units: s.units === 'imperial' ? 'imperial' : 'metric',
-        tab: s.tab === 'cross-section' || s.tab === 'return-current' || s.tab === 'loss' || s.tab === 'field' ? s.tab : 'results',
         lossFmaxText: typeof s.lossFmaxText === 'string' ? s.lossFmaxText : '20',
         lossFmaxUnit: typeof s.lossFmaxUnit === 'string' ? s.lossFmaxUnit : 'GHz',
         fieldMode: FIELD_MODES.find((m) => m === s.fieldMode) ?? 'e_db_lines',
@@ -74,7 +71,7 @@ export function migrateLines(lines: Record<string, LineSettings>): Record<string
 }
 
 function defaults(): Settings {
-  return { theme: 'system', units: 'metric', tab: 'results', lossFmaxText: '20', lossFmaxUnit: 'GHz', fieldMode: 'e_db_lines', showEq: true, showMesh: false, dbRange: 40, lines: {} };
+  return { theme: 'system', units: 'metric', lossFmaxText: '20', lossFmaxUnit: 'GHz', fieldMode: 'e_db_lines', showEq: true, showMesh: false, dbRange: 40, lines: {} };
 }
 
 export function saveSettings(s: Settings): void {

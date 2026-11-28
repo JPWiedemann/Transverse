@@ -9,17 +9,19 @@
   import { Cancelled, Engine } from './lib/engine';
   import * as F from './lib/form';
   import { lineTypes, loadMeta, paramDefaults, paramSpecs, schematicOf, wavelengthOf } from './lib/meta';
-  import { applyTheme, loadSettings, saveSettings, type FieldMode, type Settings, type Tab, type Theme } from './lib/settings';
+  import { applyTheme, loadSettings, saveSettings, type FieldMode, type Settings, type Theme } from './lib/settings';
   import type { AnalysisResult, LineInfo, ParamSet, ParamSpec } from './lib/types';
   import { parseNumber, type UnitSystem } from './lib/units';
 
+  type Tab = 'cross-section' | 'results' | 'field' | 'return-current' | 'loss';
+
   const engine = new Engine();
   const tabs: [Tab, string][] = [
-    ['results', 'Results'],
     ['cross-section', 'Cross-section'],
+    ['results', 'Results'],
+    ['field', 'Field'],
     ['return-current', 'Return current'],
     ['loss', 'Loss vs f'],
-    ['field', 'Field'],
   ];
   const settings: Settings = loadSettings();
 
@@ -36,7 +38,7 @@
   let synthPhase = $state('');
   let theme = $state<Theme>(settings.theme);
   let units = $state<UnitSystem>(settings.units);
-  let tab = $state<Tab>(settings.tab);
+  let tab = $state<Tab>('cross-section');
   let lossFmaxText = $state(settings.lossFmaxText);
   let lossFmaxUnit = $state(settings.lossFmaxUnit);
   let fieldMode = $state<FieldMode>(settings.fieldMode);
@@ -93,7 +95,6 @@
     applyTheme(theme);
     settings.theme = theme;
     settings.units = units;
-    settings.tab = tab;
     settings.lossFmaxText = lossFmaxText;
     settings.lossFmaxUnit = lossFmaxUnit;
     settings.fieldMode = fieldMode;
@@ -162,6 +163,7 @@
       const r = await start(params);
       result = r;
       generation += 1;
+      if (tab === 'cross-section') tab = 'results';
       canSample = engine.canSample;
       if (r.params) form = F.setParams(specs, form, r.params, wavelength);
       persist();

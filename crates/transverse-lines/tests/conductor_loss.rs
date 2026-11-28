@@ -101,7 +101,7 @@ fn wheeler_agrees_with_the_integral_of_the_surface_current() {
             PlanarParams { coplanar: false, side_walls: true, w: 0.25, g: 0.12, t: 0.035, ..base.clone() },
         ),
         ("microstrip", PlanarParams { coplanar: false, upper: false, w: 0.5, t: 0.035, ..base.clone() }),
-        ("grounded CPW, outer layer", PlanarParams { upper: false, w: 0.35, s: 0.15, g: 0.3, ..base }),
+        ("CPWG, outer layer", PlanarParams { upper: false, w: 0.35, s: 0.15, g: 0.3, ..base }),
     ];
     for (name, p) in cases {
         // a fine mesh for the integral; the loss itself is taken at the default accuracy, as the apps do

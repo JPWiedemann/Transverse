@@ -25,6 +25,17 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeVisible({ timeout: 30_000 });
 });
 
+test('starts on the cross-section, with the tabs in the order of the desktop app', async ({ page }) => {
+  await expect(page.getByRole('tab')).toHaveText(['Cross-section', 'Results', 'Field', 'Return current', 'Loss vs f']);
+  await expect(tab(page, 'Cross-section')).toHaveAttribute('aria-selected', 'true');
+  // a run leads from the sketch to the results, any other tab stays
+  await analyze(page);
+  await expect(tab(page, 'Results')).toHaveAttribute('aria-selected', 'true');
+  await tab(page, 'Loss vs f').click();
+  await analyze(page);
+  await expect(tab(page, 'Loss vs f')).toHaveAttribute('aria-selected', 'true');
+});
+
 test('analyzes the default stack-up', async ({ page }) => {
   const errors = watchErrors(page);
   await analyze(page);
@@ -124,7 +135,7 @@ test('shows invalid input at the field and does not start', async ({ page }) => 
   await expect(page.locator('#p-w')).toHaveClass(/invalid/);
 });
 
-test('remembers the form, unit, tab and theme after a reload', async ({ page }) => {
+test('remembers the form, unit and theme after a reload, but not the tab', async ({ page }) => {
   await page.locator('#p-w').fill('0.42');
   await page.getByLabel('Trace width w unit').selectOption('mil');
   await tab(page, 'Loss vs f').click();
@@ -133,7 +144,7 @@ test('remembers the form, unit, tab and theme after a reload', async ({ page }) 
   await expect(page.getByRole('button', { name: 'Analyze', exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel('Trace width w unit')).toHaveValue('mil');
   expect(Number(await page.locator('#p-w').inputValue())).toBeGreaterThan(0);
-  await expect(tab(page, 'Loss vs f')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab(page, 'Cross-section')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
 });
 
@@ -166,10 +177,10 @@ test('presets set the structure and keep the dimensions', async ({ page }) => {
   await page.locator('#p-w').fill('0.5');
   const presets = page.getByRole('group', { name: 'Presets' });
   for (const [button, name] of [
+    ['CPWG, outer layer', 'grounded coplanar waveguide'],
+    ['CPW, no planes', 'coplanar waveguide'],
     ['Stripline', 'stripline'],
     ['Microstrip', 'microstrip'],
-    ['Grounded CPW, outer layer', 'grounded coplanar waveguide'],
-    ['CPW, no planes', 'coplanar waveguide'],
     ['CPWG, inner layer', 'grounded coplanar waveguide'],
   ] as const) {
     await presets.getByRole('button', { name: button, exact: true }).click();

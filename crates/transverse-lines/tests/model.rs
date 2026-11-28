@@ -90,10 +90,10 @@ fn the_form_shows_only_what_the_structure_uses() {
 fn presets_set_the_structure_and_nothing_else() {
     let names = [
         "grounded coplanar waveguide",
-        "stripline",
-        "microstrip",
         "grounded coplanar waveguide",
         "coplanar waveguide",
+        "stripline",
+        "microstrip",
     ];
     let presets = PlanarLine.presets();
     assert_eq!(presets.len(), names.len());

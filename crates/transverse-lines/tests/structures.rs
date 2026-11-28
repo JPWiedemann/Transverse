@@ -138,7 +138,7 @@ fn both_solvers_agree_on_the_new_structures_including_losses_and_ground_split() 
         ("microstrip", microstrip(0.5, 0.035, 4.3)),
         ("buried microstrip", PlanarParams { plane1: false, ..stripline(0.25, 0.018) }),
         (
-            "grounded CPW, outer layer",
+            "CPWG, outer layer",
             PlanarParams { upper: false, w: 0.35, s: 0.15, g: 0.3, ..PlanarParams::default() },
         ),
         (

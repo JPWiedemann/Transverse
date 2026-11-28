@@ -15,9 +15,9 @@ Calculates the impedance, losses and fields of a transmission line from its 2D c
 | Structure | Settings (preset buttons set these) |
 | --- | --- |
 | CPWG in a PCB inner layer | coplanar ground, planes, via fences |
+| CPWG on an outer layer, CPW without planes | coplanar ground, no upper half |
 | Stripline, optionally with via fences from plane to plane at `g` from the trace | no coplanar ground |
 | Microstrip | no coplanar ground, no upper half (air above) |
-| Grounded CPW on an outer layer, CPW without planes | coplanar ground, no upper half |
 
 The form shows only the fields the structure uses. The upper dielectric can take εr and tan δ of the lower one.
 

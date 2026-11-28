@@ -8,6 +8,8 @@ use crate::model::{Anchor, SchemColor, SchemItem, Schematic};
 pub struct SchematicFlags {
     pub coplanar: bool,
     pub upper: bool,
+    /// The upper dielectric has the material of the lower one.
+    pub upper_same: bool,
     pub side_walls: bool,
     pub plane1: bool,
     pub plane2: bool,
@@ -23,6 +25,7 @@ impl SchematicFlags {
         Self {
             coplanar: e.coplanar,
             upper: e.upper,
+            upper_same: e.upper_same,
             side_walls: e.side_walls,
             plane1: e.plane1,
             plane2: e.plane2,
@@ -39,8 +42,10 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
     let (xf0, xf1) = (95.0, 555.0); // fences / coplanar outer ends
     let (yt, y1, yc, y2, yb) = (62.0, 72.0, 162.0, 176.0, 266.0);
     let (cx, hw, s) = (325.0, 70.0, 45.0);
+    // the same material is drawn in the same colour
+    let upper_col = if f.upper_same { LowerDielectric } else { UpperDielectric };
     let gap_col = match f.gap_mode {
-        GapMode::Upper => UpperDielectric,
+        GapMode::Upper => upper_col,
         GapMode::Lower => LowerDielectric,
         GapMode::Custom => CustomGap,
     };
@@ -57,7 +62,7 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
 
     text(&mut it, 330.0, 16.0, "Cross-section (not to scale)", Anchor::Center, true, Text);
     if f.upper {
-        rect(&mut it, x0, y1, x1, yc, UpperDielectric, None);
+        rect(&mut it, x0, y1, x1, yc, upper_col, None);
     }
     rect(&mut it, x0, y2, x1, yb, LowerDielectric, None);
     // copper layer: what is not copper is filled with the gap material (air for the upper one without an upper half)
@@ -106,7 +111,12 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         text(&mut it, xf1 - 8.0, yb - 14.0, "Via fence 2", Anchor::Right, false, Muted);
     }
     if f.upper {
-        text(&mut it, x0 + 70.0, y1 + 20.0, "Upper dielectric:  h1, er1, tan d1", Anchor::Left, false, Text);
+        let label = if f.upper_same {
+            "Upper dielectric:  h1, er2, tan d2 (as lower)"
+        } else {
+            "Upper dielectric:  h1, er1, tan d1"
+        };
+        text(&mut it, x0 + 70.0, y1 + 20.0, label, Anchor::Left, false, Text);
     }
     text(&mut it, x0 + 70.0, yb - 20.0, "Lower dielectric:  h2, er2, tan d2", Anchor::Left, false, Text);
     text(&mut it, cx, y2 + 16.0, "Signal", Anchor::Center, true, Text);
@@ -138,6 +148,14 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         text(&mut it, (inner + xf1) / 2.0, yg - 9.0, "g", Anchor::Center, false, Text);
     }
     let xd = x1 + 28.0;
+    // reference levels of the heights: h1 and h2 count from the copper surfaces to the planes
+    let mut level = |from: f64, y: f64| line(&mut it, from, y, xd + 6.0, y, Muted, true, false);
+    level(cx + hw, yc);
+    level(cx + hw, y2);
+    level(x1, yb);
+    if f.upper {
+        level(x1, y1);
+    }
     if f.upper {
         line(&mut it, xd, y1, xd, yc, Text, false, true);
         text(&mut it, xd + 14.0, (y1 + yc) / 2.0, "h1", Anchor::Center, false, Text);
@@ -176,6 +194,7 @@ mod tests {
         SchematicFlags {
             coplanar: true,
             upper: true,
+            upper_same: false,
             side_walls: false,
             plane1,
             plane2,
@@ -252,6 +271,30 @@ mod tests {
         assert!(
             !s.items.iter().any(|i| matches!(i, SchemItem::Text { text, .. } if text.contains("copper")))
         );
+    }
+
+    #[test]
+    fn upper_half_with_the_lower_material_looks_like_the_lower_one() {
+        let s =
+            schematic(&SchematicFlags { upper_same: true, ..flags(true, true, true, true, GapMode::Upper) });
+        // the legend swatches are the only other rectangles and have an outline
+        assert_eq!(
+            count(&s, |i| matches!(
+                i,
+                SchemItem::Rect { fill: SchemColor::UpperDielectric, outline: None, .. }
+            )),
+            0
+        );
+        // upper half, lower half and the gap material beside the trace
+        assert_eq!(
+            count(&s, |i| matches!(
+                i,
+                SchemItem::Rect { fill: SchemColor::LowerDielectric, outline: None, .. }
+            )),
+            3
+        );
+        assert!(s.items.iter().any(|i| matches!(i, SchemItem::Text { text, .. }
+            if text == "Upper dielectric:  h1, er2, tan d2 (as lower)")));
     }
 
     #[test]

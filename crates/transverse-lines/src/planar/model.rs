@@ -127,21 +127,21 @@ static PRESETS: [Preset; 5] = [
         label: "CPWG, inner layer",
         values: structure!(true, true, true, true, true, true),
     },
-    Preset { id: "stripline", label: "Stripline", values: structure!(false, true, true, true, false, false) },
-    Preset {
-        id: "microstrip",
-        label: "Microstrip",
-        values: structure!(false, false, false, true, false, false),
-    },
     Preset {
         id: "cpwg_outer",
-        label: "Grounded CPW, outer layer",
+        label: "CPWG, outer layer",
         values: structure!(true, false, false, true, false, true),
     },
     Preset {
         id: "cpw",
         label: "CPW, no planes",
         values: structure!(true, false, false, false, false, false),
+    },
+    Preset { id: "stripline", label: "Stripline", values: structure!(false, true, true, true, false, false) },
+    Preset {
+        id: "microstrip",
+        label: "Microstrip",
+        values: structure!(false, false, false, true, false, false),
     },
 ];
 
