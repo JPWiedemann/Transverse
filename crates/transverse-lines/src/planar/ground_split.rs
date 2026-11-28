@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use transverse_core::fd2d::CAT_SIGNAL;
 use transverse_core::quasistatic::Solution;
 
-use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, CpwgParams};
+use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, PlanarParams};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GroundCat {
@@ -65,7 +65,7 @@ impl GroundCat {
         }
     }
 
-    fn index(self) -> usize {
+    pub(super) fn index(self) -> usize {
         Self::ALL.iter().position(|&c| c == self).unwrap()
     }
 }
@@ -79,6 +79,17 @@ pub struct Shares {
 }
 
 impl Shares {
+    /// Shares in percent of the sum of all fluxes, from the flux sums per category (in the order of [`GroundCat::ALL`]).
+    pub(super) fn from_sums(sum: [f64; 9]) -> (Shares, f64) {
+        let tot: f64 = sum.iter().sum();
+        let mut s = Shares::default();
+        for (i, v) in sum.iter().enumerate() {
+            s.pct[i] = 100.0 * v / tot;
+        }
+        s.coplanar = GroundCat::COPLANAR.iter().map(|&c| s.get(c)).sum();
+        (s, tot)
+    }
+
     pub fn get(&self, c: GroundCat) -> f64 {
         self.pct[c.index()]
     }
@@ -124,7 +135,7 @@ fn dual_lengths(v: &[f64]) -> Vec<f64> {
 }
 
 /// First entry where the cumulative share reaches 90 % (numpy `searchsorted` semantics).
-fn x90(mut pts: Vec<(f64, f64)>) -> Option<f64> {
+pub(super) fn x90(mut pts: Vec<(f64, f64)>) -> Option<f64> {
     if pts.is_empty() {
         return None;
     }
@@ -140,7 +151,21 @@ fn x90(mut pts: Vec<(f64, f64)>) -> Option<f64> {
     Some(pts.last().unwrap().0)
 }
 
-pub fn ground_split(p: &CpwgParams, sol: &Solution) -> Split {
+/// Points sorted by x with the values of equal x added up.
+pub(super) fn merge_equal_x(v: Vec<(f64, f64)>) -> (Vec<f64>, Vec<f64>) {
+    let (mut x, mut js): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+    for (xx, j) in v {
+        if x.last() == Some(&xx) {
+            *js.last_mut().unwrap() += j;
+        } else {
+            x.push(xx);
+            js.push(j);
+        }
+    }
+    (x, js)
+}
+
+pub fn ground_split(p: &PlanarParams, sol: &Solution) -> Split {
     let g = &sol.grid;
     let (nx, ny) = (g.nx(), g.ny());
     let fixed = |k: usize| g.cat[k] > 0;
@@ -207,15 +232,7 @@ pub fn ground_split(p: &CpwgParams, sol: &Solution) -> Split {
             continue;
         }
         v.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let (mut x, mut js): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
-        for (xx, j) in v {
-            if x.last() == Some(&xx) {
-                *js.last_mut().unwrap() += j;
-            } else {
-                x.push(xx);
-                js.push(j);
-            }
-        }
+        let (x, js) = merge_equal_x(v);
         profiles.push(Profile { cat, x, js });
     }
     Split { field, current, x90_planes, x90_cop, profiles }

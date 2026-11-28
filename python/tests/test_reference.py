@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from cpwg_solver import Params, analytic, ground_split, solve, synthesize
+from cpwg_solver import Params, analytic, ground_split, recede_walls, solve, synthesize
 
 
 def rel(a, b):
@@ -43,3 +43,23 @@ def test_synthesis_relative_accuracy():
     p, sol = synthesize(Params(), 35.0, "w")
     assert rel(sol.z0, 35.0) < 5e-4
     assert rel(p.w, 0.3605) < 5e-4
+
+
+def metal_surfaces(p, y0):
+    """Positions of: signal side face, coplanar face at the gap, via fence, copper bottom, copper
+    top, plane 1, plane 2, with y0 the height of the bottom of the signal layer."""
+    gap_face = p.w / 2 + p.s
+    return [p.w / 2, gap_face, gap_face + p.g, y0, y0 + p.t, y0 + p.t + p.h1, y0 - p.h2]
+
+
+@pytest.mark.parametrize("t", [0.018, 0.035, 0.0])
+def test_wheeler_moves_every_metal_surface_into_its_metal(t):
+    d = 1e-3
+    faces = 1 if t > 0 else 0  # a zero-thickness conductor has no top and bottom face to move
+    p = replace(Params(), t=t)
+    before = metal_surfaces(p, 0.0)
+    # the bottom face of thick copper recedes upwards, and the new dimensions are measured from it
+    after = metal_surfaces(recede_walls(p, d), faces * d)
+    direction = [-1, 1, 1, faces, -faces, 1, -1]
+    for old, new, sign in zip(before, after, direction, strict=True):
+        assert new - old == pytest.approx(sign * d, abs=1e-12)

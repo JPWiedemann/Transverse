@@ -2,7 +2,7 @@
 // dropdowns, flags and choices. Text is kept as typed so half-finished input is never lost;
 // conversion to internal units (mm, Hz) happens in `toParams`. Port of transverse-gui/form.rs.
 
-import type { ParamSet, ParamSpec } from './types';
+import type { ParamSet, ParamSpec, Preset, Visibility } from './types';
 import { FREQ_UNITS, LAMBDA, LEN_UNITS, factor as unitFactor, formatG, parseNumber } from './units';
 
 export type FieldState =
@@ -88,27 +88,42 @@ export function newForm(specs: ParamSpec[], defaults: ParamSet, wavelength: Wave
 }
 
 /** Flags and choices only (everything else at its default): enough to decide which controls are
- * enabled while some text field holds unfinished input. */
+ * shown while some text field holds unfinished input. */
 export function controlSet(defaults: ParamSet, form: FormState): ParamSet {
   const set: ParamSet = { ...defaults };
   for (const [k, f] of Object.entries(form)) {
     if (f.kind === 'flag') set[k] = f.value;
     else if (f.kind === 'choice') set[k] = f.index;
+    // visibility conditions on a quantity only ask for zero, which is zero in every unit
+    else if (parseNumber(f.text) === 0) set[k] = 0;
   }
   return set;
 }
 
-export function isEnabled(spec: ParamSpec, set: ParamSet): boolean {
-  const dep = spec.enable_when;
-  if (!dep) return true;
-  const v = set[dep.key];
-  if (typeof v === 'boolean') return Number(v) === dep.value;
-  if (typeof v === 'number') return v === dep.value;
-  return true;
+/** Whether something with this visibility applies to the values. */
+export function isVisible(when: Visibility, set: ParamSet): boolean {
+  const holds = (c: { key: string; value: number; not?: boolean }) => {
+    const v = set[c.key];
+    if (v === undefined) return true;
+    return (Number(v) === c.value) !== (c.not ?? false);
+  };
+  return when.length === 0 || when.some((all) => all.every(holds));
+}
+
+/** The form with the switches and choices of a preset; all other fields stay as they are. */
+export function applyPreset(form: FormState, preset: Preset): FormState {
+  const out: FormState = { ...form };
+  for (const [key, value] of preset.values) {
+    const cur = out[key];
+    if (cur?.kind === 'flag' && typeof value === 'boolean') out[key] = { kind: 'flag', value };
+    else if (cur?.kind === 'choice' && typeof value === 'number') out[key] = { kind: 'choice', index: value };
+  }
+  return out;
 }
 
 /** Parameters in internal units. Sizes given in λ refer to the wavelength computed from the
- * other fields. Throws a FormError for the first invalid field. */
+ * other fields. Throws a FormError for the first invalid field. A hidden field cannot hold anything up:
+ * if its text is no number, it keeps its default (and its text). */
 export function toParams(
   specs: ParamSpec[],
   defaults: ParamSet,
@@ -116,6 +131,7 @@ export function toParams(
   wavelength: Wavelength,
 ): ParamSet {
   const set: ParamSet = { ...defaults };
+  const controls = controlSet(defaults, form);
   for (const pass of [false, true]) {
     const lam = pass ? wavelength(set) : undefined;
     for (const spec of specs) {
@@ -126,10 +142,12 @@ export function toParams(
       else {
         if ((state.unit === LAMBDA) !== pass) continue;
         const v = parseNumber(state.text);
-        if (v === undefined) throw new FormError(spec.key, spec.label, `'${state.text.trim()}' is not a number`);
         const f = factor(spec, state.unit, lam);
-        if (f === undefined) throw new FormError(spec.key, spec.label, 'no wavelength reference');
-        set[spec.key] = v * f;
+        if (v !== undefined && f !== undefined) set[spec.key] = v * f;
+        else if (isVisible(spec.visible_when, controls)) {
+          const why = v === undefined ? `'${state.text.trim()}' is not a number` : 'no wavelength reference';
+          throw new FormError(spec.key, spec.label, why);
+        }
       }
     }
   }

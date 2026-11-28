@@ -1,12 +1,11 @@
 //! Self-test: re-run the reference cases exported from the Python implementation.
 
 use std::collections::HashMap;
-use std::process::ExitCode;
 use std::time::Instant;
 
 use serde::Deserialize;
 use transverse_core::Ctl;
-use transverse_lines::cpwg_inner::{self, CpwgParams, GroundCat, SynthVar, full_analysis};
+use transverse_lines::planar::{self, GroundCat, PlanarParams, SynthVar, full_analysis};
 
 /// Reference cases compiled into the binary, so the self-test works without any files.
 const EMBEDDED: &str = include_str!("../../../tests/reference/cases.json");
@@ -23,7 +22,7 @@ const TOL_SPLIT: f64 = 0.1;
 #[derive(Deserialize)]
 struct Case {
     name: String,
-    params: CpwgParams,
+    params: PlanarParams,
     z0: f64,
     eeff: f64,
     nodes: usize,
@@ -46,7 +45,7 @@ struct SplitRef {
 #[derive(Deserialize)]
 struct SynthCase {
     name: String,
-    params: CpwgParams,
+    params: PlanarParams,
     target: f64,
     var: SynthVar,
     result: SynthResult,
@@ -82,7 +81,8 @@ fn key(c: GroundCat) -> &'static str {
     }
 }
 
-pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
+/// Whether every check passed.
+pub fn run(path: Option<&str>) -> Result<bool, String> {
     let text = match path {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
         None => EMBEDDED.to_string(),
@@ -139,7 +139,7 @@ pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
     println!("\n{:<26} {:>9} {:>11} {:>11} {:>9}  result", "synthesis", "target", "w [mm]", "py w", "dw [%]");
     for c in &all.synthesis {
         let t0 = Instant::now();
-        let r = cpwg_inner::synthesize(&c.params, c.target, c.var, cpwg_inner::DEFAULT_RTOL, &Ctl::new());
+        let r = planar::synthesize(&c.params, c.target, c.var, planar::DEFAULT_RTOL, &Ctl::new());
         match r {
             Ok((p, sol)) => {
                 let dev = rel(p.w, c.result.w).max(rel(p.s, c.result.s));
@@ -164,5 +164,5 @@ pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
     }
     let total = all.cases.len() + all.synthesis.len();
     println!("\n{} of {total} checks passed", total - failed);
-    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    Ok(failed == 0)
 }

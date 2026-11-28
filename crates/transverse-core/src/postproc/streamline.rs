@@ -49,8 +49,8 @@ impl Field<'_> {
     }
 }
 
-/// Streamlines of (ex, ey) inside `opt.view`, oriented along the field. Lines end at conductors,
-/// at the view edge, or where they would enter a region already covered by another line.
+/// Streamlines of (ex, ey) on the tensor grid inside `opt.view`, oriented along the field. Lines end at
+/// conductors, at the view edge, or where they would enter a region already covered by another line.
 pub fn field_lines(
     x: &[f64],
     y: &[f64],
@@ -60,9 +60,25 @@ pub fn field_lines(
     opt: &StreamOptions,
 ) -> Vec<Vec<[f64; 2]>> {
     let f = Field { x, y, ex, ey, fixed };
+    field_lines_with(
+        [x[0], x[x.len() - 1], y[0], y[y.len() - 1]],
+        &|p| f.e_at(p[0], p[1]),
+        &|p| f.in_conductor(p[0], p[1]),
+        opt,
+    )
+}
+
+/// Streamlines of any field: `bounds` = `[x0, x1, y0, y1]` of the domain, `e_at(p)` the field (components) at a
+/// point, `in_conductor(p)` whether the point is not in the dielectric any more (lines end there).
+pub fn field_lines_with(
+    bounds: [f64; 4],
+    e_at: &dyn Fn([f64; 2]) -> (f64, f64),
+    in_conductor: &dyn Fn([f64; 2]) -> bool,
+    opt: &StreamOptions,
+) -> Vec<Vec<[f64; 2]>> {
     let [vx0, vx1, vy0, vy1] = opt.view;
-    let (x0, x1) = (vx0.max(x[0]), vx1.min(x[x.len() - 1]));
-    let (y0, y1) = (vy0.max(y[0]), vy1.min(y[y.len() - 1]));
+    let (x0, x1) = (vx0.max(bounds[0]), vx1.min(bounds[1]));
+    let (y0, y1) = (vy0.max(bounds[2]), vy1.min(bounds[3]));
     if x1 <= x0 || y1 <= y0 {
         return Vec::new();
     }
@@ -84,7 +100,7 @@ pub fn field_lines(
             const DS: f64 = 0.2; // step in mask cells
             let max_steps = (8.0 * (nxm + nym) as f64 / DS) as usize;
             let dir = |p: [f64; 2]| -> Option<[f64; 2]> {
-                let (ux, uy) = f.e_at(p[0], p[1]);
+                let (ux, uy) = e_at(p);
                 // velocity in mask units, unit speed
                 let (vx, vy) = (ux / cw, uy / ch);
                 let n = vx.hypot(vy);
@@ -100,7 +116,7 @@ pub fn field_lines(
                 let d = dir(mid).unwrap_or(d1);
                 let q = [p[0] + DS * d[0] * cw, p[1] + DS * d[1] * ch];
                 let Some(cell) = mask_idx(q[0], q[1]) else { break };
-                if f.in_conductor(q[0], q[1]) {
+                if in_conductor(q) {
                     break;
                 }
                 if Some(cell) != last_cell {
@@ -128,7 +144,7 @@ pub fn field_lines(
             continue;
         }
         let start = [x0 + (i as f64 + 0.5) * cw, y0 + (j as f64 + 0.5) * ch];
-        if f.in_conductor(start[0], start[1]) {
+        if in_conductor(start) {
             continue;
         }
         occupied[k] = true;

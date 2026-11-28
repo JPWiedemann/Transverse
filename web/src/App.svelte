@@ -9,17 +9,19 @@
   import { Cancelled, Engine } from './lib/engine';
   import * as F from './lib/form';
   import { lineTypes, loadMeta, paramDefaults, paramSpecs, schematicOf, wavelengthOf } from './lib/meta';
-  import { applyTheme, loadSettings, saveSettings, type FieldMode, type Settings, type Tab, type Theme } from './lib/settings';
+  import { applyTheme, loadSettings, saveSettings, type FieldMode, type Settings, type Theme } from './lib/settings';
   import type { AnalysisResult, LineInfo, ParamSet, ParamSpec } from './lib/types';
   import { parseNumber, type UnitSystem } from './lib/units';
 
+  type Tab = 'cross-section' | 'results' | 'field' | 'return-current' | 'loss';
+
   const engine = new Engine();
   const tabs: [Tab, string][] = [
-    ['results', 'Results'],
     ['cross-section', 'Cross-section'],
+    ['results', 'Results'],
+    ['field', 'Field'],
     ['return-current', 'Return current'],
     ['loss', 'Loss vs f'],
-    ['field', 'Field'],
   ];
   const settings: Settings = loadSettings();
 
@@ -36,7 +38,7 @@
   let synthPhase = $state('');
   let theme = $state<Theme>(settings.theme);
   let units = $state<UnitSystem>(settings.units);
-  let tab = $state<Tab>(settings.tab);
+  let tab = $state<Tab>('cross-section');
   let lossFmaxText = $state(settings.lossFmaxText);
   let lossFmaxUnit = $state(settings.lossFmaxUnit);
   let fieldMode = $state<FieldMode>(settings.fieldMode);
@@ -54,6 +56,9 @@
   let result = $state<AnalysisResult | undefined>();
 
   const controls = $derived(F.controlSet(defaults, form));
+  // the synthesis targets the structure offers, and the chosen one among them (else the first)
+  const targets = $derived(line ? line.synth_targets.filter((t) => F.isVisible(t.visible_when, controls)) : []);
+  const target = $derived(targets.some((t) => t.id === synthTarget) ? synthTarget : (targets[0]?.id ?? ''));
 
   // the parameters as currently typed, if they are valid (sketch and loss plot follow the form)
   const current = $derived.by(() => {
@@ -90,7 +95,6 @@
     applyTheme(theme);
     settings.theme = theme;
     settings.units = units;
-    settings.tab = tab;
     settings.lossFmaxText = lossFmaxText;
     settings.lossFmaxUnit = lossFmaxUnit;
     settings.fieldMode = fieldMode;
@@ -159,6 +163,7 @@
       const r = await start(params);
       result = r;
       generation += 1;
+      if (tab === 'cross-section') tab = 'results';
       canSample = engine.canSample;
       if (r.params) form = F.setParams(specs, form, r.params, wavelength);
       persist();
@@ -191,7 +196,7 @@
       }
     }
     persist();
-    return run((p) => engine.synthesize(line!.id, p, synthTarget, z0, phase, (t) => setStatus(t)), 'Synthesis');
+    return run((p) => engine.synthesize(line!.id, p, target, z0, phase, (t) => setStatus(t)), 'Synthesis');
   }
 </script>
 
@@ -230,8 +235,8 @@
     <button class="primary" disabled={busy} onclick={analyze}>Analyze</button>
     <span class="sep"></span>
     <label>Synthesize
-      <select bind:value={synthTarget} disabled={busy} onchange={persist}>
-        {#each line.synth_targets as t}
+      <select value={target} disabled={busy} onchange={(e) => { synthTarget = e.currentTarget.value; persist(); }}>
+        {#each targets as t (t.id)}
           <option value={t.id}>{t.label}</option>
         {/each}
       </select>
@@ -249,7 +254,7 @@
 
   <div class="layout">
     <section class="form" aria-label="Parameters">
-      <ParamForm {specs} {form} {controls} {invalidKey} {onText} {onUnit} {onFlag} {onChoice} />
+      <ParamForm {specs} {form} {controls} presets={line.presets} onPreset={(p) => edit(F.applyPreset(form, p))} {invalidKey} {onText} {onUnit} {onFlag} {onChoice} />
     </section>
     <section class="output" aria-label="Results">
       <div class="tabs" role="tablist" aria-label="Views">

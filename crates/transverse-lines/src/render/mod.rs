@@ -4,4 +4,5 @@
 
 pub mod colormap;
 mod colormap_data;
+pub mod mesh_raster;
 pub mod raster;

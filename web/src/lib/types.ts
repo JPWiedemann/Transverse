@@ -7,23 +7,35 @@ export type ParamKind =
   | { Bool: boolean }
   | { Choice: [string[], number] };
 
+/** Applies when all conditions of one of the alternatives hold (no alternatives: always). */
+export type Visibility = { key: string; value: number; not?: boolean }[][];
+
 export interface ParamSpec {
   key: string;
   label: string;
   group: string;
   kind: ParamKind;
-  enable_when: { key: string; value: number } | null;
+  visible_when: Visibility;
 }
 
 export interface SynthTarget {
   id: string;
   label: string;
+  visible_when: Visibility;
+}
+
+/** A button that sets some parameters at once. */
+export interface Preset {
+  id: string;
+  label: string;
+  values: [string, number | boolean][];
 }
 
 export interface LineInfo {
   id: string;
   name: string;
   synth_targets: SynthTarget[];
+  presets: Preset[];
 }
 
 /** Parameters in internal units (lengths in mm, frequencies in Hz); choices by index. */
@@ -129,6 +141,7 @@ export type SchemColor =
 
 export type SchemItem =
   | { Rect: { x0: number; y0: number; x1: number; y1: number; fill: SchemColor; outline: SchemColor | null } }
+  | { Polygon: { points: [number, number][]; fill: SchemColor } }
   | { Line: { x0: number; y0: number; x1: number; y1: number; color: SchemColor; dashed: boolean; arrows: boolean } }
   | { Text: { x: number; y: number; text: string; anchor: 'Center' | 'Left' | 'Right'; bold: boolean; color: SchemColor } };
 
@@ -141,6 +154,8 @@ export interface Schematic {
 // Field views (serde output of the wasm layer).
 export interface DrawRect {
   kind: 'Signal' | 'Ground';
+  /** etched copper: [x0, x1] of the face at y1 (x0 and x1 are then those at y0) */
+  top: [number, number] | null;
   x0: number;
   y0: number;
   x1: number;
@@ -150,6 +165,8 @@ export interface DrawRect {
 export interface FieldInfo {
   nx: number;
   ny: number;
+  /** solution on a triangle mesh: `field_mesh_edges` gives the mesh, nx and ny are only the extent */
+  mesh: boolean;
   z0: number;
   conductors: DrawRect[];
   dashed_y: number[];

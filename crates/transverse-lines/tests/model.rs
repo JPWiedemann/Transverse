@@ -3,8 +3,8 @@
 use serde::Deserialize;
 use transverse_core::Ctl;
 use transverse_core::postproc::percentile;
-use transverse_lines::cpwg_inner::{CpwgInner, CpwgParams};
-use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamValue, ShapeKind, is_enabled};
+use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamValue, ShapeKind, is_visible};
+use transverse_lines::planar::{GroundCat, PlanarLine, PlanarParams, analyze, field_data, full_analysis};
 
 fn rel(a: f64, b: f64) -> f64 {
     (a / b - 1.0).abs()
@@ -12,16 +12,16 @@ fn rel(a: f64, b: f64) -> f64 {
 
 #[test]
 fn defaults_equal_the_params_defaults_and_round_trip() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let set = m.defaults();
-    assert_eq!(CpwgParams::from_set(&set).unwrap(), CpwgParams::default());
-    assert_eq!(CpwgParams::default().to_set(), set);
+    assert_eq!(PlanarParams::from_set(&set).unwrap(), PlanarParams::default());
+    assert_eq!(PlanarParams::default().to_set(), set);
 }
 
 #[test]
 fn spec_keys_match_the_parameter_set_exactly() {
-    let m = CpwgInner;
-    let set = CpwgParams::default().to_set();
+    let m = PlanarLine;
+    let set = PlanarParams::default().to_set();
     let mut spec_keys: Vec<&str> = m.params().iter().map(|p| p.key).collect();
     let mut set_keys: Vec<&str> = set.0.keys().map(String::as_str).collect();
     spec_keys.sort_unstable();
@@ -29,7 +29,7 @@ fn spec_keys_match_the_parameter_set_exactly() {
     assert_eq!(spec_keys, set_keys);
     // dependencies point at existing choice/bool keys
     for p in m.params() {
-        if let Some(dep) = p.enable_when {
+        for dep in p.visible_when.iter().flat_map(|all| all.iter()) {
             assert!(set.get(dep.key).is_some(), "{} depends on unknown {}", p.key, dep.key);
         }
         if let ParamKind::Choice(opts, def) = p.kind {
@@ -38,26 +38,89 @@ fn spec_keys_match_the_parameter_set_exactly() {
     }
 }
 
+/// The keys of the fields the form shows for these values.
+fn shown(set: &ParamSet) -> Vec<&'static str> {
+    PlanarLine.params().iter().filter(|p| is_visible(p.visible_when, set)).map(|p| p.key).collect()
+}
+
+fn with(changes: &[(&str, ParamValue)]) -> ParamSet {
+    let mut s = PlanarLine.defaults();
+    for (k, v) in changes {
+        s.set(k, *v);
+    }
+    s
+}
+
 #[test]
-fn enable_when_follows_choices() {
-    let m = CpwgInner;
-    let mut set = m.defaults();
-    let find = |k: &str| *m.params().iter().find(|p| p.key == k).unwrap();
-    assert!(!is_enabled(&find("dmin"), &set) && !is_enabled(&find("richardson"), &set));
-    assert!(!is_enabled(&find("er_gap"), &set));
-    set.set("mesh_mode", ParamValue::Num(1.0));
-    set.set("gap_mode", ParamValue::Num(2.0));
-    assert!(is_enabled(&find("dmin"), &set) && is_enabled(&find("dmax"), &set));
-    assert!(is_enabled(&find("richardson"), &set) && is_enabled(&find("tand_gap"), &set));
-    assert!(is_enabled(&find("w"), &set));
+fn the_form_shows_only_what_the_structure_uses() {
+    use ParamValue::{Bool, Num};
+    // the default coplanar structure: everything but side walls, custom gap and manual mesh
+    let all = shown(&PlanarLine.defaults());
+    for k in ["s", "g", "fence1", "fence2", "h1", "er1", "plane1", "upper_same"] {
+        assert!(all.contains(&k), "{k}");
+    }
+    for k in ["side_walls", "er_gap", "tand_gap", "dmin", "dmax"] {
+        assert!(!all.contains(&k), "{k}");
+    }
+    let manual = shown(&with(&[("mesh_mode", Num(1.0)), ("gap_mode", Num(2.0))]));
+    assert!(["dmin", "dmax", "er_gap", "tand_gap"].iter().all(|k| manual.contains(k)));
+    let same = shown(&with(&[("upper_same", Bool(true))]));
+    assert!(same.contains(&"h1") && !same.contains(&"er1") && !same.contains(&"tand1"));
+    let open = shown(&with(&[("upper", Bool(false))]));
+    for k in ["h1", "er1", "tand1", "plane1", "fence1", "upper_same"] {
+        assert!(!open.contains(&k), "{k} without an upper half");
+    }
+    assert!(open.contains(&"g"), "fence 2 is still there");
+    assert!(!shown(&with(&[("upper", Bool(false)), ("fence2", Bool(false))])).contains(&"g"));
+    // no coplanar ground: no gap and no fences on it; side walls need both planes
+    let strip = shown(&with(&[("coplanar", Bool(false))]));
+    assert!(!strip.contains(&"s") && !strip.contains(&"fence1") && !strip.contains(&"fence2"));
+    assert!(strip.contains(&"side_walls") && !strip.contains(&"g"));
+    assert!(shown(&with(&[("coplanar", Bool(false)), ("side_walls", Bool(true))])).contains(&"g"));
+    assert!(!shown(&with(&[("coplanar", Bool(false)), ("plane1", Bool(false))])).contains(&"side_walls"));
+    // synthesis of the gap needs a coplanar ground
+    let targets = |set: &ParamSet| -> Vec<&str> {
+        PlanarLine.synth_targets().iter().filter(|t| is_visible(t.visible_when, set)).map(|t| t.id).collect()
+    };
+    assert_eq!(targets(&PlanarLine.defaults()), ["w", "s", "w_total"]);
+    assert_eq!(targets(&with(&[("coplanar", Bool(false))])), ["w"]);
+}
+
+#[test]
+fn presets_set_the_structure_and_nothing_else() {
+    let names = [
+        "grounded coplanar waveguide",
+        "grounded coplanar waveguide",
+        "coplanar waveguide",
+        "stripline",
+        "microstrip",
+    ];
+    let presets = PlanarLine.presets();
+    assert_eq!(presets.len(), names.len());
+    // from a form with dimensions and materials of its own
+    let own =
+        with(&[("w", ParamValue::Num(0.2)), ("er2", ParamValue::Num(4.4)), ("h2", ParamValue::Num(0.1))]);
+    for (preset, name) in presets.iter().zip(names) {
+        let mut set = own.clone();
+        for (k, v) in preset.values {
+            assert!(set.get(k).is_some(), "{}: unknown key {k}", preset.id);
+            set.set(k, *v);
+        }
+        let p = PlanarParams::from_set(&set).unwrap();
+        p.validate().unwrap();
+        assert_eq!(p.structure_name(), name, "{}", preset.id);
+        assert_eq!((p.w, p.er2, p.h2), (0.2, 4.4, 0.1));
+        // a preset does not depend on what was selected before it
+        assert!(preset.values.len() == presets[0].values.len());
+    }
 }
 
 #[test]
 fn invalid_sets_are_rejected_and_partial_sets_use_defaults() {
     let mut set = ParamSet::default();
-    assert_eq!(CpwgParams::from_set(&set).unwrap(), CpwgParams::default());
+    assert_eq!(PlanarParams::from_set(&set).unwrap(), PlanarParams::default());
     set.set("w", ParamValue::Num(0.5));
-    assert_eq!(CpwgParams::from_set(&set).unwrap().w, 0.5);
+    assert_eq!(PlanarParams::from_set(&set).unwrap().w, 0.5);
     for (k, v) in [
         ("gap_mode", ParamValue::Num(5.0)),
         ("gap_mode", ParamValue::Num(0.5)),
@@ -67,13 +130,13 @@ fn invalid_sets_are_rejected_and_partial_sets_use_defaults() {
     ] {
         let mut s = ParamSet::default();
         s.set(k, v);
-        assert!(CpwgParams::from_set(&s).is_err(), "{k} = {v:?} accepted");
+        assert!(PlanarParams::from_set(&s).is_err(), "{k} = {v:?} accepted");
     }
 }
 
 #[test]
 fn param_set_json_round_trip() {
-    let set = CpwgInner.defaults();
+    let set = PlanarLine.defaults();
     let text = serde_json::to_string(&set).unwrap();
     assert!(text.contains("\"plane1\":true") && text.contains("\"w\":0.3605"));
     assert_eq!(serde_json::from_str::<ParamSet>(&text).unwrap(), set);
@@ -81,7 +144,7 @@ fn param_set_json_round_trip() {
 
 #[test]
 fn wavelength_follows_frequency_and_permittivity() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let l1 = m.wavelength_mm(&m.defaults()).unwrap();
     let mut s = m.defaults();
     s.set("f", ParamValue::Num(2e9));
@@ -92,11 +155,13 @@ fn wavelength_follows_frequency_and_permittivity() {
 
 #[test]
 fn analysis_through_the_trait_matches_the_reference() {
-    let a = CpwgInner.analyze(&CpwgInner.defaults(), &Ctl::new()).unwrap();
+    // the finite elements through the interface; the reference values are the converged grid results
+    let a = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap();
     assert_eq!(a.modes.len(), 1);
     let m = &a.modes[0];
-    assert!(rel(m.z0, 35.001) < 5e-4 && rel(m.eps_eff, 3.58) < 5e-3);
-    assert!(a.report.contains("Z0              =   35.001 Ohm"), "{}", a.report);
+    assert!(rel(m.z0, 35.001) < 1e-3 && rel(m.eps_eff, 3.58) < 5e-3);
+    assert!(a.report.contains(&format!("Z0              = {:8.3} Ohm", m.z0)), "{}", a.report);
+    assert!(a.report.contains("finite elements"), "{}", a.report);
     let s = m.split.as_ref().unwrap();
     assert!(s.rows.iter().any(|r| r.key == "plane1" && (r.current_pct - 39.2).abs() < 0.1));
     assert!(s.profiles.iter().any(|p| p.key == "cop_top") && !s.x90.is_empty());
@@ -109,13 +174,13 @@ fn analysis_through_the_trait_matches_the_reference() {
 
 #[test]
 fn synthesis_through_the_trait_keeps_other_parameters() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     set.set("plane1", ParamValue::Bool(false));
     set.set("fence1", ParamValue::Bool(false));
     let (out, a) = m.synthesize(&set, "w", 50.0, None, &Ctl::new()).unwrap();
-    assert!(rel(a.modes[0].z0, 50.0) < 5e-4);
-    assert!(a.report.starts_with("=== Synthesis: Z0 = 50 Ohm, vary w (s fixed) ==="));
+    assert!(rel(a.modes[0].z0, 50.0) < 2e-3);
+    assert!(a.report.starts_with("=== Synthesis: Z0 = 50 Ohm, vary w ==="));
     // only w changed; in particular the automatically found margin is not written back
     let mut expect = set.clone();
     expect.set("w", out.get("w").unwrap());
@@ -126,7 +191,7 @@ fn synthesis_through_the_trait_keeps_other_parameters() {
 
 #[test]
 fn analysis_reports_wavelength_and_phase_of_the_entered_length() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     set.set("length", ParamValue::Num(50.0));
     let a = m.analyze(&set, &Ctl::new()).unwrap();
@@ -145,12 +210,12 @@ fn analysis_reports_wavelength_and_phase_of_the_entered_length() {
 
 #[test]
 fn synthesis_with_a_phase_sets_the_length_from_the_solution() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     set.set("f", ParamValue::Num(2.4e9));
     let (out, a) = m.synthesize(&set, "w", 35.0, Some(90.0), &Ctl::new()).unwrap();
     let mode = &a.modes[0];
-    assert!(rel(mode.z0, 35.0) < 5e-4);
+    assert!(rel(mode.z0, 35.0) < 2e-3);
     // a quarter wavelength of the guided wave at 2.4 GHz, with the eps_eff of the synthesised geometry
     let lambda = transverse_core::C_LIGHT / (2.4e9 * mode.eps_eff.sqrt()) * 1e3;
     assert!(rel(out.num("length").unwrap(), lambda / 4.0) < 1e-12);
@@ -161,9 +226,7 @@ fn synthesis_with_a_phase_sets_the_length_from_the_solution() {
     expect.set("length", out.get("length").unwrap());
     assert_eq!(out, expect);
     assert!(
-        a.report.starts_with(
-            "=== Synthesis: Z0 = 35 Ohm, vary w (s fixed), phase = 90 deg at 2.4 GHz -> length ==="
-        ),
+        a.report.starts_with("=== Synthesis: Z0 = 35 Ohm, vary w, phase = 90 deg at 2.4 GHz -> length ==="),
         "{}",
         a.report
     );
@@ -208,8 +271,13 @@ struct NodeRef {
     e: Option<f64>,
 }
 
+/// The field data of the grid solver (the reference), which the stored values belong to.
+fn grid_field(p: &PlanarParams) -> transverse_lines::model::FieldData {
+    field_data(p, &analyze(p, &Ctl::new()).unwrap())
+}
+
 fn final_stackup_field() -> transverse_lines::model::FieldData {
-    CpwgInner.analyze(&CpwgInner.defaults(), &Ctl::new()).unwrap().field.unwrap()
+    grid_field(&PlanarParams::default())
 }
 
 #[test]
@@ -247,10 +315,7 @@ fn field_data_geometry_for_the_default_stackup() {
     assert!(fx1 >= zx1 && fy0 <= zy0 && fy1 >= zy1);
     assert!(zy0 < -0.254 && zy1 > 0.018 + 0.204);
     // open variant: missing planes show dashed board-surface lines and the domain is extended
-    let mut s = CpwgInner.defaults();
-    s.set("plane1", ParamValue::Bool(false));
-    s.set("fence1", ParamValue::Bool(false));
-    let o = CpwgInner.analyze(&s, &Ctl::new()).unwrap().field.unwrap();
+    let o = grid_field(&PlanarParams { plane1: false, fence1: false, ..PlanarParams::default() });
     assert_eq!(o.dashed_y.len(), 1);
     assert!(o.view_full[3] > f.view_full[3]);
 }
@@ -282,7 +347,7 @@ fn equipotentials_and_field_lines_of_a_real_solution() {
 #[test]
 fn schematic_follows_the_form_values() {
     use transverse_lines::model::SchemItem;
-    let m = CpwgInner;
+    let m = PlanarLine;
     let mut set = m.defaults();
     let all = m.schematic(&set).unwrap();
     assert_eq!((all.width, all.height), (700.0, 340.0));
@@ -302,7 +367,7 @@ fn schematic_follows_the_form_values() {
 
 #[test]
 fn split_summary_carries_what_the_return_current_tab_needs() {
-    let m = CpwgInner;
+    let m = PlanarLine;
     let a = m.analyze(&m.defaults(), &Ctl::new()).unwrap();
     assert_eq!(a.modes[0].f_hz, 1e9);
     let s = a.modes[0].split.as_ref().unwrap();
@@ -332,4 +397,113 @@ fn split_summary_carries_what_the_return_current_tab_needs() {
     let o = m.analyze(&set, &Ctl::new()).unwrap();
     let info = &o.modes[0].split.as_ref().unwrap().info;
     assert!(info.contains("Domain boundary") && info.contains("NOT well below t"), "{info}");
+}
+
+// ---- the model solves with finite elements; the grid solver is the reference
+
+#[test]
+fn the_model_agrees_with_the_grid_solver() {
+    let grid = full_analysis(&PlanarParams::default(), &Ctl::new()).unwrap();
+    let a = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap();
+    let m = &a.modes[0];
+    assert!(rel(m.z0, grid.sol.z0) < 1e-3 && rel(m.eps_eff, grid.sol.eeff) < 1e-3, "{}", m.z0);
+    let at = grid.loss.at(1e9);
+    assert!(rel(m.at_f.alpha_c, at.alpha_c) < 1e-3 && rel(m.at_f.alpha_d, at.alpha_d) < 1e-3);
+    for row in &m.split.as_ref().unwrap().rows {
+        let Some(cat) = GroundCat::ALL.iter().find(|c| c.key() == row.key) else { continue };
+        let (field, current) = (grid.split.field.get(*cat), grid.split.current.get(*cat));
+        assert!(
+            (row.field_pct - field).abs() < 0.5 && (row.current_pct - current).abs() < 0.5,
+            "{}",
+            row.key
+        );
+    }
+    assert!(a.report.contains("Accuracy"));
+    // the accuracy record of a triangle mesh has no grid size
+    let acc = a.accuracy.unwrap();
+    assert!(acc.nodes > 1000 && acc.nx == 0 && acc.ny == 0 && acc.dmin_actual > 0.0);
+    assert!(acc.est_err.unwrap() < 5e-3);
+}
+
+#[test]
+fn old_parameter_sets_with_solver_keys_still_load() {
+    let mut s = PlanarLine.defaults();
+    s.set("solver", ParamValue::Num(0.0));
+    s.set("richardson", ParamValue::Bool(false));
+    assert_eq!(PlanarParams::from_set(&s).unwrap(), PlanarParams::default());
+    let json: PlanarParams = serde_json::from_str(r#"{"solver": "fd", "w": 0.3}"#).unwrap();
+    assert_eq!(json.w, 0.3);
+}
+
+#[test]
+fn mesh_field_data_answers_the_same_questions_as_grid_field_data() {
+    let f = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap().field.unwrap();
+    let g = final_stackup_field();
+    assert!(f.mesh.is_some() && g.mesh.is_none() && g.mesh_edges(g.view_zoom).is_none());
+    assert_eq!(f.conductors.len(), g.conductors.len());
+    assert_eq!(f.view_zoom, g.view_zoom);
+    // the extent is in x and y, so that frontends can clip to it
+    assert!(f.x[0] <= f.view_zoom[0] && f.x[1] >= f.view_zoom[1] && f.y[0] < f.y[1]);
+    let grid_extent = [g.x[0], g.x[g.x.len() - 1], g.y[0], g.y[g.y.len() - 1]];
+    for (a, b) in [f.x[0], f.x[1], f.y[0], f.y[1]].into_iter().zip(grid_extent) {
+        assert!((a - b).abs() < 1e-12 * (g.x[g.x.len() - 1] - g.x[0]), "{a} vs {b}");
+    }
+    let lines = f.field_lines(f.view_zoom, (1.0, 1.0));
+    assert!(lines.len() > 20);
+    assert_eq!(f.equipotentials(&[0.3, 0.6]).len(), 2);
+    // mesh edges: all of them for the whole view, fewer for a small window
+    let all = f.mesh_edges(f.view_full).unwrap();
+    let w = f.mesh_edges([-0.1, 0.1, -0.05, 0.05]).unwrap();
+    assert!(all.len() > 3000 && !w.is_empty() && w.len() < all.len() / 4, "{} / {}", w.len(), all.len());
+    // the raster and the probe work on the mesh through the grid interface
+    use transverse_lines::render::raster::{FieldMode, RasterSpec, probe, render};
+    let spec = RasterSpec {
+        mode: FieldMode::EDb,
+        view: f.view_zoom,
+        scale_view: f.view_zoom,
+        system: transverse_core::units::UnitSystem::Metric,
+        db_range: 40.0,
+        width: 200,
+    };
+    let e = f.e_field(false);
+    let r = render(&f, &e, &spec);
+    assert!(r.width == 200 && r.rgba.chunks(4).filter(|p| p[3] != 0).count() > r.width * r.height / 3);
+    assert!(probe(&f, &e, 0.0, -0.1).is_some_and(|p| !p.in_conductor && p.v > 0.5));
+}
+
+#[test]
+fn synthesis_with_the_finite_elements_finds_the_reference_width() {
+    let mut s = PlanarLine.defaults();
+    s.set("w", ParamValue::Num(0.2));
+    let (set, a) = PlanarLine.synthesize(&s, "w", 35.0, None, &Ctl::new()).unwrap();
+    let w = PlanarParams::from_set(&set).unwrap().w;
+    // the reference (grid) result is w = 0.3605 mm for 35 Ohm
+    assert!(rel(w, 0.3605) < 3e-3, "w = {w}");
+    assert!(rel(a.modes[0].z0, 35.0) < 2e-3, "z0 = {}", a.modes[0].z0);
+    assert!(a.field.unwrap().mesh.is_some());
+}
+
+/// The drawing must not cover any of the solved region: conductors are drawn where the solution has none.
+#[test]
+fn via_fences_are_drawn_outside_the_wall_they_stand_for() {
+    let p = PlanarParams::default();
+    let wall = p.w / 2.0 + p.s + p.g;
+    let mesh = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap().field.unwrap();
+    for f in [final_stackup_field(), mesh] {
+        // the fences are the narrow upright rectangles
+        let fences: Vec<_> = f.conductors.iter().filter(|c| c.y1 - c.y0 > 4.0 * (c.x1 - c.x0)).collect();
+        assert_eq!(fences.len(), 4);
+        for c in &fences {
+            let inner = c.x0.abs().min(c.x1.abs());
+            assert!((inner - wall).abs() < 1e-12 * wall && c.x0 < c.x1, "{c:?}, wall at {wall}");
+        }
+        // the closed structure ends at the walls; planes and coplanar ground close the corners, and the full
+        // view shows the fences completely
+        assert!((f.x[f.x.len() - 1] - wall).abs() < 1e-12 * wall);
+        let face = fences.iter().map(|c| c.x1).fold(0.0, f64::max);
+        assert!(face > wall && f.view_full[1] >= face && f.view_full[0] <= -face);
+        let widest = f.conductors.iter().map(|c| c.x1).fold(0.0, f64::max);
+        assert_eq!(widest, face);
+        assert_eq!(f.conductors.iter().filter(|c| c.x1 == face && c.x1 - c.x0 > c.y1 - c.y0).count(), 3);
+    }
 }

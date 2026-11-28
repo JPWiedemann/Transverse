@@ -15,16 +15,17 @@ Both branches are protected by rulesets: no direct pushes, no force pushes, no d
 | --------------- | ------------------- | ------------- |
 | `check`         | `ci.yml`            | `dev`, `main` |
 | `build`         | `ci.yml`            | `dev`, `main` |
-| `pr-title`      | `pr-title.yml`      | `dev`         |
+| `pr-title`      | `pr-title.yml`      | `dev`, `main` |
 | `source-branch` | `source-branch.yml` | `main`        |
 
-- `check` is a small job that waits for three parallel jobs: `rust` (`cargo fmt --check`, clippy with `-D warnings`, the tests including the parity tests against the Python reference), `licenses` (the dependency license check with `cargo deny`, allowlist in `deny.toml`, and the generation of the third-party notices) and `scripts` (the tests of the release script and the checks of the Python reference implementation: ruff, pytest). It runs on every pull request and on pushes to `dev` and `main` (feature branches are only built through their pull request, so open it early, as a draft). Require only `check`, not the individual jobs.
-- `build` runs for `main`, `dev` and pull requests targeting them. It is a small job that waits for three build jobs that run in parallel with `check` (not after it): `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the WebAssembly module with the reference cases run through it in Node, then the web frontend: type check, tests, build, and the browser tests with Playwright in headless Chromium). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
+- `check` is a small job that waits for three parallel jobs: `rust` (`cargo fmt --check`, clippy with `-D warnings`, the tests including the parity tests against the Python reference), `licenses` (the dependency license check with `cargo deny`, allowlist in `deny.toml`, and the generation of the third-party notices) and `scripts` (the tests of the release script and the checks of the Python reference implementation: ruff, pytest). It runs on every pull request (feature branches are only built through their pull request, so open it early, as a draft) and in the post-merge and manual runs described below. Require only `check`, not the individual jobs.
+- `build` runs for pull requests targeting `dev` or `main`, and in the post-merge and manual runs. It is a small job that waits for three build jobs that run in parallel with `check` (not after it): `build (linux)` (glibc 2.28) and `build (windows)` (release builds of the desktop app with zig) and `build (web)` (the WebAssembly module with the reference cases run through it in Node, then the web frontend: type check, tests, build, and the browser tests with Playwright in headless Chromium). The installable packages are only built by the release workflow. Require only `build`, not the individual jobs.
 - `pr-title` validates that the PR title is a conventional commit.
 - `source-branch` fails for pull requests into `main` that don't come from `dev` of this repository.
-- Require the `(pull_request)` runs, not the `(push)` runs, where a check exists for both.
-- The Rust build cache is only written by runs on `dev` (`save-if` in `ci.yml`); pull requests and `main` read it. This keeps the repository's cache quota free for the cache that is actually reused.
-- Do not enable "Require branches to be up to date" for `main`. After a release, `dev` is one merge commit behind `main`, and that setting would force a back-merge each time.
+- `dev` has **"Require branches to be up to date before merging"** on. A pull request can only be merged when it contains the latest `dev`, so what its checks tested is what the squash merge puts on `dev`. After another merge, use **Update branch** (or `gh pr update-branch <number>`) and wait for the checks again. Several open pull requests (Dependabot's, for example) have to be merged one after the other.
+- Do **not** turn that setting on for `main`. After a release, `main` has a merge commit that `dev` does not, and the setting would ask for it to be brought back into `dev`, which takes no direct pushes.
+- **Post-merge runs:** merging into `dev` starts CI again only if the merge changes `Cargo.lock`, a `Cargo.toml`, `.cargo/config.toml`, `web/package-lock.json` or `ci.yml` (GitHub calls these `push` runs; the list is in `ci.yml`). They exist to write the build caches: caches written by a pull request can only be used by that pull request, those written on `dev` by all of them (`save-if` in `ci.yml`). The Rust caches hold the compiled dependencies, not the crates of the workspace, so other changes need no new cache. After a new Rust release, or when GitHub has evicted the caches (unused for a week, or the repository's quota is full), renew them by hand: Actions tab -> CI -> Run workflow, on `dev`.
+- While the release PR (`dev` -> `main`) is a draft, its `ci.yml` jobs are skipped: it is a draft between releases, and the changes on `dev` were checked in their own pull requests. Marking it ready for review starts the full run, which provides the required checks and tests the commit about to be released. There is no CI run on `main` after the merge; the release workflow builds it.
 
 ## Reviewing and merging a pull request
 
@@ -40,8 +41,10 @@ Because the version and the notes are derived from the squash commit, a wrong ti
 Everything except the final merge is automatic.
 
 1. Whenever `dev` contains a releasable change (`feat`, `fix`, `perf` or a breaking change since the last release), the `Release preview` workflow opens a **draft** pull request `chore(release): next release` from `dev` to `main`. On every further push to `dev` it updates the description with the next version and the notes. With only `chore`, `ci`, `docs`, `refactor`, `test` or `build` changes, no PR is opened.
-2. When you want to release, review the version and notes in the description, mark the PR **Ready for review**, wait for the checks and merge it with a **merge commit**.
+2. When you want to release, review the version and notes in the description, mark the PR **Ready for review**, wait for the checks that this starts (the skipped ones from the draft already count as passed, so wait for the new run to appear and finish) and merge it with a **merge commit**.
 3. The `Release` workflow runs on the push to `main`. It computes the version and the notes again, builds the desktop app for Linux and Windows, runs the self-test of the Windows build on a Windows runner, and only when everything succeeded creates the tag and the GitHub release (with the notes and all files). If a build fails, nothing is released: fix the cause, or re-run the failed jobs from the Actions tab, and the release follows.
+
+After a release, leave `dev` as it is. GitHub shows it as one commit behind `main`: the merge commit, which changes no file. The next release PR and the release notes work like this (the release script compares with the latest tag, which need not be on `dev`), so nothing is pushed or merged back.
 
 The release contains:
 
@@ -86,7 +89,7 @@ One-time setup, in this order (the rulesets come last, because they block the di
 1. **Branches:** push `main` and `dev` (both at the same commit). Set **`dev` as the default branch** (Settings → General → Default branch), so new pull requests target it by default.
 2. **Merge settings** (Settings → General → Pull Requests): allow squash merging (default message: the PR title) and merge commits. Rebase merging can stay disabled. The rulesets restrict `dev` to squash and `main` to merge commits.
 3. **Actions permissions** (Settings → Actions → General): workflow permissions "Read repository contents" is enough. To let the `Release preview` workflow open the release PR with the default token, enable "Allow GitHub Actions to create and approve pull requests" (or set up the GitHub App below).
-4. **Rulesets** (Settings → Rules → Rulesets → New ruleset → Import a ruleset): import `.github/rulesets/main.json` and `.github/rulesets/dev.json`. Check that the status checks `check`, `build`, `pr-title` and `source-branch` can be found (they appear after the workflows have run once; choose the `pull_request` runs where there are two).
+4. **Rulesets** (Settings → Rules → Rulesets → New ruleset → Import a ruleset): import `.github/rulesets/main.json` and `.github/rulesets/dev.json`. Then check the required status checks of each (they can be found after the workflows have run once): `dev` requires `check`, `build` and `pr-title`; `main` requires `check`, `build`, `pr-title` and `source-branch`. Do not add `source-branch` to `dev`: it only runs for pull requests into `main`, so every pull request into `dev` would wait for it forever.
 5. **Optional, GitHub App for the release PR:** see below.
 
 Rulesets (like branch protection) are only enforced for private repositories on a paid GitHub plan. On the free plan the workflows still run and report, but nothing blocks a merge.
@@ -102,7 +105,7 @@ Transverse is licensed under the GPL-3.0-only (`LICENSE`); contributors agree to
 
 | File                  | Trigger                          | Purpose                                                          |
 | --------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `ci.yml`              | pull requests, push to dev/main  | format, lints, tests, licenses, Python, builds (incl. wasm) |
+| `ci.yml`              | PRs, some merges to dev, manual  | format, lints, tests, licenses, Python, builds (incl. wasm)      |
 | `pr-title.yml`        | pull requests                    | conventional commit check for the PR title                       |
 | `source-branch.yml`   | pull requests into `main`        | only `dev` may be merged into `main`                             |
 | `release-preview.yml` | push to `dev`, release PR events | opens/updates the draft release PR                               |

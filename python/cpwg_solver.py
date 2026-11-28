@@ -569,6 +569,24 @@ def solve(p: Params, ctl: Ctl | None = None) -> Solution:
     return sol
 
 
+def recede_walls(p: Params, d: float) -> Params:
+    """The structure with every metal surface moved by d into its metal (d < 0: out of it), as
+    new dimensions. The heights h1/h2 are measured from the copper surfaces, which move as well, so
+    a plane that recedes gets 2d further from a thick copper layer (d from a zero-thickness one,
+    whose faces cannot move). The via fences keep their distance g: they recede with the
+    coplanar-ground edge."""
+    thick = p.t > 0
+    plane = 2 * d if thick else d
+    return replace(
+        p,
+        w=p.w - 2 * d,
+        s=p.s + 2 * d,
+        t=max(p.t - 2 * d, 0.0) if thick else 0.0,
+        h1=p.h1 + plane if p.plane1 else p.h1,
+        h2=p.h2 + plane if p.plane2 else p.h2,
+    )
+
+
 def wheeler_dzdn(sol: Solution, ctl: Ctl | None = None) -> float:
     """dZ0_air/dn [Ohm/m]: all metal walls receded by +dn / advanced by -dn,
     same mesh settings and domain as the given solution."""
@@ -590,20 +608,10 @@ def wheeler_dzdn(sol: Solution, ctl: Ctl | None = None) -> float:
         richardson=rich,
         margin=sol.info["margin"] if sol.info["margin"] > 0 else 1.0,
     )
-    fence = p.fence1 or p.fence2
 
     def z(d):
         ctl.msg(f"Conductor loss (Wheeler): wall shift {d * 1e3:+.2f} um ...")
-        q = replace(
-            pa,
-            w=p.w - 2 * d,
-            s=p.s + d,
-            t=max(p.t - 2 * d, 0.0) if p.t > 0 else 0.0,
-            h1=p.h1 + d if p.plane1 else p.h1,
-            h2=p.h2 + d if p.plane2 else p.h2,
-            g=p.g + d if fence else p.g,
-        )
-        return solve(q, ctl).z0
+        return solve(recede_walls(pa, d), ctl).z0
 
     return (z(dn) - z(-dn)) / (2 * dn * 1e-3)
 

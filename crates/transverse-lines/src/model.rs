@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use transverse_core::losses::{FreqResponse, LossPoint};
 use transverse_core::postproc::{self, EField, StreamOptions};
 use transverse_core::quasistatic::Accuracy;
+
+use crate::mesh_field::MeshFieldData;
 use transverse_core::{Ctl, TvError, TvResult};
 
 // ---------------------------------------------------------------------------------------------
@@ -87,12 +89,18 @@ pub enum ParamKind {
     Choice(&'static [&'static str], usize),
 }
 
-/// A parameter is only editable while another one has a given value (choice index, or 0/1 for a bool).
+/// Another parameter has a given value (choice index, or 0/1 for a bool), or with `not` any other value. A
+/// condition on a quantity can only ask for zero: frontends pass on the number of a quantity only if it is 0.
 #[derive(Clone, Copy, Debug, Serialize)]
-pub struct EnableWhen {
+pub struct Condition {
     pub key: &'static str,
     pub value: usize,
+    pub not: bool,
 }
+
+/// When a parameter or option applies, and is shown: all conditions of one of the alternatives hold. Without
+/// alternatives it always applies.
+pub type Visibility = &'static [&'static [Condition]];
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ParamSpec {
@@ -100,7 +108,7 @@ pub struct ParamSpec {
     pub label: &'static str,
     pub group: &'static str,
     pub kind: ParamKind,
-    pub enable_when: Option<EnableWhen>,
+    pub visible_when: Visibility,
 }
 
 impl ParamSpec {
@@ -115,14 +123,22 @@ impl ParamSpec {
     }
 }
 
-/// Whether the parameter is editable given the current values.
-pub fn is_enabled(spec: &ParamSpec, set: &ParamSet) -> bool {
-    let Some(dep) = spec.enable_when else { return true };
-    match set.get(dep.key) {
-        Some(ParamValue::Bool(b)) => usize::from(b) == dep.value,
-        Some(ParamValue::Num(v)) => v == dep.value as f64,
+/// Whether something with this visibility applies to the current values.
+pub fn is_visible(when: Visibility, set: &ParamSet) -> bool {
+    let holds = |c: &Condition| match set.get(c.key) {
+        Some(ParamValue::Bool(b)) => (usize::from(b) == c.value) != c.not,
+        Some(ParamValue::Num(v)) => (v == c.value as f64) != c.not,
         None => true,
-    }
+    };
+    when.is_empty() || when.iter().any(|all| all.iter().all(holds))
+}
+
+/// A button that sets some parameters at once (and has no state of its own).
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Preset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub values: &'static [(&'static str, ParamValue)],
 }
 
 /// One way of solving for a dimension (synthesis).
@@ -130,6 +146,7 @@ pub fn is_enabled(spec: &ParamSpec, set: &ParamSet) -> bool {
 pub struct SynthTarget {
     pub id: &'static str,
     pub label: &'static str,
+    pub visible_when: Visibility,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,6 +233,8 @@ pub enum ShapeKind {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct DrawRect {
+    /// For a trapezoid (etched copper): `[x0, x1]` of the face at `y1`; `x0`, `x1` are then those at `y0`.
+    pub top: Option<[f64; 2]>,
     pub kind: ShapeKind,
     pub x0: f64,
     pub y0: f64,
@@ -246,9 +265,37 @@ pub struct FieldData {
     pub view_zoom: Bounds,
     pub view_full: Bounds,
     pub z0: f64,
+    /// Solution on a triangle mesh (finite elements). Then `x` and `y` hold only the extent of the mesh, the
+    /// grid arrays above are empty, and the methods below and the raster functions work on the mesh.
+    pub mesh: Option<Box<MeshFieldData>>,
 }
 
 impl FieldData {
+    /// Field data of a mesh solution.
+    pub fn from_mesh(m: MeshFieldData) -> Self {
+        Self {
+            x: vec![m.bounds[0], m.bounds[1]],
+            y: vec![m.bounds[2], m.bounds[3]],
+            fixed: Vec::new(),
+            er: Vec::new(),
+            v: Vec::new(),
+            v0: Vec::new(),
+            conductors: m.conductors.clone(),
+            dashed_y: m.dashed_y.clone(),
+            dotted_y: m.dotted_y.clone(),
+            view_zoom: m.view_zoom,
+            view_full: m.view_full,
+            z0: m.z0,
+            mesh: Some(Box::new(m)),
+        }
+    }
+
+    /// Edges of the triangles that touch `view`, as `[x0, y0, x1, y1]` (`None` for a grid solution, whose lines are
+    /// the coordinates `x` and `y`).
+    pub fn mesh_edges(&self, view: Bounds) -> Option<Vec<[f64; 4]>> {
+        self.mesh.as_ref().map(|m| m.edge_segments(view))
+    }
+
     pub fn nx(&self) -> usize {
         self.x.len()
     }
@@ -259,16 +306,25 @@ impl FieldData {
 
     /// E field of the dielectric (`air = false`) or air solution.
     pub fn e_field(&self, air: bool) -> EField {
+        if self.mesh.is_some() {
+            return EField { ex: Vec::new(), ey: Vec::new(), e: Vec::new() };
+        }
         postproc::e_field(if air { &self.v0 } else { &self.v }, &self.x, &self.y, &self.fixed)
     }
 
     /// Equipotential segments for the given potentials (V).
     pub fn equipotentials(&self, levels: &[f64]) -> Vec<(f64, Vec<[[f64; 2]; 2]>)> {
+        if let Some(m) = &self.mesh {
+            return m.equipotentials(levels);
+        }
         levels.iter().map(|&l| (l, postproc::contour_segments(&self.v, &self.x, &self.y, l))).collect()
     }
 
     /// Field lines of the dielectric solution inside `view`.
     pub fn field_lines(&self, view: Bounds, density: (f64, f64)) -> Vec<Vec<[f64; 2]>> {
+        if let Some(m) = &self.mesh {
+            return m.field_lines(view, density);
+        }
         let e = self.e_field(false);
         postproc::field_lines(&self.x, &self.y, &e.ex, &e.ey, &self.fixed, &StreamOptions { view, density })
     }
@@ -312,9 +368,36 @@ pub enum Anchor {
 /// Drawing primitive in sketch coordinates (y grows downwards, like a canvas).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SchemItem {
-    Rect { x0: f64, y0: f64, x1: f64, y1: f64, fill: SchemColor, outline: Option<SchemColor> },
-    Line { x0: f64, y0: f64, x1: f64, y1: f64, color: SchemColor, dashed: bool, arrows: bool },
-    Text { x: f64, y: f64, text: String, anchor: Anchor, bold: bool, color: SchemColor },
+    Rect {
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        fill: SchemColor,
+        outline: Option<SchemColor>,
+    },
+    Line {
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        color: SchemColor,
+        dashed: bool,
+        arrows: bool,
+    },
+    /// A convex filled shape.
+    Polygon {
+        points: Vec<[f64; 2]>,
+        fill: SchemColor,
+    },
+    Text {
+        x: f64,
+        y: f64,
+        text: String,
+        anchor: Anchor,
+        bold: bool,
+        color: SchemColor,
+    },
 }
 
 /// A schematic (not to scale) of the line cross-section for the cross-section tab.
@@ -334,6 +417,11 @@ pub trait LineModel: Send + Sync {
     fn name(&self) -> &'static str;
     fn params(&self) -> &'static [ParamSpec];
     fn synth_targets(&self) -> &'static [SynthTarget];
+
+    /// Buttons for common set-ups, if the line type has any.
+    fn presets(&self) -> &'static [Preset] {
+        &[]
+    }
 
     /// Defaults of all parameters.
     fn defaults(&self) -> ParamSet {

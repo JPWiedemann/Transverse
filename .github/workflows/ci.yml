@@ -1,12 +1,29 @@
 name: CI
 
 on:
-  # after merges: dev and main are checked again (tags are handled by the release workflow)
+  # Every change is checked in its pull request, and dev only takes pull requests that are up to date with
+  # it (see .github/rulesets), so merging does not need another run. The exception below are post-merge
+  # runs (GitHub starts them with the push event) when a merge changes what the build caches are made
+  # of: only runs on dev can write caches that all pull requests can use. main needs no run of its own: the
+  # release PR is checked before the merge, and the release workflow builds every push to main.
   push:
-    branches: [main, dev]
+    branches: [dev]
+    paths:
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - .cargo/config.toml
+      - web/package-lock.json
+      - .github/workflows/ci.yml
+  # run by hand on dev to renew the caches, e.g. after a new Rust release or when GitHub has evicted them
+  workflow_dispatch:
   # everything else runs for pull requests, from this repository and from forks. A branch without a
   # pull request is not built, so open the PR early (as a draft) to get feedback.
+  # The exception is the draft release PR (dev -> main): it stays a draft between releases, and the changes
+  # on dev were checked in their own pull requests. Its jobs are skipped until it is marked ready for
+  # review; that run checks the commit about to be released and provides the required checks (a draft
+  # cannot be merged, so the skipped ones let nothing through).
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -23,6 +40,7 @@ jobs:
   # waits for all of them (see .github/rulesets).
   rust:
     name: rust (fmt, lints, tests)
+    if: ${{ !(github.event.pull_request.draft && github.base_ref == 'main' && github.head_ref == 'dev') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -44,6 +62,7 @@ jobs:
 
   licenses:
     name: licenses
+    if: ${{ !(github.event.pull_request.draft && github.base_ref == 'main' && github.head_ref == 'dev') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -60,6 +79,7 @@ jobs:
 
   scripts:
     name: scripts (release script, Python)
+    if: ${{ !(github.event.pull_request.draft && github.base_ref == 'main' && github.head_ref == 'dev') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -80,7 +100,7 @@ jobs:
   # The one required check named "check". It must not be skipped when a job failed, hence always().
   check:
     name: check
-    if: always()
+    if: ${{ always() && !(github.event.pull_request.draft && github.base_ref == 'main' && github.head_ref == 'dev') }}
     needs: [rust, licenses, scripts]
     runs-on: ubuntu-latest
     steps:
@@ -98,10 +118,11 @@ jobs:
   # the single required check that waits for all of them.
   build-desktop:
     name: build (${{ matrix.target }})
-    # only build for main and dev: on pushes to them and on pull requests targeting them
+    # builds: the post-merge and manual runs, and pull requests targeting main or dev
     if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
+      github.event_name != 'pull_request' ||
+      ((github.base_ref == 'main' || github.base_ref == 'dev') &&
+      !(github.event.pull_request.draft && github.base_ref == 'main' && github.head_ref == 'dev'))
     strategy:
       fail-fast: false # a failure on one platform does not hide the result of the other
       matrix:
@@ -128,8 +149,9 @@ jobs:
   build-web:
     name: build (web)
     if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
+      github.event_name != 'pull_request' ||
+      ((github.base_ref == 'main' || github.base_ref == 'dev') &&
+      !(github.event.pull_request.draft && github.base_ref == 'main' && github.head_ref == 'dev'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -181,8 +203,9 @@ jobs:
   build:
     name: build
     if: >-
-      always() && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev')))
+      always() && (github.event_name != 'pull_request' ||
+      ((github.base_ref == 'main' || github.base_ref == 'dev') &&
+      !(github.event.pull_request.draft && github.base_ref == 'main' && github.head_ref == 'dev')))
     needs: [build-desktop, build-web]
     runs-on: ubuntu-latest
     steps:

@@ -61,7 +61,7 @@ node --test scripts/release.test.mjs                                   # release
 cd python && uv run --group dev ruff check . && uv run --group dev ruff format --check . && uv run --group dev pytest   # only for Python changes
 ```
 
-The pull request cannot be merged until the checks `check`, `build` and `pr-title` pass. `build` makes the release builds of the desktop app for Linux and Windows (and the core for WebAssembly), so linker and cross-compilation problems show up before a release. To try it locally: `scripts/build-release.sh` (needs zig and cargo-zigbuild, see the script). You don't need to rebase or clean up your commits, because the PR is squash merged.
+The pull request cannot be merged until the checks `check`, `build` and `pr-title` pass. `build` makes the release builds of the desktop app for Linux and Windows (and the core for WebAssembly), so linker and cross-compilation problems show up before a release. To try it locally: `scripts/build-release.sh` (needs zig and cargo-zigbuild, see the script). Your branch must also be up to date with `dev`: if another pull request was merged in the meantime, use **Update branch** on the pull request (merging `dev` into your branch is enough, no rebase needed) and wait for the checks again. You don't need to clean up your commits, because the PR is squash merged.
 
 ## How releases work
 

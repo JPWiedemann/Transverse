@@ -23,9 +23,11 @@ permissions:
   contents: read
   pull-requests: write
 
+# one run at a time. Not cancelling: the run on dev that opens the release PR triggers the run for that new
+# PR before it has finished, and would be cancelled by it. A waiting run is replaced by a newer one.
 concurrency:
   group: release-preview
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   preview:

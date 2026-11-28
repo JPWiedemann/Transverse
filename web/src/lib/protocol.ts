@@ -6,6 +6,7 @@ export type QueryName =
   | 'field_info'
   | 'field_x'
   | 'field_y'
+  | 'field_mesh_edges'
   | 'field_lines'
   | 'equipotentials'
   | 'field_probe'

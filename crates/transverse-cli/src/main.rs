@@ -1,24 +1,31 @@
 //! Command-line front end: batch analysis, synthesis and self-test.
 //!
 //! ```text
-//! transverse analyze [params.json|-] [--json]                 analyse one geometry (missing fields use defaults)
-//! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
-//! transverse selftest [cases.json]                            compare against the Python reference cases
+//! transverse analyze [params.json|-] [--solver fem|fd] [--json]   analyse one geometry (missing fields use defaults)
+//! transverse compare [params.json|-]                         finite difference vs finite elements on one geometry
+//! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+//! transverse selftest [--solver fem|fd] [cases.json]          compare against the Python reference cases
 //! ```
+//!
+//! The finite elements are the solver of the apps and the default here; `--solver fd` selects the finite-difference
+//! grid, the reference of the tests. `selftest` without `--solver` checks both.
 
+mod fem_cmd;
 mod selftest;
+mod selftest_fem;
 
 use std::io::Read;
 use std::process::ExitCode;
 use std::time::Instant;
 
 use transverse_core::{C_LIGHT, Ctl, guided_wavelength_mm, length_for_phase_mm, phase_deg};
-use transverse_lines::cpwg_inner::{self, CpwgParams, SynthVar, full_analysis};
+use transverse_lines::planar::{self, PlanarParams, SynthVar, full_analysis};
 
 const USAGE: &str = "usage:
-  transverse analyze [params.json|-] [--json]
-  transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--json]
-  transverse selftest [cases.json]
+  transverse analyze [params.json|-] [--solver fem|fd] [--json]
+  transverse compare [params.json|-]
+  transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+  transverse selftest [--solver fem|fd] [cases.json]
   transverse --version";
 
 fn main() -> ExitCode {
@@ -26,7 +33,8 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("analyze") => cmd_analyze(&args[1..]),
         Some("synth") => cmd_synth(&args[1..]),
-        Some("selftest") => selftest::run(args.get(1).map(String::as_str)),
+        Some("compare") => cmd_compare(&args[1..]),
+        Some("selftest") => cmd_selftest(&args[1..]),
         Some("--version" | "-V" | "version") => {
             println!("transverse {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
@@ -43,7 +51,7 @@ fn main() -> ExitCode {
 }
 
 /// Parameters from a file, stdin ("-" or no argument); missing fields use the defaults.
-fn read_params(path: Option<&str>) -> Result<CpwgParams, String> {
+fn read_params(path: Option<&str>) -> Result<PlanarParams, String> {
     let text = match path {
         None | Some("-") => {
             let mut s = String::new();
@@ -60,7 +68,7 @@ fn progress() -> Ctl {
     Ctl::new().with_progress(|m| eprintln!("{m}"))
 }
 
-fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::CpwgAnalysis, secs: f64, json_out: bool) {
+fn print_analysis(title: &str, p: &PlanarParams, a: &planar::PlanarAnalysis, secs: f64, json_out: bool) {
     if json_out {
         let delay_ps = p.length * 1e-3 * a.sol.eeff.sqrt() / C_LIGHT * 1e12;
         let wavelength_mm = guided_wavelength_mm(p.f, a.sol.eeff);
@@ -74,15 +82,66 @@ fn print_analysis(title: &str, p: &CpwgParams, a: &cpwg_inner::CpwgAnalysis, sec
         });
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     } else {
-        print!("{}", cpwg_inner::report(title, p, a));
+        print!("{}", planar::report(title, p, a));
         println!("Time            : {secs:.2} s");
     }
 }
 
+/// The value of `--solver`: `true` for the finite elements, `None` if the option is not given.
+fn solver_option(args: &[String]) -> Result<Option<bool>, String> {
+    let Some(i) = args.iter().position(|a| a == "--solver") else { return Ok(None) };
+    match args.get(i + 1).map(String::as_str) {
+        Some("fem") => Ok(Some(true)),
+        Some("fd") => Ok(Some(false)),
+        _ => Err("--solver needs fem or fd".to_string()),
+    }
+}
+
+/// The arguments that are not options (nor the values of options).
+fn positional(args: &[String]) -> Vec<&String> {
+    let mut out = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--json" => {}
+            "--solver" | "--phase" => {
+                it.next();
+            }
+            _ => out.push(a),
+        }
+    }
+    out
+}
+
+fn cmd_selftest(args: &[String]) -> Result<ExitCode, String> {
+    let path = positional(args).first().map(|s| s.as_str());
+    let passed = match solver_option(args)? {
+        Some(true) => selftest_fem::run(path)?,
+        Some(false) => selftest::run(path)?,
+        None => {
+            let grid = selftest::run(path)?;
+            println!();
+            let elements = selftest_fem::run(path)?;
+            grid && elements
+        }
+    };
+    Ok(if passed { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+fn cmd_compare(args: &[String]) -> Result<ExitCode, String> {
+    let p = read_params(args.first().map(String::as_str))?;
+    fem_cmd::compare_command(&p)?;
+    Ok(ExitCode::SUCCESS)
+}
+
 fn cmd_analyze(args: &[String]) -> Result<ExitCode, String> {
     let json_out = args.iter().any(|a| a == "--json");
-    let path = args.iter().find(|a| *a != "--json");
-    let p = read_params(path.map(String::as_str))?;
+    let fem = solver_option(args)?.unwrap_or(true);
+    let p = read_params(positional(args).first().map(|s| s.as_str()))?;
+    if fem {
+        fem_cmd::analyze_command(&p, json_out)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let t0 = Instant::now();
     let a = full_analysis(&p, &progress()).map_err(|e| e.to_string())?;
     print_analysis("Analysis", &p, &a, t0.elapsed().as_secs_f64(), json_out);
@@ -101,17 +160,7 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
         ),
         None => None,
     };
-    let mut pos: Vec<&String> = Vec::new();
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--json" => {}
-            "--phase" => {
-                it.next();
-            }
-            _ => pos.push(a),
-        }
-    }
+    let pos = positional(args);
     let var = match pos.first().map(|s| s.as_str()) {
         Some("w") => SynthVar::W,
         Some("s") => SynthVar::S,
@@ -124,8 +173,19 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
     let ctl = progress();
     let t0 = Instant::now();
 
+    if solver_option(args)?.unwrap_or(true) {
+        let (mut pp, sol) =
+            planar::synthesize_fem(&p, target, var, planar::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
+        eprintln!("Synthesis done: w = {:.4} mm, s = {:.4} mm, running full analysis ...", pp.w, pp.s);
+        if let Some(ph) = phase {
+            pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
+        }
+        fem_cmd::analyze_command(&pp, json_out)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let (mut pp, sol) =
-        cpwg_inner::synthesize(&p, target, var, cpwg_inner::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
+        planar::synthesize(&p, target, var, planar::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
     let mut title = format!("Synthesis: Z0 = {target} Ohm");
     if let Some(ph) = phase {
         pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);

@@ -12,8 +12,8 @@ mod tests {
     use eframe::egui::{self, Pos2, Rect, vec2};
     use transverse_core::Ctl;
     use transverse_core::units::UnitSystem;
-    use transverse_lines::cpwg_inner::CpwgInner;
     use transverse_lines::model::{Analysis, LineModel, ParamValue};
+    use transverse_lines::planar::PlanarLine;
 
     use super::{
         cross_section,
@@ -32,7 +32,7 @@ mod tests {
     }
 
     fn analyses() -> Vec<Analysis> {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let closed = m.analyze(&m.defaults(), &Ctl::new()).unwrap();
         let mut set = m.defaults();
         set.set("plane1", ParamValue::Bool(false));
@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn cross_section_tab_renders_every_combination_of_switches() {
         let ctx = egui::Context::default();
-        let m = CpwgInner;
+        let m = PlanarLine;
         for mask in 0..32u32 {
             let mut set = m.defaults();
             for (i, k) in ["plane1", "plane2", "fence1", "fence2"].into_iter().enumerate() {

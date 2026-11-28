@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { FormError, changeUnit, controlSet, isEnabled, loadSaved, newForm, toParams, toSaved } from './form';
+import { FormError, changeUnit, controlSet, applyPreset, isVisible, loadSaved, newForm, toParams, toSaved } from './form';
 import type { ParamSet, ParamSpec } from './types';
 
 const specs: ParamSpec[] = [
-  { key: 'w', label: 'Trace width w', group: 'G', kind: { Length: { default_mm: 0.3605, unit: 'mm', lambda: false } }, enable_when: null },
-  { key: 'dmin', label: 'Min. cell', group: 'G', kind: { Length: { default_mm: 0.002, unit: 'µm', lambda: true } }, enable_when: { key: 'mode', value: 1 } },
-  { key: 'f', label: 'Frequency', group: 'G', kind: { Frequency: { default_hz: 1e9, unit: 'GHz' } }, enable_when: null },
-  { key: 'sigma', label: 'Conductivity', group: 'G', kind: { Number: { default: 5.8e7, unit: 'MS/m', scale: 1e6 } }, enable_when: null },
-  { key: 'plane', label: 'Plane', group: 'G', kind: { Bool: true }, enable_when: null },
-  { key: 'mode', label: 'Mode', group: 'G', kind: { Choice: [['auto', 'manual'], 0] }, enable_when: null },
+  { key: 'w', label: 'Trace width w', group: 'G', kind: { Length: { default_mm: 0.3605, unit: 'mm', lambda: false } }, visible_when: [] },
+  { key: 'dmin', label: 'Min. cell', group: 'G', kind: { Length: { default_mm: 0.002, unit: 'µm', lambda: true } }, visible_when: [[{ key: 'mode', value: 1 }]] },
+  { key: 'f', label: 'Frequency', group: 'G', kind: { Frequency: { default_hz: 1e9, unit: 'GHz' } }, visible_when: [] },
+  { key: 'sigma', label: 'Conductivity', group: 'G', kind: { Number: { default: 5.8e7, unit: 'MS/m', scale: 1e6 } }, visible_when: [] },
+  { key: 'plane', label: 'Plane', group: 'G', kind: { Bool: true }, visible_when: [] },
+  { key: 'mode', label: 'Mode', group: 'G', kind: { Choice: [['auto', 'manual'], 0] }, visible_when: [] },
 ];
 const defaults: ParamSet = { w: 0.3605, dmin: 0.002, f: 1e9, sigma: 5.8e7, plane: true, mode: 0 };
 // a made-up wavelength that depends on f, like the real one
@@ -54,11 +54,44 @@ describe('form', () => {
     expect((toParams(specs, defaults, f, wl).dmin as number) / (p.dmin as number)).toBeCloseTo(0.5, 12);
   });
 
-  it('enables controls by flags and choices', () => {
+  it('shows fields by flags and choices, in alternatives', () => {
     const f = newForm(specs, defaults, wl);
-    expect(isEnabled(specs[1]!, controlSet(defaults, f))).toBe(false);
+    const dmin = specs[1]!.visible_when;
+    expect(isVisible(dmin, controlSet(defaults, f))).toBe(false);
     f.mode = { kind: 'choice', index: 1 };
-    expect(isEnabled(specs[1]!, controlSet(defaults, f))).toBe(true);
+    expect(isVisible(dmin, controlSet(defaults, f))).toBe(true);
+    expect(isVisible([], controlSet(defaults, f))).toBe(true);
+    const either = [[{ key: 'mode', value: 0 }], [{ key: 'plane', value: 1 }, { key: 'mode', value: 1 }]];
+    expect(isVisible(either, { mode: 1, plane: true })).toBe(true);
+    expect(isVisible(either, { mode: 1, plane: false })).toBe(false);
+  });
+
+  it('can require a quantity to differ from zero, also while other text is unfinished', () => {
+    const f = newForm(specs, defaults, wl);
+    const key = specs.find((s) => 'Length' in s.kind)!.key;
+    const nonzero = [[{ key, value: 0, not: true }]];
+    const shown = (text: string) => {
+      f[key] = { kind: 'quantity', text, unit: 'mm' };
+      return isVisible(nonzero, controlSet({ ...defaults, [key]: 0.018 }, f));
+    };
+    expect(shown('0')).toBe(false);
+    expect(shown('0,0')).toBe(false);
+    expect(shown('18')).toBe(true);
+    expect(shown('')).toBe(true);
+    expect(shown('abc')).toBe(true);
+  });
+
+  it('does not let a hidden field block, and presets keep the other fields', () => {
+    const f = newForm(specs, defaults, wl);
+    f.dmin = { kind: 'quantity', text: 'abc', unit: 'µm' };
+    // hidden in the automatic mode: the default is used, the text stays
+    expect(toParams(specs, defaults, f, wl).dmin).toBe(defaults.dmin);
+    const manual = applyPreset(f, { id: 'm', label: 'Manual', values: [['mode', 1], ['plane', false], ['nope', true]] });
+    expect(manual.mode).toEqual({ kind: 'choice', index: 1 });
+    expect(manual.plane).toEqual({ kind: 'flag', value: false });
+    expect(manual.dmin).toEqual(f.dmin);
+    expect(manual.nope).toBeUndefined();
+    expect(() => toParams(specs, defaults, manual, wl)).toThrow('not a number');
   });
 
   it('saves and restores, ignoring invalid entries', () => {
