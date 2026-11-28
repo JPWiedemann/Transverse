@@ -6,9 +6,15 @@
 //!
 //! * the reaction at the midpoint of an edge belongs to that edge, and to the side (element) it comes from;
 //! * the reaction at a vertex is distributed by angular sector: the elements around the vertex are split by
-//!   the boundary edges at that vertex, and the part of each sector goes half to each of the two edges that
-//!   bound it (to the side facing the sector). At the end of a zero-thickness conductor the single edge gets
-//!   the whole reaction, by the side each element lies on.
+//!   the boundary edges at that vertex, and the part of each sector is shared by the two edges that bound it
+//!   (on the side facing the sector), in proportion to their lengths. At the end of a zero-thickness
+//!   conductor the single edge gets the whole reaction, by the side each element lies on.
+//!
+//! The proportion matters: for a flux density that is linear along the boundary, the vertex reaction of
+//! quadratic elements is `f (L1 + L2) / 6` and the midpoint reaction of an edge `2/3 f L`, so only the split
+//! by length gives every edge `f L` (`f` at its midpoint). Equal halves move `f (L2 - L1) / 12` from one
+//! neighbour to the other, an error of the flux density that refinement does not remove while the lengths
+//! stay uneven.
 //!
 //! Taking the reactions per element keeps the two sides of a zero-thickness conductor apart.
 
@@ -136,8 +142,13 @@ pub fn boundary_fluxes(
             let hi = (lo + 1) % dirs.len();
             let (_, klo, left_lo) = dirs[lo];
             let (_, khi, left_hi) = dirs[hi];
-            add(&mut contact, klo, left_lo, 0.5 * r); // the sector is counter-clockwise of `lo`: its left side
-            add(&mut contact, khi, -left_hi, 0.5 * r); // and clockwise of `hi`: its right side
+            let length = |key: Key| {
+                let (a, b) = (pts[key.0 as usize], pts[key.1 as usize]);
+                (b[0] - a[0]).hypot(b[1] - a[1])
+            };
+            let part_lo = length(klo) / (length(klo) + length(khi));
+            add(&mut contact, klo, left_lo, part_lo * r); // the sector is counter-clockwise of `lo`: its left side
+            add(&mut contact, khi, -left_hi, (1.0 - part_lo) * r); // and clockwise of `hi`: its right side
         }
     }
     let mut out: Vec<BoundaryFlux> = contact
@@ -230,12 +241,13 @@ mod tests {
         let top = boundary_fluxes(&inp, &s.edges, &s.v, &|k| er[k], &row(7, 3)).unwrap();
         let sum: f64 = top.iter().map(|x| x.flux).sum();
         assert!((sum - charge).abs() < 1e-12 * charge, "{sum} vs {charge}");
-        // in the layers: the flux is uniform in x, so every edge is within ten percent of its length share (the vertex reactions are split half and half between neighbours of different lengths)
+        // in the layers the flux is uniform in x, so every edge carries its length share although the
+        // neighbours differ in length
         for x in &top {
             let (pa, pb) = (pts[x.a as usize], pts[x.b as usize]);
             let share = (pb[0] - pa[0]) / 3.0;
             assert!(
-                (x.flux / charge - share).abs() < 0.10 * share + 1e-12,
+                (x.flux / charge - share).abs() < 1e-9 * share,
                 "edge flux {} share {share}",
                 x.flux / charge
             );

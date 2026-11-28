@@ -9,7 +9,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use transverse_core::units::{self, FREQ_UNITS, LAMBDA, LEN_UNITS, format_g, parse_number};
-use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamSpec, ParamValue};
+use transverse_lines::model::{LineModel, ParamKind, ParamSet, ParamSpec, ParamValue, Preset, is_visible};
 
 /// Edit state of one parameter.
 #[derive(Clone, Debug, PartialEq)]
@@ -118,8 +118,19 @@ impl FormState {
         }
     }
 
+    /// Set the switches and choices of a preset; all other fields stay as they are.
+    pub fn apply_preset(&mut self, preset: &Preset) {
+        for (key, value) in preset.values {
+            match (self.fields.get_mut(key), value) {
+                (Some(FieldState::Flag(b)), ParamValue::Bool(v)) => *b = *v,
+                (Some(FieldState::Choice(i)), ParamValue::Num(v)) => *i = *v as usize,
+                _ => {}
+            }
+        }
+    }
+
     /// Flags and choices only (everything else at its default): enough to decide which controls are
-    /// enabled while some text field holds unfinished input.
+    /// shown while some text field holds unfinished input.
     pub fn control_set(&self, model: &dyn LineModel) -> ParamSet {
         let mut set = model.defaults();
         for (k, f) in &self.fields {
@@ -133,9 +144,11 @@ impl FormState {
     }
 
     /// Parameters in internal units. Sizes given in λ refer to the wavelength computed from the
-    /// other fields.
+    /// other fields. A field that is hidden cannot hold anything up: if its text is no number, it keeps
+    /// its default (and its text).
     pub fn to_params(&self, model: &dyn LineModel) -> Result<ParamSet, FormError> {
         let mut set = model.defaults();
+        let controls = self.control_set(model);
         let err = |spec: &ParamSpec, message: String| FormError { key: spec.key, label: spec.label, message };
         // first pass: everything not given in λ
         for pass in [false, true] {
@@ -149,11 +162,18 @@ impl FormState {
                         if is_lambda(unit) != pass {
                             continue;
                         }
-                        let v = parse_number(text)
-                            .ok_or_else(|| err(spec, format!("'{}' is not a number", text.trim())))?;
-                        let f = factor(spec, unit, lam)
-                            .ok_or_else(|| err(spec, "no wavelength reference".into()))?;
-                        set.set(spec.key, ParamValue::Num(v * f));
+                        let value = parse_number(text)
+                            .ok_or_else(|| format!("'{}' is not a number", text.trim()))
+                            .and_then(|v| {
+                                factor(spec, unit, lam).map(|f| v * f).ok_or("no wavelength reference".into())
+                            });
+                        match value {
+                            Ok(v) => set.set(spec.key, ParamValue::Num(v)),
+                            Err(message) if is_visible(spec.visible_when, &controls) => {
+                                return Err(err(spec, message));
+                            }
+                            Err(_) => {}
+                        }
                     }
                 }
             }
@@ -244,7 +264,7 @@ pub struct SavedField {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transverse_lines::cpwg_inner::{CpwgInner, CpwgParams};
+    use transverse_lines::planar::{PlanarLine, PlanarParams};
 
     fn text(f: &FormState, k: &str) -> (String, String) {
         match &f.fields[k] {
@@ -255,7 +275,7 @@ mod tests {
 
     #[test]
     fn defaults_show_in_their_display_units_and_convert_back() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let f = FormState::new(&m);
         assert_eq!(text(&f, "w"), ("0.3605".into(), "mm".into()));
         assert_eq!(text(&f, "t"), ("18".into(), "µm".into()));
@@ -265,8 +285,8 @@ mod tests {
         assert_eq!(f.fields["plane1"], FieldState::Flag(true));
         assert_eq!(f.fields["mesh_mode"], FieldState::Choice(0));
         let set = f.to_params(&m).unwrap();
-        let p = CpwgParams::from_set(&set).unwrap();
-        let d = CpwgParams::default();
+        let p = PlanarParams::from_set(&set).unwrap();
+        let d = PlanarParams::default();
         assert!(
             (p.t - d.t).abs() < 1e-15 && (p.sigma - d.sigma).abs() < 1.0 && (p.dmin - d.dmin).abs() < 1e-15
         );
@@ -275,7 +295,7 @@ mod tests {
 
     #[test]
     fn unit_change_converts_the_shown_value() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         f.change_unit(&m, "w", "mil");
         assert_eq!(text(&f, "w").1, "mil");
@@ -305,7 +325,7 @@ mod tests {
 
     #[test]
     fn lambda_units_refer_to_the_wavelength_of_the_other_fields() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         assert!(unit_options(m.params().iter().find(|p| p.key == "dmin").unwrap()).contains(&"λ"));
         assert!(!unit_options(m.params().iter().find(|p| p.key == "w").unwrap()).contains(&"λ"));
@@ -326,7 +346,7 @@ mod tests {
 
     #[test]
     fn errors_name_the_field() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         if let Some(FieldState::Quantity { text, .. }) = f.fields.get_mut("h1") {
             *text = "".into();
@@ -334,8 +354,9 @@ mod tests {
         let e = f.to_params(&m).unwrap_err();
         assert_eq!((e.key, e.label), ("h1", "Height h1"));
         assert!(e.to_string().starts_with("Height h1:"));
-        // λ without a usable wavelength
+        // λ without a usable wavelength (in a field that is shown: the manual mesh sizes)
         let mut f = FormState::new(&m);
+        f.fields.insert("mesh_mode", FieldState::Choice(1));
         f.change_unit(&m, "dmin", "λ");
         if let Some(FieldState::Quantity { text, .. }) = f.fields.get_mut("f") {
             *text = "0".into();
@@ -345,7 +366,7 @@ mod tests {
 
     #[test]
     fn set_params_keeps_units_and_save_load_round_trips() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         f.change_unit(&m, "t", "mil");
         f.change_unit(&m, "f", "MHz");
@@ -368,7 +389,7 @@ mod tests {
 
     #[test]
     fn loading_ignores_garbage() {
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut f = FormState::new(&m);
         let before = f.clone();
         let mut saved = BTreeMap::new();
@@ -379,5 +400,29 @@ mod tests {
         saved.insert("plane1".to_string(), SavedField { value: Some("x".into()), ..Default::default() });
         f.load_saved(&m, &saved);
         assert_eq!(f, before);
+    }
+
+    #[test]
+    fn a_hidden_field_cannot_block_and_a_preset_keeps_the_dimensions() {
+        let m = PlanarLine;
+        let mut f = FormState::new(&m);
+        let type_in = |f: &mut FormState, key: &'static str, value: &str| {
+            let Some(FieldState::Quantity { text, .. }) = f.fields.get_mut(key) else { panic!("{key}") };
+            *text = value.to_string();
+        };
+        type_in(&mut f, "w", "0.2");
+        type_in(&mut f, "s", "abc");
+        assert_eq!(f.to_params(&m).unwrap_err().key, "s");
+        // without a coplanar ground the gap is hidden: the analysis runs, the text stays
+        let stripline = m.presets().iter().find(|p| p.id == "stripline").unwrap();
+        f.apply_preset(stripline);
+        let set = f.to_params(&m).unwrap();
+        assert_eq!(set.num("w").unwrap(), 0.2);
+        assert_eq!(set.num("s").unwrap(), PlanarParams::default().s);
+        assert!(!set.flag("coplanar").unwrap());
+        assert_eq!(text(&f, "s").0, "abc");
+        // back on, the field is checked again
+        f.apply_preset(&m.presets()[0]);
+        assert_eq!(f.to_params(&m).unwrap_err().key, "s");
     }
 }

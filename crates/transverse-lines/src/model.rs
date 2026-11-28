@@ -89,12 +89,16 @@ pub enum ParamKind {
     Choice(&'static [&'static str], usize),
 }
 
-/// A parameter is only editable while another one has a given value (choice index, or 0/1 for a bool).
+/// Another parameter has a given value (choice index, or 0/1 for a bool).
 #[derive(Clone, Copy, Debug, Serialize)]
-pub struct EnableWhen {
+pub struct Condition {
     pub key: &'static str,
     pub value: usize,
 }
+
+/// When a parameter or option applies, and is shown: all conditions of one of the alternatives hold. Without
+/// alternatives it always applies.
+pub type Visibility = &'static [&'static [Condition]];
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ParamSpec {
@@ -102,7 +106,7 @@ pub struct ParamSpec {
     pub label: &'static str,
     pub group: &'static str,
     pub kind: ParamKind,
-    pub enable_when: Option<EnableWhen>,
+    pub visible_when: Visibility,
 }
 
 impl ParamSpec {
@@ -117,14 +121,22 @@ impl ParamSpec {
     }
 }
 
-/// Whether the parameter is editable given the current values.
-pub fn is_enabled(spec: &ParamSpec, set: &ParamSet) -> bool {
-    let Some(dep) = spec.enable_when else { return true };
-    match set.get(dep.key) {
-        Some(ParamValue::Bool(b)) => usize::from(b) == dep.value,
-        Some(ParamValue::Num(v)) => v == dep.value as f64,
+/// Whether something with this visibility applies to the current values.
+pub fn is_visible(when: Visibility, set: &ParamSet) -> bool {
+    let holds = |c: &Condition| match set.get(c.key) {
+        Some(ParamValue::Bool(b)) => usize::from(b) == c.value,
+        Some(ParamValue::Num(v)) => v == c.value as f64,
         None => true,
-    }
+    };
+    when.is_empty() || when.iter().any(|all| all.iter().all(holds))
+}
+
+/// A button that sets some parameters at once (and has no state of its own).
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Preset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub values: &'static [(&'static str, ParamValue)],
 }
 
 /// One way of solving for a dimension (synthesis).
@@ -132,6 +144,7 @@ pub fn is_enabled(spec: &ParamSpec, set: &ParamSet) -> bool {
 pub struct SynthTarget {
     pub id: &'static str,
     pub label: &'static str,
+    pub visible_when: Visibility,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -373,6 +386,11 @@ pub trait LineModel: Send + Sync {
     fn name(&self) -> &'static str;
     fn params(&self) -> &'static [ParamSpec];
     fn synth_targets(&self) -> &'static [SynthTarget];
+
+    /// Buttons for common set-ups, if the line type has any.
+    fn presets(&self) -> &'static [Preset] {
+        &[]
+    }
 
     /// Defaults of all parameters.
     fn defaults(&self) -> ParamSet {

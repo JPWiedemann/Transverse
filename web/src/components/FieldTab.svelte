@@ -272,8 +272,6 @@
     return `M${tx - ux * 6 + nx * 2.5} ${ty - uy * 6 + ny * 2.5}L${tx} ${ty}L${tx - ux * 6 - nx * 2.5} ${ty - uy * 6 - ny * 2.5}`;
   }
 
-  const meshX = $derived(meshOn && !info?.mesh ? Array.from(gx).filter((x) => x >= bounds[0] && x <= bounds[1]) : []);
-  const meshY = $derived(meshOn && !info?.mesh ? Array.from(gy).filter((y) => y >= bounds[2] && y <= bounds[3]) : []);
   const gridBox = $derived<Bounds>(gx.length > 1 && gy.length > 1
     ? [Math.max(bounds[0], gx[0]!), Math.min(bounds[1], gx[gx.length - 1]!), Math.max(bounds[2], gy[0]!), Math.min(bounds[3], gy[gy.length - 1]!)]
     : bounds);
@@ -354,11 +352,9 @@
   /** the shortest edge of a triangle mesh is far below the size of the view: its own unit */
   const minUnit = $derived(autoLengthUnit(units, accuracy?.dmin_actual ?? 1));
   const meshInfo = $derived(
-    meshOn && accuracy && info?.mesh
+    meshOn && accuracy
       ? `mesh ${accuracy.nodes} nodes (finite elements), min. edge ${formatSig(accuracy.dmin_actual / minUnit[1], 3)} ${minUnit[0]}${meshTooDense ? ' - zoom in to see the triangles' : ''}`
-      : meshOn && accuracy
-      ? `mesh ${accuracy.nx} x ${accuracy.ny} = ${accuracy.nodes} nodes (finest level), min. cell ${formatSig(accuracy.dmin_actual / uf, 3)} ${lengthUnit[0]}`
-      : ' ',
+      : ' ',
   );
 </script>
 
@@ -442,12 +438,6 @@
             {/if}
             {#if meshOn}
               <g class:meshdark={mode === 'mesh'} class="mesh">
-                {#each meshX as x}
-                  <line x1={px(x)} x2={px(x)} y1={py(gridBox[2])} y2={py(gridBox[3])} />
-                {/each}
-                {#each meshY as y}
-                  <line x1={px(gridBox[0])} x2={px(gridBox[1])} y1={py(y)} y2={py(y)} />
-                {/each}
                 {#if meshPath}
                   <path d={meshPath} class="tri" />
                 {/if}
@@ -572,17 +562,10 @@
     stroke-width: 0.5;
     stroke-dasharray: 2 2;
   }
-  .mesh line {
-    stroke: rgb(255 255 255 / 0.5);
-    stroke-width: 0.4;
-  }
   .mesh path.tri {
     fill: none;
     stroke: rgb(255 255 255 / 0.5);
     stroke-width: 0.4;
-  }
-  .meshdark line {
-    stroke: rgb(0 0 0 / 0.6);
   }
   .meshdark path.tri {
     stroke: rgb(0 0 0 / 0.6);

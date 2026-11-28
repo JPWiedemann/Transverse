@@ -106,8 +106,13 @@ pub fn converge<T>(
     Ok((out, payload, info))
 }
 
+/// Smallest relative change of Z0 the domain check can tell apart: each domain size is meshed anew, and the
+/// coarse meshes differ by this much even where the domain no longer matters. Asking for less would double the
+/// domain until the mesh grows beyond any limit.
+const MARGIN_NOISE: f64 = 5e-4;
+
 /// Domain extension for open structures: doubled from `m0` until Z0 changes by less than `tol_pct / 400`
-/// (relative); `z0_of(margin)` solves a coarse mesh.
+/// (relative), but not less than [`MARGIN_NOISE`]; `z0_of(margin)` solves a coarse mesh.
 pub fn auto_margin_with(
     m0: f64,
     tol_pct: f64,
@@ -120,7 +125,7 @@ pub fn auto_margin_with(
         let m2 = 2.0 * m;
         ctl.msg(&format!("Domain size check: margin {m2:.3} mm ..."));
         let z = z0_of(m2)?;
-        if (z - z_prev).abs() / z < tol_pct / 100.0 / 4.0 {
+        if (z - z_prev).abs() / z < (tol_pct / 100.0 / 4.0).max(MARGIN_NOISE) {
             return Ok(m2);
         }
         m = m2;
@@ -177,6 +182,19 @@ mod tests {
             out.c / c_limit - 1.0
         );
         assert!((info.order.unwrap() - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_domain_check_does_not_chase_mesh_noise() {
+        // Z0 settles like 1 / margin^2 but every solve is off by +-2e-4: a tight tolerance must still end
+        let mut calls = 0;
+        let m = auto_margin_with(1.0, 0.001, &Ctl::new(), |m| {
+            calls += 1;
+            let noise = if calls % 2 == 0 { 2e-4 } else { -2e-4 };
+            Ok(50.0 * (1.0 - 0.02 / (m * m) + noise))
+        })
+        .unwrap();
+        assert!(m <= 16.0 && calls <= 5, "margin {m} after {calls} solves");
     }
 
     #[test]

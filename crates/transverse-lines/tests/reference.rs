@@ -5,14 +5,14 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 use transverse_core::Ctl;
-use transverse_lines::cpwg_inner::{
-    CpwgParams, GroundCat, SynthVar, analytic, analyze, full_analysis, synthesize,
+use transverse_lines::planar::{
+    GroundCat, PlanarParams, SynthVar, analytic, analyze, full_analysis, synthesize,
 };
 
 #[derive(Deserialize)]
 struct Case {
     name: String,
-    params: CpwgParams,
+    params: PlanarParams,
     z0: f64,
     eeff: f64,
     c: f64,
@@ -59,7 +59,7 @@ struct ProfileRef {
 #[derive(Deserialize)]
 struct SynthCase {
     name: String,
-    params: CpwgParams,
+    params: PlanarParams,
     target: f64,
     var: SynthVar,
     result: SynthResult,
@@ -126,7 +126,7 @@ fn t0_cases_match_conformal_mapping() {
         if let Some(az) = case.analytic_z0 {
             let sol = analyze(&case.params, &Ctl::new()).unwrap();
             assert!(rel(sol.z0, az) < 2.5e-3, "{}: {} vs analytic {}", case.name, sol.z0, az);
-            assert!(rel(analytic(&case.params).0, az) < 1e-12);
+            assert!(rel(analytic(&case.params).unwrap().z0, az) < 1e-12);
         }
     }
 }
@@ -135,13 +135,13 @@ fn t0_cases_match_conformal_mapping() {
 fn cancel_stops_the_solver() {
     let ctl = Ctl::new();
     ctl.cancel();
-    let r = analyze(&CpwgParams::default(), &ctl);
+    let r = analyze(&PlanarParams::default(), &ctl);
     assert!(matches!(r, Err(transverse_core::TvError::Cancelled)));
 }
 
 #[test]
 fn node_limit_is_reported() {
-    let p = CpwgParams { max_nodes: 1000, ..CpwgParams::default() };
+    let p = PlanarParams { max_nodes: 1000, ..PlanarParams::default() };
     assert!(matches!(analyze(&p, &Ctl::new()), Err(transverse_core::TvError::MeshTooLarge { .. })));
 }
 
@@ -195,7 +195,7 @@ fn losses_and_ground_split_match_python() {
 #[test]
 fn final_stackup_reference_values() {
     // values quoted in CLAUDE.md
-    let a = full_analysis(&CpwgParams::default(), &Ctl::new()).unwrap();
+    let a = full_analysis(&PlanarParams::default(), &Ctl::new()).unwrap();
     assert!(rel(a.sol.z0, 35.001) < 5e-4);
     assert!((a.split.current.get(GroundCat::Plane1) - 39.2).abs() < 0.1);
     assert!((a.split.current.get(GroundCat::Plane2) - 31.5).abs() < 0.1);
@@ -213,7 +213,7 @@ fn synthesis_matches_python() {
             &case.params,
             case.target,
             case.var,
-            transverse_lines::cpwg_inner::DEFAULT_RTOL,
+            transverse_lines::planar::DEFAULT_RTOL,
             &Ctl::new(),
         )
         .unwrap();
@@ -227,13 +227,13 @@ fn synthesis_matches_python() {
 
 #[test]
 fn synthesis_of_35_ohm_gives_the_final_stackup_width() {
-    let (p, sol) = synthesize(&CpwgParams::default(), 35.0, SynthVar::W, 1e-4, &Ctl::new()).unwrap();
+    let (p, sol) = synthesize(&PlanarParams::default(), 35.0, SynthVar::W, 1e-4, &Ctl::new()).unwrap();
     assert!(rel(sol.z0, 35.0) < 5e-4);
     assert!(rel(p.w, 0.3605) < 5e-4);
 }
 
 #[test]
 fn unreachable_synthesis_target_is_reported() {
-    let r = synthesize(&CpwgParams::default(), 1e4, SynthVar::W, 1e-4, &Ctl::new());
+    let r = synthesize(&PlanarParams::default(), 1e4, SynthVar::W, 1e-4, &Ctl::new());
     assert!(matches!(r, Err(transverse_core::TvError::Synthesis(_))));
 }

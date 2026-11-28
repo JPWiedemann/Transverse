@@ -14,7 +14,7 @@ use transverse_geom::GROUND;
 
 use super::fem::{FemSolution, InputData};
 use super::ground_split::{GroundCat, Profile, Shares, Split, merge_equal_x};
-use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, CpwgParams};
+use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, PlanarParams};
 
 /// One side of a ground boundary edge.
 struct Contact {
@@ -29,7 +29,7 @@ struct Contact {
 }
 
 /// Ground split of a FEM solution (quadratic elements).
-pub fn ground_split_fem(p: &CpwgParams, sol: &FemSolution) -> TvResult<Split> {
+pub fn ground_split_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<Split> {
     let mesh = &sol.mesh;
     let cs = p.cross_section(sol.margin);
     let data = InputData::new(&cs, mesh);

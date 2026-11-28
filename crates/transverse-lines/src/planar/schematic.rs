@@ -1,16 +1,39 @@
 //! Sketch of the CPWG cross-section (not to scale), ported from the Python tool's canvas drawing.
 
-use super::GapMode;
+use super::{GapMode, PlanarParams};
 use crate::model::{Anchor, SchemColor, SchemItem, Schematic};
 
 /// What the sketch shows (all other parameters do not change the picture).
 #[derive(Clone, Copy, Debug)]
 pub struct SchematicFlags {
+    pub coplanar: bool,
+    pub upper: bool,
+    /// The upper dielectric has the material of the lower one.
+    pub upper_same: bool,
+    pub side_walls: bool,
     pub plane1: bool,
     pub plane2: bool,
     pub fence1: bool,
     pub fence2: bool,
     pub gap_mode: GapMode,
+}
+
+impl SchematicFlags {
+    /// The flags of the structure that `p` describes (switches resolved).
+    pub fn of(p: &PlanarParams) -> Self {
+        let e = p.effective();
+        Self {
+            coplanar: e.coplanar,
+            upper: e.upper,
+            upper_same: e.upper_same,
+            side_walls: e.side_walls,
+            plane1: e.plane1,
+            plane2: e.plane2,
+            fence1: e.fence1,
+            fence2: e.fence2,
+            gap_mode: e.gap_mode,
+        }
+    }
 }
 
 pub fn schematic(f: &SchematicFlags) -> Schematic {
@@ -19,8 +42,10 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
     let (xf0, xf1) = (95.0, 555.0); // fences / coplanar outer ends
     let (yt, y1, yc, y2, yb) = (62.0, 72.0, 162.0, 176.0, 266.0);
     let (cx, hw, s) = (325.0, 70.0, 45.0);
+    // the same material is drawn in the same colour
+    let upper_col = if f.upper_same { LowerDielectric } else { UpperDielectric };
     let gap_col = match f.gap_mode {
-        GapMode::Upper => UpperDielectric,
+        GapMode::Upper => upper_col,
         GapMode::Lower => LowerDielectric,
         GapMode::Custom => CustomGap,
     };
@@ -35,12 +60,18 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         it.push(SchemItem::Text { x, y, text: t.to_string(), anchor, bold, color });
     };
 
-    text(&mut it, 330.0, 16.0, "CPWG in PCB inner layer (not to scale)", Anchor::Center, true, Text);
-    rect(&mut it, x0, y1, x1, yc, UpperDielectric, None);
+    text(&mut it, 330.0, 16.0, "Cross-section (not to scale)", Anchor::Center, true, Text);
+    if f.upper {
+        rect(&mut it, x0, y1, x1, yc, upper_col, None);
+    }
     rect(&mut it, x0, y2, x1, yb, LowerDielectric, None);
-    // copper layer: gaps and the area beyond the coplanar ground are filled with the gap material
-    rect(&mut it, x0, yc, x1, y2, gap_col, None);
-    if f.plane1 {
+    // copper layer: what is not copper is filled with the gap material (air for the upper one without an upper half)
+    if f.upper || f.gap_mode != GapMode::Upper {
+        rect(&mut it, x0, yc, x1, y2, gap_col, None);
+    }
+    if !f.upper {
+        text(&mut it, 330.0, y1 + 20.0, "air", Anchor::Center, false, Muted);
+    } else if f.plane1 {
         rect(&mut it, x0, yt, x1, y1, Conductor, None);
         text(&mut it, x1, yt - 8.0, "Ground plane 1", Anchor::Right, false, Muted);
     } else {
@@ -54,8 +85,10 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         line(&mut it, x0, yb, x1, yb, Muted, true, false);
         text(&mut it, 330.0, yb + 22.0, "no ground plane 2  (air)", Anchor::Center, false, Muted);
     }
-    rect(&mut it, x0, yc, cx - hw - s, y2, Conductor, None);
-    rect(&mut it, cx + hw + s, yc, x1, y2, Conductor, None);
+    if f.coplanar {
+        rect(&mut it, x0, yc, cx - hw - s, y2, Conductor, None);
+        rect(&mut it, cx + hw + s, yc, x1, y2, Conductor, None);
+    }
     rect(&mut it, cx - hw, yc, cx + hw, y2, Signal, None);
     for xv in [xf0, xf1] {
         if f.fence1 {
@@ -64,6 +97,12 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         if f.fence2 {
             rect(&mut it, xv - 4.0, y2, xv + 4.0, yb, Conductor, Some(ConductorEdge));
         }
+        if f.side_walls {
+            rect(&mut it, xv - 4.0, y1, xv + 4.0, yb, Conductor, Some(ConductorEdge));
+        }
+    }
+    if f.side_walls {
+        text(&mut it, xf1 - 8.0, y1 + 14.0, "Via fences", Anchor::Right, false, Muted);
     }
     if f.fence1 {
         text(&mut it, xf1 - 8.0, y1 + 14.0, "Via fence 1", Anchor::Right, false, Muted);
@@ -71,28 +110,56 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
     if f.fence2 {
         text(&mut it, xf1 - 8.0, yb - 14.0, "Via fence 2", Anchor::Right, false, Muted);
     }
-    text(&mut it, x0 + 70.0, y1 + 20.0, "Upper dielectric:  h1, er1, tan d1", Anchor::Left, false, Text);
+    if f.upper {
+        let label = if f.upper_same {
+            "Upper dielectric:  h1, er2, tan d2 (as lower)"
+        } else {
+            "Upper dielectric:  h1, er1, tan d1"
+        };
+        text(&mut it, x0 + 70.0, y1 + 20.0, label, Anchor::Left, false, Text);
+    }
     text(&mut it, x0 + 70.0, yb - 20.0, "Lower dielectric:  h2, er2, tan d2", Anchor::Left, false, Text);
     text(&mut it, cx, y2 + 16.0, "Signal", Anchor::Center, true, Text);
-    text(&mut it, (xf0 + cx - hw - s) / 2.0, y2 + 14.0, "Coplanar ground", Anchor::Center, false, Text);
+    if f.coplanar {
+        text(&mut it, (xf0 + cx - hw - s) / 2.0, y2 + 14.0, "Coplanar ground", Anchor::Center, false, Text);
+    }
 
     // dimensions
     let ya = yc - 14.0;
-    for (xa, xb, lab) in [(cx - hw - s, cx - hw, "s"), (cx - hw, cx + hw, "w"), (cx + hw, cx + hw + s, "s")] {
+    // the edges next to the trace: the gap edges of a coplanar ground, or the trace edges alone
+    let spans: &[(f64, f64, &str)] = if f.coplanar {
+        &[(cx - hw - s, cx - hw, "s"), (cx - hw, cx + hw, "w"), (cx + hw, cx + hw + s, "s")]
+    } else {
+        &[(cx - hw, cx + hw, "w")]
+    };
+    for &(xa, xb, lab) in spans {
         line(&mut it, xa, ya, xb, ya, Text, false, true);
         text(&mut it, (xa + xb) / 2.0, ya - 9.0, lab, Anchor::Center, false, Text);
+        for xv in [xa, xb] {
+            line(&mut it, xv, ya - 6.0, xv, yc, Muted, true, false);
+        }
     }
-    for xv in [cx - hw - s, cx - hw, cx + hw, cx + hw + s] {
-        line(&mut it, xv, ya - 6.0, xv, yc, Muted, true, false);
+    if f.fence1 || f.fence2 || f.side_walls {
+        let inner = if f.coplanar { cx + hw + s } else { cx + hw };
+        let yg = y2 + 34.0;
+        line(&mut it, inner, y2, inner, yg + 4.0, Muted, true, false);
+        line(&mut it, xf1, y2, xf1, yg + 4.0, Muted, true, false);
+        line(&mut it, inner, yg, xf1, yg, Text, false, true);
+        text(&mut it, (inner + xf1) / 2.0, yg - 9.0, "g", Anchor::Center, false, Text);
     }
-    let yg = y2 + 34.0;
-    line(&mut it, cx + hw + s, y2, cx + hw + s, yg + 4.0, Muted, true, false);
-    line(&mut it, xf1, y2, xf1, yg + 4.0, Muted, true, false);
-    line(&mut it, cx + hw + s, yg, xf1, yg, Text, false, true);
-    text(&mut it, (cx + hw + s + xf1) / 2.0, yg - 9.0, "g", Anchor::Center, false, Text);
     let xd = x1 + 28.0;
-    line(&mut it, xd, y1, xd, yc, Text, false, true);
-    text(&mut it, xd + 14.0, (y1 + yc) / 2.0, "h1", Anchor::Center, false, Text);
+    // reference levels of the heights: h1 and h2 count from the copper surfaces to the planes
+    let mut level = |from: f64, y: f64| line(&mut it, from, y, xd + 6.0, y, Muted, true, false);
+    level(cx + hw, yc);
+    level(cx + hw, y2);
+    level(x1, yb);
+    if f.upper {
+        level(x1, y1);
+    }
+    if f.upper {
+        line(&mut it, xd, y1, xd, yc, Text, false, true);
+        text(&mut it, xd + 14.0, (y1 + yc) / 2.0, "h1", Anchor::Center, false, Text);
+    }
     line(&mut it, xd, y2, xd, yb, Text, false, true);
     text(&mut it, xd + 14.0, (y2 + yb) / 2.0, "h2", Anchor::Center, false, Text);
     line(&mut it, x1 + 10.0, yc, x1 + 10.0, y2, Text, false, false);
@@ -124,7 +191,17 @@ mod tests {
     use super::*;
 
     fn flags(plane1: bool, plane2: bool, fence1: bool, fence2: bool, gap_mode: GapMode) -> SchematicFlags {
-        SchematicFlags { plane1, plane2, fence1, fence2, gap_mode }
+        SchematicFlags {
+            coplanar: true,
+            upper: true,
+            upper_same: false,
+            side_walls: false,
+            plane1,
+            plane2,
+            fence1,
+            fence2,
+            gap_mode,
+        }
     }
 
     fn count(s: &Schematic, pred: impl Fn(&SchemItem) -> bool) -> usize {
@@ -194,6 +271,30 @@ mod tests {
         assert!(
             !s.items.iter().any(|i| matches!(i, SchemItem::Text { text, .. } if text.contains("copper")))
         );
+    }
+
+    #[test]
+    fn upper_half_with_the_lower_material_looks_like_the_lower_one() {
+        let s =
+            schematic(&SchematicFlags { upper_same: true, ..flags(true, true, true, true, GapMode::Upper) });
+        // the legend swatches are the only other rectangles and have an outline
+        assert_eq!(
+            count(&s, |i| matches!(
+                i,
+                SchemItem::Rect { fill: SchemColor::UpperDielectric, outline: None, .. }
+            )),
+            0
+        );
+        // upper half, lower half and the gap material beside the trace
+        assert_eq!(
+            count(&s, |i| matches!(
+                i,
+                SchemItem::Rect { fill: SchemColor::LowerDielectric, outline: None, .. }
+            )),
+            3
+        );
+        assert!(s.items.iter().any(|i| matches!(i, SchemItem::Text { text, .. }
+            if text == "Upper dielectric:  h1, er2, tan d2 (as lower)")));
     }
 
     #[test]

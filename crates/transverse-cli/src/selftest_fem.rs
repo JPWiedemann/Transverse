@@ -2,12 +2,11 @@
 //! values), compared with the tolerances of the FEM-vs-FD parity tests.
 
 use std::collections::HashMap;
-use std::process::ExitCode;
 use std::time::Instant;
 
 use serde::Deserialize;
 use transverse_core::Ctl;
-use transverse_lines::cpwg_inner::{CpwgParams, GroundCat, MeshMode, full_analysis_fem};
+use transverse_lines::planar::{GroundCat, MeshMode, PlanarParams, full_analysis_fem};
 
 const EMBEDDED: &str = include_str!("../../../tests/reference/cases.json");
 
@@ -23,7 +22,7 @@ const TOL_SPLIT_T0: f64 = 1.7;
 #[derive(Deserialize)]
 struct Case {
     name: String,
-    params: CpwgParams,
+    params: PlanarParams,
     z0: f64,
     eeff: f64,
     margin: f64,
@@ -52,7 +51,8 @@ fn rel(a: f64, b: f64) -> f64 {
     (a / b - 1.0).abs()
 }
 
-pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
+/// Whether every check passed.
+pub fn run(path: Option<&str>) -> Result<bool, String> {
     let text = match path {
         Some(p) => std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?,
         None => EMBEDDED.to_string(),
@@ -69,7 +69,7 @@ pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
         total += 1;
         let t0 = Instant::now();
         // the grid's domain extension is part of the reference value: same domain, automatic mesh levels
-        let p = CpwgParams { mesh_mode: MeshMode::Auto, margin: c.margin, ..c.params.clone() };
+        let p = PlanarParams { mesh_mode: MeshMode::Auto, margin: c.margin, ..c.params.clone() };
         let a = match full_analysis_fem(&p, &Ctl::new()) {
             Ok(a) => a,
             Err(e) => {
@@ -108,5 +108,5 @@ pub fn run(path: Option<&str>) -> Result<ExitCode, String> {
         );
     }
     println!("\n{} of {total} checks passed", total - failed);
-    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    Ok(failed == 0)
 }

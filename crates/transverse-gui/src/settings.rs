@@ -36,6 +36,22 @@ impl Default for Settings {
     }
 }
 
+/// Ids that line types had before: settings saved under them are read under the current id.
+const RENAMED_LINES: [(&str, &str); 1] = [("cpwg_inner", "planar")];
+
+impl Settings {
+    fn migrate(&mut self) {
+        for (old, new) in RENAMED_LINES {
+            if let Some(saved) = self.lines.remove(old) {
+                self.lines.entry(new.to_string()).or_insert(saved);
+            }
+            if self.line_type == old {
+                self.line_type = new.to_string();
+            }
+        }
+    }
+}
+
 /// `settings.json` in the folder of the running executable.
 pub fn default_path() -> PathBuf {
     std::env::current_exe()
@@ -54,7 +70,10 @@ pub fn load(path: &Path) -> (Settings, Option<String>) {
         Err(e) => return (Settings::default(), Some(format!("could not read settings: {e}"))),
     };
     match serde_json::from_str::<Settings>(&text) {
-        Ok(s) => (s, Some(format!("Settings loaded from {}", path.display()))),
+        Ok(mut s) => {
+            s.migrate();
+            (s, Some(format!("Settings loaded from {}", path.display())))
+        }
         Err(e) => (Settings::default(), Some(format!("ignored invalid settings file: {e}"))),
     }
 }
@@ -71,8 +90,8 @@ pub fn save(path: &Path, settings: &Settings) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::form::FormState;
-    use transverse_lines::cpwg_inner::CpwgInner;
     use transverse_lines::model::LineModel;
+    use transverse_lines::planar::PlanarLine;
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("transverse-test-{}-{name}", std::process::id()));
@@ -83,7 +102,7 @@ mod tests {
     #[test]
     fn save_and_load_round_trip() {
         let path = temp("roundtrip");
-        let m = CpwgInner;
+        let m = PlanarLine;
         let mut form = FormState::new(&m);
         form.change_unit(&m, "w", "mil");
         let mut s = Settings { line_type: m.id().into(), ..Default::default() };
@@ -112,9 +131,9 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert!(note.unwrap().contains("invalid"));
         // unknown and missing fields are tolerated
-        std::fs::write(&path, r#"{"version": 1, "future_field": 3, "line_type": "cpwg_inner"}"#).unwrap();
+        std::fs::write(&path, r#"{"version": 1, "future_field": 3, "line_type": "planar"}"#).unwrap();
         let (s, _) = load(&path);
-        assert_eq!(s.line_type, "cpwg_inner");
+        assert_eq!(s.line_type, "planar");
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -123,5 +142,23 @@ mod tests {
         let p = default_path();
         assert_eq!(p.file_name().unwrap(), "settings.json");
         assert_eq!(p.parent(), std::env::current_exe().unwrap().parent());
+    }
+
+    #[test]
+    fn settings_saved_under_the_old_line_id_are_found_under_the_new_one() {
+        let dir = std::env::temp_dir().join(format!("transverse-migrate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version": 1, "line_type": "cpwg_inner",
+            "lines": {"cpwg_inner": {"extra": {"z_target": "42"}}}}"#,
+        )
+        .unwrap();
+        let (s, _) = load(&path);
+        assert_eq!(s.line_type, "planar");
+        assert_eq!(s.lines.keys().collect::<Vec<_>>(), ["planar"]);
+        assert_eq!(s.lines["planar"].extra["z_target"], "42");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

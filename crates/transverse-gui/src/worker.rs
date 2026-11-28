@@ -152,8 +152,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use transverse_lines::cpwg_inner::CpwgInner;
     use transverse_lines::model::ParamValue;
+    use transverse_lines::planar::PlanarLine;
 
     fn run_to_end(w: &mut Worker) -> (Vec<String>, Msg) {
         let mut progress = Vec::new();
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn analyze_reports_progress_and_result() {
-        let m: Arc<dyn LineModel> = Arc::new(CpwgInner);
+        let m: Arc<dyn LineModel> = Arc::new(PlanarLine);
         let wakes = Arc::new(AtomicUsize::new(0));
         let wk = wakes.clone();
         let mut w = Worker::start(m.clone(), Job::Analyze { params: m.defaults() }, move || {
@@ -175,15 +175,15 @@ mod tests {
         });
         let (progress, end) = run_to_end(&mut w);
         let Msg::Done(out) = end else { panic!("not done") };
-        assert!((out.analysis.modes[0].z0 / 35.001 - 1.0).abs() < 5e-4 && out.new_params.is_none());
-        assert!(progress.iter().any(|p| p.contains("mesh level 1")), "{progress:?}");
+        assert!((out.analysis.modes[0].z0 / 35.001 - 1.0).abs() < 1e-3 && out.new_params.is_none());
+        assert!(progress.iter().any(|p| p.starts_with("Refinement 2")), "{progress:?}");
         assert!(wakes.load(Ordering::Relaxed) > progress.len());
         assert!(w.is_finished() && w.recv().is_none() && w.poll().is_empty());
     }
 
     #[test]
     fn cancel_before_and_during_a_run() {
-        let m: Arc<dyn LineModel> = Arc::new(CpwgInner);
+        let m: Arc<dyn LineModel> = Arc::new(PlanarLine);
         let mut w = Worker::start(m.clone(), Job::Analyze { params: m.defaults() }, || {});
         w.cancel();
         let (_, end) = run_to_end(&mut w);
@@ -209,14 +209,14 @@ mod tests {
 
     #[test]
     fn synthesis_returns_new_parameters() {
-        let m: Arc<dyn LineModel> = Arc::new(CpwgInner);
+        let m: Arc<dyn LineModel> = Arc::new(PlanarLine);
         let job =
             Job::Synthesize { params: m.defaults(), target_id: "w".into(), z0: 35.0, phase_deg: Some(90.0) };
         let mut w = Worker::start(m, job, || {});
         let (_, end) = run_to_end(&mut w);
         let Msg::Done(out) = end else { panic!("not done") };
         let p = out.new_params.unwrap();
-        assert!((p.num("w").unwrap() / 0.3605 - 1.0).abs() < 5e-4);
+        assert!((p.num("w").unwrap() / 0.3605 - 1.0).abs() < 3e-3);
         assert!(out.analysis.report.contains("Synthesis: Z0 = 35 Ohm"));
         // the length follows from the 90 degrees (a quarter wavelength), not from the old 100 mm
         let mode = &out.analysis.modes[0];
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn invalid_input_is_an_error_message() {
-        let m: Arc<dyn LineModel> = Arc::new(CpwgInner);
+        let m: Arc<dyn LineModel> = Arc::new(PlanarLine);
         let mut set = m.defaults();
         set.set("w", ParamValue::Num(-1.0));
         let mut w = Worker::start(m, Job::Analyze { params: set }, || {});
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn poll_is_non_blocking_and_collects_in_order() {
-        let m: Arc<dyn LineModel> = Arc::new(CpwgInner);
+        let m: Arc<dyn LineModel> = Arc::new(PlanarLine);
         let mut w = Worker::start(m.clone(), Job::Analyze { params: m.defaults() }, || {});
         let mut seen_done = false;
         for _ in 0..2000 {

@@ -13,7 +13,7 @@ use transverse_gui::form::{FieldState, FormState, unit_options};
 use transverse_gui::prefs::{Prefs, ThemeChoice};
 use transverse_gui::settings::{self, LineSettings, Settings};
 use transverse_gui::worker::{Job, Msg, Worker};
-use transverse_lines::model::{Analysis, LineModel, ParamKind, ParamSpec, is_enabled};
+use transverse_lines::model::{Analysis, LineModel, ParamKind, ParamSet, ParamSpec, is_visible};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -217,7 +217,8 @@ impl App {
                 };
                 Some(ph)
             };
-            let target_id = self.model.synth_targets()[self.synth_target].id.to_string();
+            let target = self.shown_target(&self.form.control_set(&*self.model));
+            let target_id = self.model.synth_targets()[target].id.to_string();
             Job::Synthesize { params, target_id, z0, phase_deg }
         } else {
             Job::Analyze { params }
@@ -272,12 +273,14 @@ impl App {
 
     fn form_ui(&mut self, ui: &mut egui::Ui) {
         let model = self.model.clone();
-        let enabled_set = self.form.control_set(&*model);
+        let controls = self.form.control_set(&*model);
+        let mut preset = None;
         let mut unit_change: Option<(&'static str, String)> = None;
         let busy = self.busy();
 
+        // only what the structure uses; a group without such a field is left out
         let mut groups: Vec<(&str, Vec<&ParamSpec>)> = Vec::new();
-        for spec in model.params() {
+        for spec in model.params().iter().filter(|s| is_visible(s.visible_when, &controls)) {
             match groups.last_mut() {
                 Some((g, v)) if *g == spec.group => v.push(spec),
                 _ => groups.push((spec.group, vec![spec])),
@@ -285,20 +288,32 @@ impl App {
         }
 
         ui.add_enabled_ui(!busy, |ui| {
-            for (group, specs) in groups {
+            for (index, (group, specs)) in groups.into_iter().enumerate() {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.label(RichText::new(group).strong());
+                    // the presets head the first group, which holds the switches they set
+                    if index == 0 && !model.presets().is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            for p in model.presets() {
+                                if ui.button(p.label).clicked() {
+                                    preset = Some(p);
+                                }
+                            }
+                        });
+                    }
                     egui::Grid::new(group).num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
                         for spec in specs {
-                            let enabled = is_enabled(spec, &enabled_set);
-                            self.param_row(ui, spec, enabled, &mut unit_change);
+                            self.param_row(ui, spec, &mut unit_change);
                             ui.end_row();
                         }
                     });
                 });
             }
         });
+        if let Some(p) = preset {
+            self.form.apply_preset(p);
+        }
         if let Some((key, unit)) = unit_change {
             self.form.change_unit(&*model, key, &unit);
         }
@@ -308,7 +323,6 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         spec: &'static ParamSpec,
-        enabled: bool,
         unit_change: &mut Option<(&'static str, String)>,
     ) {
         let options = unit_options(spec);
@@ -318,11 +332,11 @@ impl App {
         match state {
             FieldState::Quantity { text, unit } => {
                 ui.label(spec.label);
-                entry(ui, text, enabled);
+                entry(ui, text, true);
                 if options.is_empty() {
                     ui.label(&*unit);
                 } else {
-                    ui.add_enabled_ui(enabled, |ui| {
+                    ui.scope(|ui| {
                         egui::ComboBox::from_id_salt((spec.key, "unit"))
                             .selected_text(&*unit)
                             .width(48.0)
@@ -337,14 +351,14 @@ impl App {
                 }
             }
             FieldState::Flag(b) => {
-                ui.add_enabled(enabled, egui::Checkbox::new(b, spec.label));
+                ui.checkbox(b, spec.label);
                 ui.label("");
                 ui.label("");
             }
             FieldState::Choice(i) => {
                 let ParamKind::Choice(opts, _) = spec.kind else { return };
                 ui.label(spec.label);
-                ui.add_enabled_ui(enabled, |ui| {
+                ui.scope(|ui| {
                     egui::ComboBox::from_id_salt((spec.key, "choice"))
                         .selected_text(opts[(*i).min(opts.len() - 1)])
                         .show_ui(ui, |ui| {
@@ -358,9 +372,19 @@ impl App {
         }
     }
 
+    /// The chosen synthesis target, or the first one if the structure does not offer it.
+    fn shown_target(&self, controls: &ParamSet) -> usize {
+        match self.model.synth_targets().get(self.synth_target) {
+            Some(t) if is_visible(t.visible_when, controls) => self.synth_target,
+            _ => 0,
+        }
+    }
+
     fn synthesis_ui(&mut self, ui: &mut egui::Ui) {
         let busy = self.busy();
         let targets = self.model.synth_targets();
+        let controls = self.form.control_set(&*self.model);
+        self.synth_target = self.shown_target(&controls);
         ui.add_enabled_ui(!busy, |ui| {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -379,7 +403,11 @@ impl App {
                     egui::ComboBox::from_id_salt("synth_target")
                         .selected_text(targets[self.synth_target].label)
                         .show_ui(ui, |ui| {
-                            for (k, t) in targets.iter().enumerate() {
+                            for (k, t) in targets
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, t)| is_visible(t.visible_when, &controls))
+                            {
                                 ui.selectable_value(&mut self.synth_target, k, t.label);
                             }
                         });

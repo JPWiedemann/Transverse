@@ -58,14 +58,20 @@ struct LineInfo {
     id: &'static str,
     name: &'static str,
     synth_targets: &'static [transverse_lines::model::SynthTarget],
+    presets: &'static [transverse_lines::model::Preset],
 }
 
-/// `[{id, name, synth_targets: [{id, label}]}]` for all line types.
+/// `[{id, name, synth_targets: [{id, label, visible_when}], presets: [{id, label, values}]}]` for all line types.
 #[wasm_bindgen]
 pub fn line_types() -> Result<String, JsError> {
     let list: Vec<LineInfo> = registry()
         .iter()
-        .map(|m| LineInfo { id: m.id(), name: m.name(), synth_targets: m.synth_targets() })
+        .map(|m| LineInfo {
+            id: m.id(),
+            name: m.name(),
+            synth_targets: m.synth_targets(),
+            presets: m.presets(),
+        })
         .collect();
     json(&list)
 }

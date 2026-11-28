@@ -6,13 +6,16 @@
 
 use transverse_mesh::Mesh;
 
-use super::CpwgParams;
+use super::PlanarParams;
 
-/// Wall positions in x and y, in ascending order; the same list of walls for every set of dimensions.
-fn walls(p: &CpwgParams, margin: f64) -> ([f64; 8], [f64; 6]) {
+/// Wall positions in x and y, in ascending order; the same list of walls for every set of dimensions of one
+/// structure.
+fn walls(p: &PlanarParams, margin: f64) -> (Vec<f64>, [f64; 6]) {
     let g = p.geometry(margin);
-    let (inner, outer) = (p.w / 2.0, p.w / 2.0 + p.s);
-    ([-g.xd, -g.xe, -outer, -inner, inner, outer, g.xe, g.xd], [g.ymin, g.ybot, 0.0, p.t, g.ytop, g.ymax])
+    let mut x = vec![-g.xd, -g.xe];
+    x.extend(p.stackup().copper_edges_x());
+    x.extend([g.xe, g.xd]);
+    (x, [g.ymin, g.ybot, 0.0, p.t, g.ytop, g.ymax])
 }
 
 /// The piecewise linear map that takes every `from[i]` to `to[i]`. Walls that coincide in `from` (no copper
@@ -32,7 +35,7 @@ fn map(v: f64, from: &[f64], to: &[f64]) -> f64 {
 }
 
 /// `mesh` of the structure `p` (domain extension `margin`) moved onto the structure `q`.
-pub(super) fn move_mesh(mesh: &Mesh, p: &CpwgParams, q: &CpwgParams, margin: f64, q_margin: f64) -> Mesh {
+pub(super) fn move_mesh(mesh: &Mesh, p: &PlanarParams, q: &PlanarParams, margin: f64, q_margin: f64) -> Mesh {
     let (from, to) = (walls(p, margin), walls(q, q_margin));
     let mut out = mesh.clone();
     for pt in &mut out.pts {
@@ -47,8 +50,9 @@ mod tests {
 
     #[test]
     fn walls_land_on_walls_and_points_between_them_move_in_proportion() {
-        let p = CpwgParams::default();
-        let q = CpwgParams { w: p.w - 0.004, s: p.s + 0.002, t: p.t - 0.004, h1: p.h1 + 0.002, ..p.clone() };
+        let p = PlanarParams::default();
+        let q =
+            PlanarParams { w: p.w - 0.004, s: p.s + 0.002, t: p.t - 0.004, h1: p.h1 + 0.002, ..p.clone() };
         let (from, to) = (walls(&p, 0.0), walls(&q, 0.0));
         for (f, t) in from.0.iter().zip(&to.0) {
             assert_eq!(map(*f, &from.0, &to.0), *t);
@@ -66,8 +70,8 @@ mod tests {
 
     #[test]
     fn zero_thickness_copper_stays_flat() {
-        let p = CpwgParams { t: 0.0, ..CpwgParams::default() };
-        let q = CpwgParams { h1: p.h1 + 0.002, h2: p.h2 + 0.002, ..p.clone() };
+        let p = PlanarParams { t: 0.0, ..PlanarParams::default() };
+        let q = PlanarParams { h1: p.h1 + 0.002, h2: p.h2 + 0.002, ..p.clone() };
         let (from, to) = (walls(&p, 0.0), walls(&q, 0.0));
         assert_eq!(map(0.0, &from.1, &to.1), 0.0);
         assert_eq!(map(from.1[4], &from.1, &to.1), to.1[4]);

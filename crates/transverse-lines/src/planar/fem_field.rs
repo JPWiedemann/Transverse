@@ -4,14 +4,14 @@ use transverse_core::TvResult;
 use transverse_core::fem::{corner_gradients, element_dofs};
 use transverse_core::postproc::mesh::{TriIndex, recover_nodal_corners};
 
-use super::CpwgParams;
+use super::PlanarParams;
 use super::fem::{FemSolution, InputData};
 use super::field::drawing;
 use crate::mesh_field::MeshFieldData;
 
 /// Field data of `sol` (quadratic elements): potentials, E recovered at the nodes from the element
 /// gradients, point location and the conductor drawing.
-pub fn field_data_fem(p: &CpwgParams, sol: &FemSolution) -> TvResult<MeshFieldData> {
+pub fn field_data_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<MeshFieldData> {
     let mesh = &sol.mesh;
     let cs = p.cross_section(sol.margin);
     let data = InputData::new(&cs, mesh);

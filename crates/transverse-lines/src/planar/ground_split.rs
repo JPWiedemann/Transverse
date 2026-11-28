@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use transverse_core::fd2d::CAT_SIGNAL;
 use transverse_core::quasistatic::Solution;
 
-use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, CpwgParams};
+use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, PlanarParams};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GroundCat {
@@ -165,7 +165,7 @@ pub(super) fn merge_equal_x(v: Vec<(f64, f64)>) -> (Vec<f64>, Vec<f64>) {
     (x, js)
 }
 
-pub fn ground_split(p: &CpwgParams, sol: &Solution) -> Split {
+pub fn ground_split(p: &PlanarParams, sol: &Solution) -> Split {
     let g = &sol.grid;
     let (nx, ny) = (g.nx(), g.ny());
     let fixed = |k: usize| g.cat[k] > 0;
