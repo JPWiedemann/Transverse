@@ -49,6 +49,8 @@
         stroke={r.outline ? fill[r.outline] : 'none'}
         stroke-width="1"
       />
+    {:else if 'Polygon' in item}
+      <polygon points={item.Polygon.points.map((p) => p.join(',')).join(' ')} fill={fill[item.Polygon.fill]} />
     {:else if 'Line' in item}
       {@const l = item.Line}
       <line

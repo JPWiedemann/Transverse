@@ -2,7 +2,9 @@
 
 use std::fmt::Write;
 
-use super::{GroundCat, PlanarAnalysis, PlanarFemAnalysis, PlanarParams, Shares, Split, analytic};
+use super::{
+    EtchMode, GroundCat, PlanarAnalysis, PlanarFemAnalysis, PlanarParams, Shares, Split, WideSide, analytic,
+};
 use transverse_core::losses::LossModel;
 use transverse_core::units::format_g;
 use transverse_core::{C_LIGHT, NP2DB, guided_wavelength_mm, phase_deg};
@@ -90,6 +92,21 @@ fn geometry_lines(w: &mut String, e: &PlanarParams) {
         sizes.push(format!("g = {:.3} mm", e.g));
     }
     let _ = writeln!(w, "Geometry : {}", sizes.join(", "));
+    if e.undercut() > 0.0 {
+        let given = match e.etch {
+            EtchMode::Factor => format!("etch factor {}", format_g(e.etch_factor)),
+            _ => format!("width difference {:.2} um", e.etch_delta * 1e3),
+        };
+        let face = if e.etch_wide == WideSide::Bottom { "bottom" } else { "top" };
+        let _ = writeln!(w, "Etching  : {given}, wide side at the {face}; w, s and g are measured there");
+        let _ = writeln!(
+            w,
+            "           narrow width {:.2} um, undercut {:.2} um per side, flank angle {:.1} deg",
+            e.narrow_width() * 1e3,
+            e.undercut() * 1e3,
+            e.flank_angle_deg()
+        );
+    }
     let yn = |on: bool, name: &str| if on { name.to_string() } else { format!("no {name}") };
     let mut parts = Vec::new();
     if !e.upper {

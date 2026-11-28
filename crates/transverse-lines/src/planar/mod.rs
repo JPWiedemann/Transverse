@@ -42,7 +42,7 @@ pub use field::field_data;
 pub use grid::*;
 pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
 pub use model::PlanarLine;
-pub use params::{Analytic, GapMode, MeshMode, PlanarParams, analytic};
+pub use params::{Analytic, EtchMode, GapMode, MeshMode, PlanarParams, WideSide, analytic};
 pub use report::{report, report_fem};
 pub use schematic::{SchematicFlags, schematic};
 pub use section::GROWTH;
@@ -52,11 +52,16 @@ pub use wheeler::wheeler_dzdn;
 
 use transverse_core::losses::LossModel;
 use transverse_core::quasistatic::{self, Solution};
-use transverse_core::{Ctl, TvResult};
+use transverse_core::{Ctl, TvError, TvResult};
 
 /// Full analysis of one geometry (Z0, eps_eff, L', C', G'/omega, fields).
 pub fn analyze(p: &PlanarParams, ctl: &Ctl) -> TvResult<Solution> {
     p.validate()?;
+    if p.undercut() > 0.0 {
+        return Err(TvError::InvalidParam(
+            "the grid solver cannot represent etched (slanted) flanks: use the finite elements".into(),
+        ));
+    }
     quasistatic::solve(p, &p.fd_options(), ctl)
 }
 

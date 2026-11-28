@@ -8,7 +8,7 @@ export type ParamKind =
   | { Choice: [string[], number] };
 
 /** Applies when all conditions of one of the alternatives hold (no alternatives: always). */
-export type Visibility = { key: string; value: number }[][];
+export type Visibility = { key: string; value: number; not?: boolean }[][];
 
 export interface ParamSpec {
   key: string;
@@ -141,6 +141,7 @@ export type SchemColor =
 
 export type SchemItem =
   | { Rect: { x0: number; y0: number; x1: number; y1: number; fill: SchemColor; outline: SchemColor | null } }
+  | { Polygon: { points: [number, number][]; fill: SchemColor } }
   | { Line: { x0: number; y0: number; x1: number; y1: number; color: SchemColor; dashed: boolean; arrows: boolean } }
   | { Text: { x: number; y: number; text: string; anchor: 'Center' | 'Left' | 'Right'; bold: boolean; color: SchemColor } };
 
@@ -153,6 +154,8 @@ export interface Schematic {
 // Field views (serde output of the wasm layer).
 export interface DrawRect {
   kind: 'Signal' | 'Ground';
+  /** etched copper: [x0, x1] of the face at y1 (x0 and x1 are then those at y0) */
+  top: [number, number] | null;
   x0: number;
   y0: number;
   x1: number;

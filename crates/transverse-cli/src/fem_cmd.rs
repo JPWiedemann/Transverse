@@ -15,6 +15,14 @@ fn progress() -> Ctl {
 fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
     let s = &a.sol;
     println!("=== FEM analysis (quadratic elements) ===");
+    if p.undercut() > 0.0 {
+        println!(
+            "Etched copper   : narrow width {:.2} um, undercut {:.2} um per side, flank angle {:.1} deg",
+            p.narrow_width() * 1e3,
+            p.undercut() * 1e3,
+            p.flank_angle_deg()
+        );
+    }
     println!("Z0              = {:8.3} Ohm", s.z0);
     println!("eps_eff         = {:8.4}", s.eeff);
     println!("L'              = {:8.4} nH/mm", s.l * 1e6);

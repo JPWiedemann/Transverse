@@ -94,17 +94,18 @@ export function controlSet(defaults: ParamSet, form: FormState): ParamSet {
   for (const [k, f] of Object.entries(form)) {
     if (f.kind === 'flag') set[k] = f.value;
     else if (f.kind === 'choice') set[k] = f.index;
+    // visibility conditions on a quantity only ask for zero, which is zero in every unit
+    else if (parseNumber(f.text) === 0) set[k] = 0;
   }
   return set;
 }
 
 /** Whether something with this visibility applies to the values. */
 export function isVisible(when: Visibility, set: ParamSet): boolean {
-  const holds = (c: { key: string; value: number }) => {
+  const holds = (c: { key: string; value: number; not?: boolean }) => {
     const v = set[c.key];
-    if (typeof v === 'boolean') return Number(v) === c.value;
-    if (typeof v === 'number') return v === c.value;
-    return true;
+    if (v === undefined) return true;
+    return (Number(v) === c.value) !== (c.not ?? false);
   };
   return when.length === 0 || when.some((all) => all.every(holds));
 }

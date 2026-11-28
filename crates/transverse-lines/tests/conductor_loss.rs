@@ -5,9 +5,11 @@
 //! `dZ0_air/dn = eta0 * integral(J^2 ds) / I^2 = eta0 eps0^2 / C0^2 * integral(E_n^2 ds)` for 1 V.
 //! Comparing the solvers with each other cannot find a mistake in the rule they share; this can.
 //!
-//! At the 90 degree corners of the copper E^2 grows like `r^(-2/3)`: integrable, but a mesh converges to that
-//! integral slowly. So within `R` of a corner the discrete field is replaced by the integral of that power law,
-//! fitted on the ring `R..2R`, which holds `2^(1/3) - 1` times as much as the disc inside it.
+//! At a corner of the copper with the angle `b` on the side of the field, E^2 grows like `r^(2 pi / b - 2)`
+//! (`r^(-2/3)` at 90 degrees, `b = 3 pi / 2`): integrable, but a mesh converges to that integral slowly. So within
+//! `R` of a corner the discrete field is replaced by the integral of that power law, fitted on the ring `R..2R`,
+//! which holds `2^(2 pi / b - 1) - 1` times as much as the disc inside it. Etched flanks give other angles than
+//! 90 degrees, a different one at the wide and at the narrow face.
 
 use std::collections::HashMap;
 
@@ -15,7 +17,8 @@ use transverse_core::fem::{FemInput, corner_gradients};
 use transverse_core::{Ctl, EPS0};
 use transverse_geom::SIGNAL;
 use transverse_lines::planar::{
-    C_BND, FemSolution, PlanarParams, analyze, analyze_fem, wheeler_dzdn, wheeler_dzdn_fem,
+    C_BND, EtchMode, FemSolution, PlanarParams, WideSide, analyze, analyze_fem, wheeler_dzdn,
+    wheeler_dzdn_fem,
 };
 
 /// Impedance of free space [Ohm].
@@ -41,13 +44,37 @@ fn from_surface_current(p: &PlanarParams, sol: &FemSolution, r0: f64) -> f64 {
     let grad = corner_gradients(&inp, &sol.edges, &sol.v0).unwrap();
     let tags: HashMap<(u32, u32), u8> =
         m.edges.iter().map(|e| ((e.a.min(e.b), e.a.max(e.b)), e.tag)).collect();
-    // the corners of the copper: at the trace edges and, with a coplanar ground, at the gap edges
-    let corners: Vec<[f64; 2]> =
-        p.stackup().copper_edges_x().iter().flat_map(|&x| [[x, 0.0], [x, p.t]]).collect();
-    let to_corner =
-        |q: [f64; 2]| corners.iter().map(|c| (q[0] - c[0]).hypot(q[1] - c[1])).fold(f64::INFINITY, f64::min);
+    // the corners of the copper, at the trace edges and, with a coplanar ground, at the gap edges: each with the
+    // exponent `2 pi / b - 1` of the integral of E^2 around it
+    let flank = std::f64::consts::PI * p.flank_angle_deg() / 180.0;
+    let wide = if p.etch_wide == WideSide::Bottom { 0.0 } else { 1.0 };
+    let stack = p.stackup();
+    let corners: Vec<([f64; 2], f64)> = [0.0, 1.0]
+        .into_iter()
+        .flat_map(|f| {
+            // the angle inside the copper: the flank angle at the wide face, its supplement at the narrow one
+            let inside = if p.undercut() == 0.0 {
+                std::f64::consts::FRAC_PI_2
+            } else if f == wide {
+                flank
+            } else {
+                std::f64::consts::PI - flank
+            };
+            let exponent = 2.0 * std::f64::consts::PI / (2.0 * std::f64::consts::PI - inside) - 1.0;
+            stack.copper_edges_x_at(f).into_iter().map(move |x| ([x, f * p.t], exponent))
+        })
+        .collect();
+    // the nearest corner: its distance and exponent
+    let to_corner = |q: [f64; 2]| {
+        corners
+            .iter()
+            .map(|(c, e)| ((q[0] - c[0]).hypot(q[1] - c[1]), *e))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .unwrap()
+    };
 
-    let (mut outside, mut ring) = (0.0, 0.0);
+    // the integral far from the corners, and what the discs around them hold
+    let (mut outside, mut discs) = (0.0, 0.0);
     for (k, t) in m.tris.iter().enumerate() {
         for i in 0..3 {
             let (a, b) = ((i + 1) % 3, (i + 2) % 3);
@@ -70,7 +97,7 @@ fn from_surface_current(p: &PlanarParams, sol: &FemSolution, r0: f64) -> f64 {
             };
             // the part of the edge farther than `r` from every corner (along an edge at a corner the distance
             // is linear)
-            let (ra, rb) = (to_corner(pa), to_corner(pb));
+            let ((ra, ea), (rb, eb)) = (to_corner(pa), to_corner(pb));
             let beyond = |r: f64| match (ra >= r, rb >= r) {
                 (true, true) => part(0.0, 1.0),
                 (false, false) => 0.0,
@@ -78,11 +105,12 @@ fn from_surface_current(p: &PlanarParams, sol: &FemSolution, r0: f64) -> f64 {
                 (true, false) => part(0.0, (r - ra) / (rb - ra)),
             };
             outside += beyond(r0);
-            ring += beyond(r0) - beyond(2.0 * r0);
+            let exponent = if ra < rb { ea } else { eb };
+            discs += (beyond(r0) - beyond(2.0 * r0)) / (2f64.powf(exponent) - 1.0);
         }
     }
     let scale = ETA0 * EPS0 * EPS0 / (sol.c0 * sol.c0);
-    scale * (outside + ring / (2f64.cbrt() - 1.0))
+    scale * (outside + discs)
 }
 
 #[test]
@@ -121,6 +149,39 @@ fn wheeler_agrees_with_the_integral_of_the_surface_current() {
         );
         // measured: within 2.4e-3; the old rule, which left planes and the gap face in place, was 14 to 22 % low
         assert!((fd / reference - 1.0).abs() < 5e-3, "{name}: FD {fd} vs integral {reference}");
+        assert!((fem / reference - 1.0).abs() < 5e-3, "{name}: FEM {fem} vs integral {reference}");
+    }
+}
+
+/// Etched flanks: the grid cannot follow them, so the finite elements stand against the integral alone.
+#[test]
+fn wheeler_with_etched_flanks_agrees_with_the_integral_of_the_surface_current() {
+    let base = PlanarParams { etch: EtchMode::Factor, etch_factor: 2.0, t: 0.035, ..PlanarParams::default() };
+    let top = WideSide::Top;
+    let cases = [
+        ("etch factor 2", base.clone()),
+        ("etch factor 2, wide side up", PlanarParams { etch_wide: top, ..base.clone() }),
+        ("etch factor 1 (45 deg)", PlanarParams { etch_factor: 1.0, ..base.clone() }),
+        ("flat flanks, factor 0.6", PlanarParams { etch_factor: 0.6, w: 0.3, s: 0.15, ..base.clone() }),
+        ("tight gap", PlanarParams { w: 0.2, s: 0.075, ..base.clone() }),
+        ("stripline", PlanarParams { coplanar: false, w: 0.2, ..base.clone() }),
+        ("microstrip", PlanarParams { coplanar: false, upper: false, w: 0.5, ..base.clone() }),
+        (
+            "stripline, side walls",
+            PlanarParams { coplanar: false, side_walls: true, w: 0.25, g: 0.12, ..base.clone() },
+        ),
+        (
+            "CPWG outer layer, width difference",
+            PlanarParams { upper: false, w: 0.35, s: 0.15, g: 0.3, etch: EtchMode::Delta, ..base },
+        ),
+    ];
+    for (name, p) in cases {
+        let fine = PlanarParams { tol: 0.001, ..p.clone() };
+        let air = analyze_fem(&fine, &fine.fem_options(), &Ctl::new()).unwrap();
+        let reference = from_surface_current(&p, &air, 0.5e-3);
+        let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
+        let fem = wheeler_dzdn_fem(&p, &sol, &Ctl::new()).unwrap();
+        println!("{name:36} integral {reference:.0}, FEM {fem:.0} ({:+.2e})", fem / reference - 1.0);
         assert!((fem / reference - 1.0).abs() < 5e-3, "{name}: FEM {fem} vs integral {reference}");
     }
 }

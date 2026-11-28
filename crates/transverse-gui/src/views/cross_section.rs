@@ -126,6 +126,10 @@ pub fn show(ui: &mut egui::Ui, s: &Schematic) {
                     arrow_heads(&painter, a, b, (7.0 * scale).clamp(5.0, 12.0), colour(*color, &pal));
                 }
             }
+            SchemItem::Polygon { points, fill } => {
+                let points = points.iter().map(|q| p(q[0], q[1])).collect();
+                painter.add(Shape::convex_polygon(points, colour(*fill, &pal), Stroke::NONE));
+            }
             SchemItem::Text { x, y, text, anchor, bold, color } => {
                 painter.text(p(*x, *y), align(*anchor), text, font(*bold), colour(*color, &pal));
             }

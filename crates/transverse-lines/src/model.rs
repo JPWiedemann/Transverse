@@ -89,11 +89,13 @@ pub enum ParamKind {
     Choice(&'static [&'static str], usize),
 }
 
-/// Another parameter has a given value (choice index, or 0/1 for a bool).
+/// Another parameter has a given value (choice index, or 0/1 for a bool), or with `not` any other value. A
+/// condition on a quantity can only ask for zero: frontends pass on the number of a quantity only if it is 0.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct Condition {
     pub key: &'static str,
     pub value: usize,
+    pub not: bool,
 }
 
 /// When a parameter or option applies, and is shown: all conditions of one of the alternatives hold. Without
@@ -124,8 +126,8 @@ impl ParamSpec {
 /// Whether something with this visibility applies to the current values.
 pub fn is_visible(when: Visibility, set: &ParamSet) -> bool {
     let holds = |c: &Condition| match set.get(c.key) {
-        Some(ParamValue::Bool(b)) => usize::from(b) == c.value,
-        Some(ParamValue::Num(v)) => v == c.value as f64,
+        Some(ParamValue::Bool(b)) => (usize::from(b) == c.value) != c.not,
+        Some(ParamValue::Num(v)) => (v == c.value as f64) != c.not,
         None => true,
     };
     when.is_empty() || when.iter().any(|all| all.iter().all(holds))
@@ -231,6 +233,8 @@ pub enum ShapeKind {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct DrawRect {
+    /// For a trapezoid (etched copper): `[x0, x1]` of the face at `y1`; `x0`, `x1` are then those at `y0`.
+    pub top: Option<[f64; 2]>,
     pub kind: ShapeKind,
     pub x0: f64,
     pub y0: f64,
@@ -364,9 +368,36 @@ pub enum Anchor {
 /// Drawing primitive in sketch coordinates (y grows downwards, like a canvas).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SchemItem {
-    Rect { x0: f64, y0: f64, x1: f64, y1: f64, fill: SchemColor, outline: Option<SchemColor> },
-    Line { x0: f64, y0: f64, x1: f64, y1: f64, color: SchemColor, dashed: bool, arrows: bool },
-    Text { x: f64, y: f64, text: String, anchor: Anchor, bold: bool, color: SchemColor },
+    Rect {
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        fill: SchemColor,
+        outline: Option<SchemColor>,
+    },
+    Line {
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        color: SchemColor,
+        dashed: bool,
+        arrows: bool,
+    },
+    /// A convex filled shape.
+    Polygon {
+        points: Vec<[f64; 2]>,
+        fill: SchemColor,
+    },
+    Text {
+        x: f64,
+        y: f64,
+        text: String,
+        anchor: Anchor,
+        bold: bool,
+        color: SchemColor,
+    },
 }
 
 /// A schematic (not to scale) of the line cross-section for the cross-section tab.

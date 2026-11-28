@@ -20,6 +20,28 @@ pub enum MeshMode {
     Manual,
 }
 
+/// How the etched flanks of the copper (trace and coplanar ground) are given.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EtchMode {
+    /// Vertical flanks.
+    #[default]
+    Rect,
+    /// Etch factor: copper thickness / undercut of one side.
+    Factor,
+    /// Width difference: the narrow side of a trace is this much narrower than the wide one.
+    Delta,
+}
+
+/// Which face of the copper layer is the wide one (the side on the laminate it was etched on).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WideSide {
+    #[default]
+    Bottom,
+    Top,
+}
+
 /// Parameters of the CPWG inner-layer line (field names match the Python reference).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -30,6 +52,12 @@ pub struct PlanarParams {
     pub t: f64,
     /// Distance gap edge -> via fence (coplanar ground continues beyond).
     pub g: f64,
+    // etched flanks: `w`, `s` and `g` refer to the wide face of the copper
+    pub etch: EtchMode,
+    pub etch_factor: f64,
+    /// Width of the wide face minus width of the narrow face of a trace [mm].
+    pub etch_delta: f64,
+    pub etch_wide: WideSide,
     // upper dielectric / plane 1 / fence 1
     pub h1: f64,
     pub er1: f64,
@@ -85,6 +113,10 @@ impl Default for PlanarParams {
             s: 0.11,
             t: 0.018,
             g: 1.0,
+            etch: EtchMode::Rect,
+            etch_factor: 2.0,
+            etch_delta: 0.02,
+            etch_wide: WideSide::Bottom,
             h1: 0.204,
             er1: 3.52,
             tand1: 0.02,
@@ -163,6 +195,29 @@ impl PlanarParams {
         }
         if e.t.is_nan() || e.t < 0.0 {
             return Err(TvError::InvalidParam("t must be >= 0".into()));
+        }
+        match e.etch {
+            EtchMode::Factor if e.etch_factor.is_nan() || e.etch_factor <= 0.0 => {
+                return Err(TvError::InvalidParam("etch factor must be > 0".into()));
+            }
+            EtchMode::Delta if e.etch_delta.is_nan() || e.etch_delta < 0.0 => {
+                return Err(TvError::InvalidParam("etch width difference must be >= 0".into()));
+            }
+            _ => {}
+        }
+        let u = e.undercut();
+        if e.narrow_width() <= 0.0 {
+            return Err(TvError::InvalidParam(format!(
+                "etching leaves no trace: the undercut of {:.2} um per side needs w > {:.2} um",
+                u * 1e3,
+                2.0 * u * 1e3
+            )));
+        }
+        if (e.fence1 || e.fence2) && e.g <= u {
+            return Err(TvError::InvalidParam(format!(
+                "g must be larger than the undercut of {:.2} um, or the via fences miss the coplanar ground",
+                u * 1e3
+            )));
         }
         if e.gap_props().0 <= 0.0 {
             return Err(TvError::InvalidParam("er_gap must be > 0".into()));

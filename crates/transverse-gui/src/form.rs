@@ -137,7 +137,12 @@ impl FormState {
             match f {
                 FieldState::Flag(b) => set.set(k, ParamValue::Bool(*b)),
                 FieldState::Choice(i) => set.set(k, ParamValue::Num(*i as f64)),
-                FieldState::Quantity { .. } => {}
+                // visibility conditions on a quantity only ask for zero, which is zero in every unit
+                FieldState::Quantity { text, .. } => {
+                    if text.trim().replace(',', ".").parse::<f64>() == Ok(0.0) {
+                        set.set(k, ParamValue::Num(0.0));
+                    }
+                }
             }
         }
         set
@@ -424,5 +429,17 @@ mod tests {
         // back on, the field is checked again
         f.apply_preset(&m.presets()[0]);
         assert_eq!(f.to_params(&m).unwrap_err().key, "s");
+    }
+
+    #[test]
+    fn the_etch_fields_are_hidden_for_copper_without_thickness() {
+        let m = PlanarLine;
+        let mut f = FormState::new(&m);
+        let etch = m.params().iter().find(|s| s.key == "etch").unwrap();
+        for (text, shown) in [("0", false), ("0,0", false), ("18", true), ("", true), ("abc", true)] {
+            let Some(FieldState::Quantity { text: t, .. }) = f.fields.get_mut("t") else { panic!() };
+            *t = text.to_string();
+            assert_eq!(is_visible(etch.visible_when, &f.control_set(&m)), shown, "t = '{text}'");
+        }
     }
 }

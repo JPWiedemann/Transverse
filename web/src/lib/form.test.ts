@@ -66,6 +66,21 @@ describe('form', () => {
     expect(isVisible(either, { mode: 1, plane: false })).toBe(false);
   });
 
+  it('can require a quantity to differ from zero, also while other text is unfinished', () => {
+    const f = newForm(specs, defaults, wl);
+    const key = specs.find((s) => 'Length' in s.kind)!.key;
+    const nonzero = [[{ key, value: 0, not: true }]];
+    const shown = (text: string) => {
+      f[key] = { kind: 'quantity', text, unit: 'mm' };
+      return isVisible(nonzero, controlSet({ ...defaults, [key]: 0.018 }, f));
+    };
+    expect(shown('0')).toBe(false);
+    expect(shown('0,0')).toBe(false);
+    expect(shown('18')).toBe(true);
+    expect(shown('')).toBe(true);
+    expect(shown('abc')).toBe(true);
+  });
+
   it('does not let a hidden field block, and presets keep the other fields', () => {
     const f = newForm(specs, defaults, wl);
     f.dmin = { kind: 'quantity', text: 'abc', unit: 'µm' };

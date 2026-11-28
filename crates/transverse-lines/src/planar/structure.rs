@@ -1,7 +1,7 @@
 //! The switches of the structure and what they mean: which conductors exist, where the side walls stand, how
 //! far the region of interest reaches.
 
-use super::PlanarParams;
+use super::{EtchMode, PlanarParams};
 
 impl PlanarParams {
     /// The parameters as the solvers see them, with the switches resolved:
@@ -9,6 +9,7 @@ impl PlanarParams {
     /// * `upper_same`: the upper dielectric has the permittivity and loss tangent of the lower one.
     /// * no upper half: air above the copper, without ground plane 1 and via fence 1. The height `h1` then has
     ///   no physical meaning; it only steers mesh and domain sizes and takes the value of `h2`.
+    /// * copper without thickness has no flanks to etch.
     /// * via fences stand on the coplanar ground; without it there are only the side walls from plane to plane.
     ///
     /// Applying it again changes nothing.
@@ -22,6 +23,9 @@ impl PlanarParams {
             e.h1 = e.h2;
             (e.plane1, e.fence1) = (false, false);
         }
+        if e.t.is_nan() || e.t <= 0.0 {
+            e.etch = EtchMode::Rect;
+        }
         if e.coplanar {
             e.side_walls = false;
         } else {
@@ -29,6 +33,28 @@ impl PlanarParams {
             e.side_walls &= e.plane1 && e.plane2;
         }
         e
+    }
+
+    /// How far each etched flank leans [mm]: the horizontal distance between its bottom and top edge, by which
+    /// the narrow face of a trace is set back on each side. 0 for vertical flanks.
+    pub fn undercut(&self) -> f64 {
+        let e = self.effective();
+        match e.etch {
+            EtchMode::Rect => 0.0,
+            EtchMode::Factor => e.t / e.etch_factor,
+            EtchMode::Delta => e.etch_delta / 2.0,
+        }
+    }
+
+    /// Width of the narrow face of the trace [mm] (`w` for vertical flanks).
+    pub fn narrow_width(&self) -> f64 {
+        self.w - 2.0 * self.undercut()
+    }
+
+    /// Angle between an etched flank and the wide face [deg]: 90 for vertical flanks.
+    pub fn flank_angle_deg(&self) -> f64 {
+        let u = self.undercut();
+        if u > 0.0 { self.t.atan2(u).to_degrees() } else { 90.0 }
     }
 
     /// Side walls from plane to plane, `g` outside the trace edges (only without a coplanar ground).
@@ -62,7 +88,14 @@ impl PlanarParams {
     /// fences; without coplanar ground and walls a region around the trace that holds most of its field.
     pub fn core_half_width(&self) -> f64 {
         let e = self.effective();
-        if e.coplanar || e.side_walls { e.wall_x() } else { e.w / 2.0 + e.w.max(2.0 * e.h1.max(e.h2)) }
+        if e.coplanar && !(e.fence1 || e.fence2) {
+            // without fences g only sizes this region, which has to hold the whole etched edge of the ground
+            e.inner_half_width() + e.g.max(2.0 * e.undercut())
+        } else if e.coplanar || e.side_walls {
+            e.wall_x()
+        } else {
+            e.w / 2.0 + e.w.max(2.0 * e.h1.max(e.h2))
+        }
     }
 
     /// Short name of the structure, for reports.

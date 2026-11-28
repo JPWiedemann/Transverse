@@ -11,33 +11,50 @@ impl PlanarParams {
     /// The structure with every metal surface moved by `d` into its metal (`d < 0`: out of it), as new
     /// dimensions. The heights h1 and h2 are measured from the copper surfaces, which move as well, so a plane
     /// that recedes gets `2 d` further from a thick copper layer (`d` from a zero-thickness one, whose faces
-    /// cannot move). Via fences keep their distance g: they recede with the coplanar-ground edge.
+    /// cannot move). Via fences and side walls are vertical and move by `d` as well.
+    ///
+    /// A surface moves along its normal, so an etched flank keeps its angle `a` to the wide face. With both
+    /// faces and the flank moved by `d`, the wide edge moves sideways by `k d` with `k = cot(a / 2)`, which is
+    /// 1 for a vertical flank: `w - 2 k d` and `s + 2 k d`. The undercut shrinks with the thickness.
     pub fn walls_receded(&self, d: f64) -> Self {
         let thick = self.t > 0.0;
         let plane = if thick { 2.0 * d } else { d };
+        let t = if thick { (self.t - 2.0 * d).max(0.0) } else { 0.0 };
+        let k = self.edge_shift_ratio();
+        // a side wall is measured from the trace edge (which moves by -k d, the wall by +d), a fence on the
+        // coplanar ground from the ground edge (which moves by +k d)
+        let g = if self.has_walls() { self.g + d * (1.0 + k) } else { self.g - d * (k - 1.0) };
         Self {
-            w: self.w - 2.0 * d,
-            s: self.s + 2.0 * d,
-            t: if thick { (self.t - 2.0 * d).max(0.0) } else { 0.0 },
+            w: self.w - 2.0 * k * d,
+            s: self.s + 2.0 * k * d,
+            t,
+            etch_delta: if thick { self.etch_delta * t / self.t } else { self.etch_delta },
             h1: if self.plane1 { self.h1 + plane } else { self.h1 },
             h2: if self.plane2 { self.h2 + plane } else { self.h2 },
-            // a side wall is measured from the trace edge, which moves by -d
-            g: if self.has_walls() { self.g + 2.0 * d } else { self.g },
+            g,
             ..self.clone()
         }
+    }
+
+    /// `k` of [`Self::walls_receded`]: how far a wide copper edge moves sideways per distance the surfaces
+    /// recede.
+    fn edge_shift_ratio(&self) -> f64 {
+        let u = self.undercut();
+        if u > 0.0 { (self.t.hypot(u) + u) / self.t } else { 1.0 }
     }
 }
 
 /// The wall shift of the difference quotient [mm], relative to the geometry.
 pub(super) fn wheeler_step(p: &PlanarParams) -> f64 {
-    let mut dn = p.w / 20.0;
+    let mut dn = p.narrow_width() / 20.0;
     if p.coplanar {
         dn = dn.min(p.s / 20.0);
     }
     if p.t > 0.0 {
         dn = dn.min(p.t / 8.0);
     }
-    dn
+    // with flat flanks the edges move further than the surfaces
+    dn / p.edge_shift_ratio()
 }
 
 /// dZ0_air/dn [Ohm/m] with the same mesh settings and domain as `sol`.
@@ -93,6 +110,70 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The corners of the trace and of the right coplanar ground, wide edge first, with the bottom of the
+    /// copper at `y0`.
+    fn flank_corners(p: &PlanarParams, y0: f64) -> [[[f64; 2]; 2]; 2] {
+        let stack = p.stackup();
+        let layer = &stack.layers[0];
+        let corner = |f: f64, x: f64| {
+            let i = layer.inset[0] + f * (layer.inset[1] - layer.inset[0]);
+            [x, i, y0 + f * p.t]
+        };
+        let wide = if layer.inset[0] == 0.0 { 0.0 } else { 1.0 };
+        let [trace, ground] = [(p.w / 2.0, -1.0), (p.w / 2.0 + p.s, 1.0)].map(|(x, sign)| {
+            [wide, 1.0 - wide].map(|f| {
+                let [x, i, y] = corner(f, x);
+                [x + sign * i, y]
+            })
+        });
+        [trace, ground]
+    }
+
+    #[test]
+    fn etched_flanks_recede_along_their_normals() {
+        use crate::planar::{EtchMode, WideSide};
+        let d = 1e-4;
+        for (etch, etch_wide) in [
+            (EtchMode::Factor, WideSide::Bottom),
+            (EtchMode::Factor, WideSide::Top),
+            (EtchMode::Delta, WideSide::Bottom),
+            (EtchMode::Delta, WideSide::Top),
+        ] {
+            // flat flanks (30 deg to 60 deg) make the difference to the vertical rule large
+            let p =
+                PlanarParams { etch, etch_wide, etch_factor: 0.7, etch_delta: 0.05, ..Default::default() };
+            let q = p.walls_receded(d);
+            assert!((q.flank_angle_deg() - p.flank_angle_deg()).abs() < 1e-9, "the angle stays");
+            let (before, after) = (flank_corners(&p, 0.0), flank_corners(&q, d));
+            for (k, into_metal) in [(0, -1.0), (1, 1.0)] {
+                let [a, b] = before[k];
+                let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+                let mut n = [(b[1] - a[1]) / len, -(b[0] - a[0]) / len];
+                if n[0] * into_metal < 0.0 {
+                    n = [-n[0], -n[1]];
+                }
+                for c in after[k] {
+                    let moved = (c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1];
+                    assert!((moved - d).abs() < 1e-12, "{etch:?} {etch_wide:?} piece {k}: {moved}");
+                }
+            }
+            // the top and the bottom face move by d towards each other
+            assert!((q.t - (p.t - 2.0 * d)).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn walls_next_to_etched_copper_move_by_d() {
+        use crate::planar::EtchMode;
+        let d = 1e-4;
+        let base = PlanarParams { etch: EtchMode::Factor, etch_factor: 0.7, ..Default::default() };
+        let q = base.walls_receded(d);
+        assert!((q.wall_x() - (base.wall_x() + d)).abs() < 1e-15, "fence on the coplanar ground");
+        let p = PlanarParams { coplanar: false, side_walls: true, ..base };
+        let q = p.walls_receded(d);
+        assert!((q.wall_x() - (p.wall_x() + d)).abs() < 1e-15, "side wall");
     }
 
     #[test]

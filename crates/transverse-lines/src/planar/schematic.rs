@@ -1,6 +1,6 @@
 //! Sketch of the CPWG cross-section (not to scale), ported from the Python tool's canvas drawing.
 
-use super::{GapMode, PlanarParams};
+use super::{GapMode, PlanarParams, WideSide};
 use crate::model::{Anchor, SchemColor, SchemItem, Schematic};
 
 /// What the sketch shows (all other parameters do not change the picture).
@@ -16,6 +16,8 @@ pub struct SchematicFlags {
     pub fence1: bool,
     pub fence2: bool,
     pub gap_mode: GapMode,
+    /// Etched flanks, with the face that is the wide one.
+    pub etched: Option<WideSide>,
 }
 
 impl SchematicFlags {
@@ -32,6 +34,7 @@ impl SchematicFlags {
             fence1: e.fence1,
             fence2: e.fence2,
             gap_mode: e.gap_mode,
+            etched: (e.undercut() > 0.0).then_some(e.etch_wide),
         }
     }
 }
@@ -85,11 +88,32 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         line(&mut it, x0, yb, x1, yb, Muted, true, false);
         text(&mut it, 330.0, yb + 22.0, "no ground plane 2  (air)", Anchor::Center, false, Muted);
     }
+    // how far the flanks lean in the sketch (exaggerated), at the top and at the bottom face
+    let lean = 10.0;
+    let (lean_top, lean_bottom) = match f.etched {
+        Some(WideSide::Bottom) => (lean, 0.0),
+        Some(WideSide::Top) => (0.0, lean),
+        None => (0.0, 0.0),
+    };
+    // a piece of copper from `a` to `b` at the wide face; `flank` tells which of its sides are etched
+    let copper = |it: &mut Vec<SchemItem>, a: f64, b: f64, flank: [bool; 2], fill| {
+        if f.etched.is_none() {
+            return rect(it, a, yc, b, y2, fill, None);
+        }
+        let at = |on: bool, i: f64| if on { i } else { 0.0 };
+        let points = vec![
+            [a + at(flank[0], lean_top), yc],
+            [b - at(flank[1], lean_top), yc],
+            [b - at(flank[1], lean_bottom), y2],
+            [a + at(flank[0], lean_bottom), y2],
+        ];
+        it.push(SchemItem::Polygon { points, fill });
+    };
     if f.coplanar {
-        rect(&mut it, x0, yc, cx - hw - s, y2, Conductor, None);
-        rect(&mut it, cx + hw + s, yc, x1, y2, Conductor, None);
+        copper(&mut it, x0, cx - hw - s, [false, true], Conductor);
+        copper(&mut it, cx + hw + s, x1, [true, false], Conductor);
     }
-    rect(&mut it, cx - hw, yc, cx + hw, y2, Signal, None);
+    copper(&mut it, cx - hw, cx + hw, [true, true], Signal);
     for xv in [xf0, xf1] {
         if f.fence1 {
             rect(&mut it, xv - 4.0, y1, xv + 4.0, yc, Conductor, Some(ConductorEdge));
@@ -126,6 +150,8 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
 
     // dimensions
     let ya = yc - 14.0;
+    // w, s and g refer to the wide face
+    let y_wide = if f.etched == Some(WideSide::Bottom) { y2 } else { yc };
     // the edges next to the trace: the gap edges of a coplanar ground, or the trace edges alone
     let spans: &[(f64, f64, &str)] = if f.coplanar {
         &[(cx - hw - s, cx - hw, "s"), (cx - hw, cx + hw, "w"), (cx + hw, cx + hw + s, "s")]
@@ -136,13 +162,14 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         line(&mut it, xa, ya, xb, ya, Text, false, true);
         text(&mut it, (xa + xb) / 2.0, ya - 9.0, lab, Anchor::Center, false, Text);
         for xv in [xa, xb] {
-            line(&mut it, xv, ya - 6.0, xv, yc, Muted, true, false);
+            line(&mut it, xv, ya - 6.0, xv, y_wide, Muted, true, false);
         }
     }
     if f.fence1 || f.fence2 || f.side_walls {
         let inner = if f.coplanar { cx + hw + s } else { cx + hw };
         let yg = y2 + 34.0;
-        line(&mut it, inner, y2, inner, yg + 4.0, Muted, true, false);
+        let from = if f.etched == Some(WideSide::Top) { yc } else { y2 };
+        line(&mut it, inner, from, inner, yg + 4.0, Muted, true, false);
         line(&mut it, xf1, y2, xf1, yg + 4.0, Muted, true, false);
         line(&mut it, inner, yg, xf1, yg, Text, false, true);
         text(&mut it, (inner + xf1) / 2.0, yg - 9.0, "g", Anchor::Center, false, Text);
@@ -201,6 +228,7 @@ mod tests {
             fence1,
             fence2,
             gap_mode,
+            etched: None,
         }
     }
 
@@ -217,6 +245,7 @@ mod tests {
                     (vec![*x0, *x1], vec![*y0, *y1])
                 }
                 SchemItem::Text { x, y, .. } => (vec![*x], vec![*y]),
+                SchemItem::Polygon { points, .. } => points.iter().map(|p| (p[0], p[1])).unzip(),
             };
             assert!(
                 xs.iter().all(|x| (0.0..=s.width).contains(x))
@@ -295,6 +324,34 @@ mod tests {
         );
         assert!(s.items.iter().any(|i| matches!(i, SchemItem::Text { text, .. }
             if text == "Upper dielectric:  h1, er2, tan d2 (as lower)")));
+    }
+
+    #[test]
+    fn etched_copper_is_drawn_as_trapezoids_with_the_wide_face_as_selected() {
+        for (side, wide_y) in [(WideSide::Bottom, 176.0), (WideSide::Top, 162.0)] {
+            let s = schematic(&SchematicFlags {
+                etched: Some(side),
+                ..flags(true, true, true, true, GapMode::Upper)
+            });
+            let signal = s
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    SchemItem::Polygon { points, fill: SchemColor::Signal } => Some(points.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let width = |y: f64| {
+                let x: Vec<f64> = signal.iter().filter(|p| p[1] == y).map(|p| p[0]).collect();
+                (x[0] - x[1]).abs()
+            };
+            let narrow_y = 162.0 + 176.0 - wide_y;
+            assert!(width(wide_y) > width(narrow_y), "{side:?}");
+            // the extension lines of w and s end on the wide face
+            assert!(s.items.iter().any(|i| matches!(i, SchemItem::Line { y0, y1, dashed: true, .. }
+                if *y0 == 142.0 && *y1 == wide_y)));
+            assert_eq!(count(&s, |i| matches!(i, SchemItem::Polygon { .. })), 3);
+        }
     }
 
     #[test]

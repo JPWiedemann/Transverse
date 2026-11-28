@@ -427,7 +427,8 @@
             {/if}
             {#if info}
               {#each info.conductors as c}
-                <rect x={px(Math.min(c.x0, c.x1))} y={py(Math.max(c.y0, c.y1))} width={Math.abs(c.x1 - c.x0) * view.ppm} height={Math.abs(c.y1 - c.y0) * view.ppm} fill={COPPER} class="cond" />
+                {@const top = c.top ?? [c.x0, c.x1]}
+                <polygon points="{px(c.x0)},{py(c.y0)} {px(c.x1)},{py(c.y0)} {px(top[1])},{py(c.y1)} {px(top[0])},{py(c.y1)}" fill={COPPER} class="cond" />
               {/each}
               {#each info.dashed_y as y}
                 <line x1={px(gridBox[0])} x2={px(gridBox[1])} y1={py(y)} y2={py(y)} class="guide dashed" />

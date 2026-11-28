@@ -4,9 +4,9 @@ use transverse_core::units::format_g;
 use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
-    DEFAULT_RTOL, GapMode, GroundCat, MeshMode, PlanarFemAnalysis, PlanarParams, SchematicFlags, Shares,
-    Split, SynthVar, fem_accuracy, field_data_fem, full_analysis_fem, ground_split_fem, loss_model_fem,
-    report_fem, schematic, synthesize_fem,
+    DEFAULT_RTOL, EtchMode, GapMode, GroundCat, MeshMode, PlanarFemAnalysis, PlanarParams, SchematicFlags,
+    Shares, Split, SynthVar, WideSide, fem_accuracy, field_data_fem, full_analysis_fem, ground_split_fem,
+    loss_model_fem, report_fem, schematic, synthesize_fem,
 };
 use crate::model::*;
 use transverse_core::losses::LossModel;
@@ -31,8 +31,11 @@ const fn when(mut s: ParamSpec, visible_when: Visibility) -> ParamSpec {
 }
 
 const fn is(key: &'static str, value: usize) -> Condition {
-    Condition { key, value }
+    Condition { key, value, not: false }
 }
+
+/// Copper has a thickness, and with it flanks that can be etched.
+const THICK: Condition = Condition { key: "t", value: 0, not: true };
 
 const COPLANAR: Visibility = &[&[is("coplanar", 1)]];
 const UPPER: Visibility = &[&[is("upper", 1)]];
@@ -45,6 +48,10 @@ const FENCE_DISTANCE: Visibility = &[
     &[is("coplanar", 1), is("fence2", 1)],
     &[is("coplanar", 0), is("upper", 1), is("plane1", 1), is("plane2", 1), is("side_walls", 1)],
 ];
+const ETCHING: Visibility = &[&[THICK]];
+const ETCHED: Visibility = &[&[THICK, is("etch", 1)], &[THICK, is("etch", 2)]];
+const ETCH_FACTOR: Visibility = &[&[THICK, is("etch", 1)]];
+const ETCH_DELTA: Visibility = &[&[THICK, is("etch", 2)]];
 const CUSTOM_GAP: Visibility = &[&[is("gap_mode", 2)]];
 const MANUAL_MESH: Visibility = &[&[is("mesh_mode", 1)]];
 
@@ -61,15 +68,21 @@ const fn num(default: f64, unit: &'static str) -> ParamKind {
 }
 
 const GAP_CHOICES: &[&str] = &["upper (or air)", "lower", "custom"];
+const ETCH_CHOICES: &[&str] = &["Rectangular", "Etch factor", "Width difference"];
+const WIDE_CHOICES: &[&str] = &["bottom", "top"];
 const MESH_CHOICES: &[&str] = &["Auto (target error)", "Manual"];
 
 /// Parameter form of the planar line (defaults equal [`PlanarParams::default`]).
-static SPECS: [ParamSpec; 31] = [
+static SPECS: [ParamSpec; 35] = [
     spec("coplanar", "Coplanar ground", STRUCTURE, ParamKind::Bool(true)),
     spec("upper", "Upper half (else air above)", STRUCTURE, ParamKind::Bool(true)),
     spec("w", "Trace width w", GEO, len(0.3605, "mm")),
     when(spec("s", "Gap s", GEO, len(0.11, "mm")), COPLANAR),
     spec("t", "Copper thickness t", GEO, len(0.018, "µm")),
+    when(spec("etch", "Etched flanks", GEO, ParamKind::Choice(ETCH_CHOICES, 0)), ETCHING),
+    when(spec("etch_factor", "Etch factor (t / undercut per side)", GEO, num(2.0, "")), ETCH_FACTOR),
+    when(spec("etch_delta", "Width difference (wide - narrow)", GEO, len(0.02, "µm")), ETCH_DELTA),
+    when(spec("etch_wide", "Wide side (w, s, g are there)", GEO, ParamKind::Choice(WIDE_CHOICES, 0)), ETCHED),
     when(spec("side_walls", "Via fences (plane to plane)", GEO, ParamKind::Bool(false)), SIDE_WALLS),
     when(spec("g", "Via fence distance g", GEO, len(1.0, "mm")), FENCE_DISTANCE),
     when(spec("upper_same", "Same er, tan d as lower", UP, ParamKind::Bool(false)), UPPER),
@@ -164,6 +177,8 @@ impl PlanarParams {
         let d = Self::default();
         let gap_mode = [GapMode::Upper, GapMode::Lower, GapMode::Custom][get_choice(s, "gap_mode", 0, 3)?];
         let mesh_mode = [MeshMode::Auto, MeshMode::Manual][get_choice(s, "mesh_mode", 0, 2)?];
+        let etch = [EtchMode::Rect, EtchMode::Factor, EtchMode::Delta][get_choice(s, "etch", 0, 3)?];
+        let etch_wide = [WideSide::Bottom, WideSide::Top][get_choice(s, "etch_wide", 0, 2)?];
         let max_nodes = get_num(s, "max_nodes", d.max_nodes as f64)?;
         if max_nodes < 1.0 || max_nodes.fract() != 0.0 {
             return Err(TvError::InvalidParam("max_nodes must be a positive integer".into()));
@@ -173,6 +188,10 @@ impl PlanarParams {
             s: get_num(s, "s", d.s)?,
             t: get_num(s, "t", d.t)?,
             g: get_num(s, "g", d.g)?,
+            etch,
+            etch_factor: get_num(s, "etch_factor", d.etch_factor)?,
+            etch_delta: get_num(s, "etch_delta", d.etch_delta)?,
+            etch_wide,
             h1: get_num(s, "h1", d.h1)?,
             er1: get_num(s, "er1", d.er1)?,
             tand1: get_num(s, "tand1", d.tand1)?,
@@ -213,6 +232,8 @@ impl PlanarParams {
             ("s", self.s),
             ("t", self.t),
             ("g", self.g),
+            ("etch_factor", self.etch_factor),
+            ("etch_delta", self.etch_delta),
             ("h1", self.h1),
             ("er1", self.er1),
             ("tand1", self.tand1),
@@ -247,6 +268,8 @@ impl PlanarParams {
         }
         s.set("gap_mode", Num(self.gap_mode as usize as f64));
         s.set("mesh_mode", Num(self.mesh_mode as usize as f64));
+        s.set("etch", Num(self.etch as usize as f64));
+        s.set("etch_wide", Num(self.etch_wide as usize as f64));
         s
     }
 }
@@ -456,6 +479,8 @@ impl LineModel for PlanarLine {
     fn schematic(&self, p: &ParamSet) -> Option<Schematic> {
         let d = PlanarParams::default();
         let flag = |key, value| get_flag(p, key, value).ok();
+        let etched = get_choice(p, "etch", 0, 3).ok()? != 0 && p.num("t").ok() != Some(0.0);
+        let wide = [WideSide::Bottom, WideSide::Top][get_choice(p, "etch_wide", 0, 2).ok()?];
         let params = PlanarParams {
             coplanar: flag("coplanar", d.coplanar)?,
             upper: flag("upper", d.upper)?,
@@ -469,7 +494,7 @@ impl LineModel for PlanarLine {
                 [get_choice(p, "gap_mode", 0, 3).ok()?],
             ..d
         };
-        Some(schematic(&SchematicFlags::of(&params)))
+        Some(schematic(&SchematicFlags { etched: etched.then_some(wide), ..SchematicFlags::of(&params) }))
     }
 
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis> {

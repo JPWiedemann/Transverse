@@ -9,7 +9,7 @@ use transverse_geom::{
     ConductorId, CrossSection, GROUND, Item, Material, MaterialId, Paint, SIGNAL, Shape, Tag,
 };
 
-use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, C_SIG, PlanarParams};
+use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, C_SIG, PlanarParams, WideSide};
 
 /// Materials of a cross-section, by index.
 pub const MAT_AIR: MaterialId = 0;
@@ -38,6 +38,9 @@ pub struct CopperLayer {
     /// Bottom of the layer and its thickness (0: conductors without thickness).
     pub y0: f64,
     pub t: f64,
+    /// Etched flanks: how far the bottom and the top face of every conductor are set back from the positions
+    /// below, which are those of the wide face. A trace gets narrower, a coplanar ground recedes from it.
+    pub inset: [f64; 2],
     /// Material beside the conductors.
     pub fill: MaterialId,
     pub traces: Vec<Trace>,
@@ -65,14 +68,25 @@ pub struct Stackup {
     pub walls: Vec<WallSpan>,
 }
 
+impl CopperLayer {
+    /// The positions in x of the copper edges of this layer at the fraction `f` of its thickness (0 bottom,
+    /// 1 top), in no particular order.
+    pub fn edges_x(&self, f: f64) -> impl Iterator<Item = f64> + '_ {
+        let i = self.inset[0] + f * (self.inset[1] - self.inset[0]);
+        let traces = self.traces.iter().flat_map(move |t| [t.x0 + i, t.x1 - i]);
+        traces.chain(self.ground.into_iter().flat_map(move |[left, right]| [left - i, right + i]))
+    }
+}
+
 impl Stackup {
-    /// The positions in x of all copper edges, in ascending order.
+    /// The positions in x of all copper edges, in ascending order; of etched copper at the bottom faces.
     pub fn copper_edges_x(&self) -> Vec<f64> {
-        let mut x: Vec<f64> = self
-            .layers
-            .iter()
-            .flat_map(|l| l.traces.iter().flat_map(|t| [t.x0, t.x1]).chain(l.ground.into_iter().flatten()))
-            .collect();
+        self.copper_edges_x_at(0.0)
+    }
+
+    /// As [`Self::copper_edges_x`] at the fraction `f` of the copper thickness (see [`CopperLayer::edges_x`]).
+    pub fn copper_edges_x_at(&self, f: f64) -> Vec<f64> {
+        let mut x: Vec<f64> = self.layers.iter().flat_map(|l| l.edges_x(f)).collect();
         x.sort_by(f64::total_cmp);
         x.dedup();
         x
@@ -114,20 +128,31 @@ impl Stackup {
             }
         }
         for layer in &self.layers {
-            // a piece of copper between a and b: a rectangle, or a line without thickness
-            let piece = |a: f64, b: f64| {
-                if layer.t > 0.0 {
-                    Shape::rect(a, layer.y0, b, layer.y0 + layer.t)
+            // a piece of copper between a and b: a rectangle, a trapezoid where a side is an etched flank, or a
+            // line without thickness
+            let piece = |a: f64, b: f64, flank_a: bool, flank_b: bool| {
+                let (bottom, top) = (layer.y0, layer.y0 + layer.t);
+                let [ib, it] = layer.inset;
+                let at = |flank: bool, i: f64| if flank { i } else { 0.0 };
+                if layer.t <= 0.0 {
+                    Shape::segment([a, bottom], [b, bottom])
+                } else if ib == it {
+                    Shape::rect(a, bottom, b, top)
                 } else {
-                    Shape::segment([a, layer.y0], [b, layer.y0])
+                    Shape::Polygon(vec![
+                        [a + at(flank_a, ib), bottom],
+                        [b - at(flank_b, ib), bottom],
+                        [b - at(flank_b, it), top],
+                        [a + at(flank_a, it), top],
+                    ])
                 }
             };
             if let Some([left, right]) = layer.ground {
-                items.push(cond(piece(right, x1), GROUND, C_COP));
-                items.push(cond(piece(x0, left), GROUND, C_COP));
+                items.push(cond(piece(right, x1, true, false), GROUND, C_COP));
+                items.push(cond(piece(x0, left, false, true), GROUND, C_COP));
             }
             for t in &layer.traces {
-                items.push(cond(piece(t.x0, t.x1), t.signal, C_SIG));
+                items.push(cond(piece(t.x0, t.x1, true, true), t.signal, C_SIG));
             }
         }
         CrossSection {
@@ -153,9 +178,14 @@ impl PlanarParams {
         ];
         let (ytop, ybot) = (p.t + p.h1, -p.h2);
         let half = p.w / 2.0;
+        let u = p.undercut();
         let layer = CopperLayer {
             y0: 0.0,
             t: p.t,
+            inset: match p.etch_wide {
+                WideSide::Bottom => [0.0, u],
+                WideSide::Top => [u, 0.0],
+            },
             fill: MAT_GAP,
             traces: vec![Trace { x0: -half, x1: half, signal: SIGNAL }],
             ground: p.coplanar.then(|| [-(half + p.s), half + p.s]),
