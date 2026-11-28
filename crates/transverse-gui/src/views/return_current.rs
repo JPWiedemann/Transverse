@@ -29,10 +29,24 @@ fn y_top(split: &SplitSummary, limit: f64) -> f64 {
     if m > 0.0 { 1.15 * m } else { 1.0 }
 }
 
+/// Lower limit of the plot for `x0..x1`: 0, or 15 % below the smallest value there if the current has both signs
+/// (the odd mode of a pair). Values that are negative only by a trace do not count.
+pub fn y_bottom(split: &SplitSummary, x0: f64, x1: f64) -> f64 {
+    let (mut low, mut high) = (0.0f64, 0.0f64);
+    for p in &split.profiles {
+        for (x, j) in p.x.iter().zip(&p.j) {
+            if *x >= x0 && *x <= x1 && j.is_finite() {
+                (low, high) = (low.min(*j), high.max(*j));
+            }
+        }
+    }
+    if -low > 0.02 * high { 1.15 * low } else { 0.0 }
+}
+
 /// The view the plot starts with and "Signal region" returns to: the Python plot's x range.
 pub fn fit_bounds(split: &SplitSummary) -> Bounds {
     let hw = split.plot.half_width;
-    [-hw, hw, 0.0, y_top(split, hw)]
+    [-hw, hw, y_bottom(split, -hw, hw), y_top(split, hw)]
 }
 
 /// Everything the profiles contain.
@@ -42,7 +56,7 @@ pub fn all_bounds(split: &SplitSummary) -> Bounds {
         .iter()
         .flat_map(|p| p.x.iter().copied())
         .fold((f64::INFINITY, f64::NEG_INFINITY), |a, x| (a.0.min(x), a.1.max(x)));
-    if lo < hi { [lo, hi, 0.0, y_top(split, f64::INFINITY)] } else { fit_bounds(split) }
+    if lo < hi { [lo, hi, y_bottom(split, lo, hi), y_top(split, f64::INFINITY)] } else { fit_bounds(split) }
 }
 
 /// Top of the y range that fits the curves inside `x0..x1`: 15 % above their maximum there,
@@ -136,7 +150,7 @@ impl ReturnView {
         ui.horizontal(|ui| {
             if ui.button("Fit y").on_hover_text("keep the x range, scale y to the curves in it").clicked() {
                 let [x0, x1, ..] = self.bounds.unwrap_or_else(|| fit_bounds(split));
-                self.pending = Some([x0, x1, 0.0, y_fit(split, x0, x1)]);
+                self.pending = Some([x0, x1, y_bottom(split, x0, x1), y_fit(split, x0, x1)]);
             }
             if ui
                 .button("Signal region")
@@ -154,7 +168,7 @@ impl ReturnView {
         // x in a length unit that suits the visible range, J_s/I per that unit
         let span = self.bounds.map_or(2.0 * split.plot.half_width, |b| b[1] - b[0]);
         let (unit, uf) = auto_length_unit(units, span);
-        let ymax = fit_bounds(split)[3];
+        let [_, _, ymin, ymax] = fit_bounds(split);
         let hw = split.plot.half_width;
         let pending = self.pending.take();
         let plot = Plot::new(("return_current", generation))
@@ -167,14 +181,14 @@ impl ReturnView {
             .y_grid_spacer(uniform_grid_spacer(move |g| grid_steps_mm(g.base_step_size, 1.0 / uf)))
             .y_axis_min_width(60.0)
             .default_x_bounds(-hw, hw)
-            .default_y_bounds(0.0, ymax);
+            .default_y_bounds(ymin, ymax);
         let resp = nav::configure(plot).show(ui, |pui| {
             nav::wheel_zoom(pui);
             if let Some(v) = pending {
                 pui.set_plot_bounds(PlotBounds::from_min_max([v[0], v[2]], [v[1], v[3]]));
             }
-            if let Some([a, b]) = split.plot.signal {
-                let pts = vec![[a, 0.0], [b, 0.0], [b, ymax], [a, ymax]];
+            for &[a, b] in &split.plot.signals {
+                let pts = vec![[a, ymin], [b, ymin], [b, ymax], [a, ymax]];
                 pui.polygon(
                     Polygon::new("", PlotPoints::from(pts))
                         .fill_color(Color32::from_rgba_unmultiplied(31, 119, 180, 24))
@@ -316,6 +330,21 @@ mod tests {
         // nothing visible -> a sane default
         split.profiles.clear();
         assert_eq!(y_fit(&split, 0.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn currents_of_both_signs_are_inside_the_plot() {
+        // the odd mode of a pair: antisymmetric
+        let odd =
+            CurrentProfile { x: vec![-1.0, -0.5, 0.5, 1.0], j: vec![1.0, 3.0, -3.0, -1.0], ..profile(false) };
+        let mut split = SplitSummary { profiles: vec![odd], ..Default::default() };
+        split.plot.half_width = 1.5;
+        assert_eq!(fit_bounds(&split), [-1.5, 1.5, -1.15 * 3.0, 1.15 * 3.0]);
+        assert_eq!(all_bounds(&split)[2], -1.15 * 3.0);
+        assert_eq!(y_bottom(&split, -1.0, 0.0), 0.0, "only the positive half is visible");
+        // a trace of negative noise does not open the lower half
+        split.profiles[0].j = vec![1.0, 3.0, 2.0, -0.01];
+        assert_eq!(fit_bounds(&split)[2], 0.0);
     }
 
     #[test]

@@ -24,7 +24,6 @@ use transverse_lines::render::raster::{FieldMode, Legend, RasterSpec, nice_ticks
 const COPPER: Color32 = Color32::from_rgb(0xc8, 0x75, 0x33);
 const LINE_BLUE: Color32 = Color32::from_rgb(0x9f, 0xd3, 0xff);
 const BAR_WIDTH: f32 = 110.0;
-const EQUIPOTENTIALS: [f64; 9] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 /// The image extends this fraction of the visible size beyond each edge.
 const MARGIN: f64 = 0.25;
 /// Re-render when the visible width changed by more than this factor since the last render.
@@ -218,7 +217,8 @@ impl FieldView {
             self.e = Some((gen_, f.e_field(false)));
         }
         if self.eq.as_ref().is_none_or(|(g, _)| *g != gen_) {
-            let segs = f.equipotentials(&EQUIPOTENTIALS).into_iter().flat_map(|(_, s)| s).collect();
+            let levels = f.equipotential_levels();
+            let segs = f.equipotentials(&levels).into_iter().flat_map(|(_, s)| s).collect();
             self.eq = Some((gen_, segs));
         }
         let key = (gen_, self.mode, if self.mode.is_db() { self.db_range.to_bits() } else { 0 }, units);
@@ -307,7 +307,7 @@ impl FieldView {
         let (unit, unit_f) = self.length_unit(f, units);
 
         // title: always two lines, so showing the mesh info does not resize the plot
-        let mut title = format!("{}  -  1 V on signal, Z0 = {:.2} Ohm\n", self.mode.label(), f.z0);
+        let mut title = format!("{}  -  {}\n", self.mode.label(), f.drive);
         match (show_mesh, acc) {
             (true, Some(a)) => {
                 // the shortest edge of a triangle mesh is far below the size of the view: its own unit

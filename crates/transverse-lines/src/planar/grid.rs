@@ -148,11 +148,15 @@ impl GridSource for PlanarParams {
         let mut feat = vec![w / 60.0, hmin / 60.0];
         let mut narrowest = w.min(hmin);
         // the width of the copper layer the core cells have to resolve: strip and gaps, or three strip widths
-        let mut across = 3.0 * p.w;
+        let mut across = (3.0 * p.w).max(p.trace_span());
         if p.coplanar {
             feat.push(p.s / 30.0);
             narrowest = narrowest.min(p.s);
-            across = p.w + 2.0 * p.s;
+            across = p.trace_span() + 2.0 * p.s;
+        }
+        if p.pair() {
+            feat.push(p.d / 30.0);
+            narrowest = narrowest.min(p.d);
         }
         if p.t > 0.0 {
             feat.push(p.t / 6.0);
@@ -169,7 +173,7 @@ impl GridSource for PlanarParams {
 
     fn initial_margin(&self) -> f64 {
         let p = self.effective();
-        let mut m = (4.0 * p.h1.max(p.h2)).max(p.w + 2.0 * p.gap_or_zero());
+        let mut m = (4.0 * p.h1.max(p.h2)).max(p.trace_span() + 2.0 * p.gap_or_zero());
         if !(p.plane1 && p.plane2) && p.coplanar {
             m = m.max(p.wall_x());
         }

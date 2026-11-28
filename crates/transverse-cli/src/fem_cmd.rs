@@ -4,8 +4,9 @@ use std::time::Instant;
 
 use transverse_core::Ctl;
 use transverse_core::NP2DB;
+use transverse_core::losses::LossModel;
 use transverse_lines::planar::{
-    GroundCat, PlanarFemAnalysis, PlanarParams, analyze, analyze_fem, full_analysis_fem,
+    GroundCat, PlanarFemAnalysis, PlanarParams, Split, analyze, analyze_fem, full_analysis_fem,
 };
 
 fn progress() -> Ctl {
@@ -23,11 +24,13 @@ fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
             p.flank_angle_deg()
         );
     }
-    println!("Z0              = {:8.3} Ohm", s.z0);
-    println!("eps_eff         = {:8.4}", s.eeff);
-    println!("L'              = {:8.4} nH/mm", s.l * 1e6);
-    println!("C'              = {:8.4} pF/mm", s.c * 1e9);
-    println!("G'/omega        = {:8.4} pF/mm", s.g_over_omega * 1e9);
+    if let (Some(common), Some(coupling)) = (s.common_impedance(), s.coupling()) {
+        println!("Zdiff           = {:8.3} Ohm", s.target_impedance());
+        println!("Zcomm           = {common:8.3} Ohm");
+        println!("Coupling        = {coupling:8.4}");
+    } else {
+        print_values(s.z0, s.eeff, s.l, s.c, s.g_over_omega);
+    }
     let levels: Vec<String> =
         s.accuracy.nodes.iter().zip(s.accuracy.z0()).map(|(n, z)| format!("{n} nodes: {z:.4}")).collect();
     println!("Mesh levels     : {}", levels.join(", "));
@@ -37,20 +40,44 @@ fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
     if s.margin > 0.0 {
         println!("Domain          : open structure, extension {:.3} mm", s.margin);
     }
-    let lo = a.loss.at(p.f);
-    let (ac, ad) = (lo.alpha_c * NP2DB / 1000.0, lo.alpha_d * NP2DB / 1000.0);
     println!("@ f = {} GHz", p.f / 1e9);
+    match &a.even {
+        None => print_mode(p, &a.loss, &a.split),
+        Some(even) => {
+            for (k, (loss, split)) in [(&a.loss, &a.split), (&even.loss, &even.split)].into_iter().enumerate()
+            {
+                let m = &s.modes[k];
+                println!("--- {}: values per trace ---", m.kind.label());
+                print_values(m.z0, m.eeff, m.l, m.c, m.g_over_omega);
+                print_mode(p, loss, split);
+            }
+        }
+    }
+    println!("Time            : {secs:.2} s");
+}
+
+fn print_values(z0: f64, eeff: f64, l: f64, c: f64, g_over_omega: f64) {
+    println!("Z0              = {z0:8.3} Ohm");
+    println!("eps_eff         = {eeff:8.4}");
+    println!("L'              = {:8.4} nH/mm", l * 1e6);
+    println!("C'              = {:8.4} pF/mm", c * 1e9);
+    println!("G'/omega        = {:8.4} pF/mm", g_over_omega * 1e9);
+}
+
+/// Losses at the analysis frequency and the ground split of one mode.
+fn print_mode(p: &PlanarParams, loss: &LossModel, split: &Split) {
+    let lo = loss.at(p.f);
+    let (ac, ad) = (lo.alpha_c * NP2DB / 1000.0, lo.alpha_d * NP2DB / 1000.0);
     println!("Conductor loss  = {ac:8.5} dB/mm  ({:.4} dB/in)", ac * 25.4);
     println!("Dielectric loss = {ad:8.5} dB/mm  ({:.4} dB/in)", ad * 25.4);
     println!("Total loss      = {:8.5} dB/mm  ({:.4} dB/in)", ac + ad, (ac + ad) * 25.4);
     println!("Ground split                     E-field   Return current (HF)");
     for c in GroundCat::ALL {
-        let (f, i) = (a.split.field.get(c), a.split.current.get(c));
+        let (f, i) = (split.field.get(c), split.current.get(c));
         if f.abs() >= 0.05 || i.abs() >= 0.05 {
             println!("  {:31}{f:6.1} %   {i:6.1} %", c.label());
         }
     }
-    println!("Time            : {secs:.2} s");
 }
 
 /// `analyze --solver fem`.
@@ -59,13 +86,27 @@ pub fn analyze_command(p: &PlanarParams, json_out: bool) -> Result<(), String> {
     let a = full_analysis_fem(p, &progress()).map_err(|e| e.to_string())?;
     let (s, secs) = (&a.sol, t0.elapsed().as_secs_f64());
     if json_out {
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "params": p, "solver": "fem", "z0": s.z0, "eeff": s.eeff, "l": s.l, "c": s.c, "c0": s.c0,
             "g_over_omega": s.g_over_omega, "nodes": s.mesh.pts.len(), "margin": s.margin,
             "levels": { "nodes": s.accuracy.nodes, "z0": s.accuracy.z0() },
             "est_err": s.accuracy.est_err, "order": s.accuracy.order, "seconds": secs,
             "dzdn": a.loss.dzdn, "loss": a.loss.at(p.f), "split": a.split,
         });
+        if let Some(even) = &a.even {
+            // the values above are those of the odd mode (per trace)
+            let mode = |k: usize, loss: &LossModel, split: &Split| {
+                let m = &s.modes[k];
+                serde_json::json!({
+                    "name": m.kind.key(), "z0": m.z0, "eeff": m.eeff, "l": m.l, "c": m.c, "c0": m.c0,
+                    "g_over_omega": m.g_over_omega, "dzdn": loss.dzdn, "loss": loss.at(p.f), "split": split,
+                })
+            };
+            out["z_diff"] = s.target_impedance().into();
+            out["z_comm"] = s.common_impedance().into();
+            out["coupling"] = s.coupling().into();
+            out["modes"] = vec![mode(0, &a.loss, &a.split), mode(1, &even.loss, &even.split)].into();
+        }
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
     } else {
         print_fem(p, &a, secs);

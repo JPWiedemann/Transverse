@@ -13,7 +13,7 @@ use serde::Serialize;
 use transverse_core::postproc::EField;
 use transverse_core::units::UnitSystem;
 use transverse_core::{Ctl, TvError};
-use transverse_lines::model::{Analysis, LineModel, ModeResult, ParamSet};
+use transverse_lines::model::{Analysis, LineModel, ModeResult, PairResult, ParamSet};
 use transverse_lines::render::colormap::Cmap;
 use transverse_lines::render::raster::{self, FieldMode, Legend, RasterSpec};
 use transverse_lines::{find_model, registry};
@@ -112,7 +112,8 @@ pub fn analyze(
     Ok(AnalysisHandle { analysis, params: None, e: OnceCell::new() })
 }
 
-/// Find the dimension `target_id` that gives `z0_target` Ohm. With `phase_deg` the line length is set
+/// Find the dimension `target_id` that gives `z0_target` Ohm (a target with two quantities takes the second in
+/// `second` and finds two dimensions). With `phase_deg` the line length is set
 /// for that electrical length as well (`undefined` keeps it). The handle carries the new parameters.
 #[wasm_bindgen]
 pub fn synthesize(
@@ -120,18 +121,21 @@ pub fn synthesize(
     params_json: &str,
     target_id: &str,
     z0_target: f64,
+    second: Option<f64>,
     phase_deg: Option<f64>,
     on_progress: Option<js_sys::Function>,
 ) -> Result<AnalysisHandle, JsError> {
     let p = param_set(params_json)?;
-    let (new_p, analysis) =
-        model(line_id)?.synthesize(&p, target_id, z0_target, phase_deg, &ctl(on_progress)).map_err(js_err)?;
+    let (new_p, analysis) = model(line_id)?
+        .synthesize(&p, target_id, z0_target, second, phase_deg, &ctl(on_progress))
+        .map_err(js_err)?;
     Ok(AnalysisHandle { analysis, params: Some(new_p), e: OnceCell::new() })
 }
 
 #[derive(Serialize)]
 struct Summary<'a> {
     modes: &'a [ModeResult],
+    pair: &'a Option<PairResult>,
     report: &'a str,
     accuracy: &'a Option<transverse_core::quasistatic::Accuracy>,
     has_field: bool,
@@ -143,7 +147,8 @@ struct FieldInfo<'a> {
     ny: usize,
     /// Solution on a triangle mesh (`nx` and `ny` are then 2: only the extent).
     mesh: bool,
-    z0: f64,
+    drive: &'a str,
+    equipotential_levels: Vec<f64>,
     conductors: &'a [transverse_lines::model::DrawRect],
     dashed_y: &'a [f64],
     dotted_y: &'a [f64],
@@ -206,6 +211,7 @@ impl AnalysisHandle {
     pub fn summary(&self) -> Result<String, JsError> {
         json(&Summary {
             modes: &self.analysis.modes,
+            pair: &self.analysis.pair,
             report: &self.analysis.report,
             accuracy: &self.analysis.accuracy,
             has_field: self.analysis.field.is_some(),
@@ -237,7 +243,8 @@ impl AnalysisHandle {
             nx: f.nx(),
             ny: f.ny(),
             mesh: f.mesh.is_some(),
-            z0: f.z0,
+            drive: &f.drive,
+            equipotential_levels: f.equipotential_levels(),
             conductors: &f.conductors,
             dashed_y: &f.dashed_y,
             dotted_y: &f.dotted_y,

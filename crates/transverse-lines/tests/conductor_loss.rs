@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use transverse_core::fem::{FemInput, corner_gradients};
 use transverse_core::{Ctl, EPS0};
 use transverse_lines::planar::{
-    C_BND, EtchMode, FemSolution, PlanarParams, WideSide, analyze, analyze_fem, wheeler_dzdn,
-    wheeler_dzdn_fem,
+    C_BND, EtchMode, FemSolution, PlanarParams, Signals, WideSide, analyze, analyze_fem, loss_models_fem,
+    wheeler_dzdn, wheeler_dzdn_fem,
 };
 
 /// Impedance of free space [Ohm].
@@ -180,5 +180,43 @@ fn wheeler_with_etched_flanks_agrees_with_the_integral_of_the_surface_current() 
         let fem = wheeler_dzdn_fem(&p, &sol, &Ctl::new()).unwrap();
         println!("{name:36} integral {reference:.0}, FEM {fem:.0} ({:+.2e})", fem / reference - 1.0);
         assert!((fem / reference - 1.0).abs() < 5e-3, "{name}: FEM {fem} vs integral {reference}");
+    }
+}
+
+/// Pairs, both modes. The integral takes the metal around both traces while the current is that of one, so each
+/// trace has half of it. The grid cannot solve pairs.
+#[test]
+fn wheeler_of_both_modes_of_a_pair_agrees_with_the_integral_of_the_surface_current() {
+    let base = PlanarParams { signals: Signals::Pair, w: 0.2, s: 0.2, d: 0.15, ..PlanarParams::default() };
+    let cases = [
+        ("pair, CPWG", base.clone()),
+        ("pair, tight pair gap", PlanarParams { d: 0.06, ..base.clone() }),
+        ("pair, stripline", PlanarParams { coplanar: false, ..base.clone() }),
+        ("pair, microstrip", PlanarParams { coplanar: false, upper: false, w: 0.4, ..base.clone() }),
+        (
+            "pair, side walls close by",
+            PlanarParams { coplanar: false, side_walls: true, g: 0.12, t: 0.035, ..base.clone() },
+        ),
+        ("pair, etched", PlanarParams { etch: EtchMode::Factor, t: 0.035, ..base }),
+    ];
+    for (name, p) in cases {
+        let fine = PlanarParams { tol: 0.001, ..p.clone() };
+        let air = analyze_fem(&fine, &fine.fem_options(), &Ctl::new()).unwrap();
+        let sol = analyze_fem(&p, &p.fem_options(), &Ctl::new()).unwrap();
+        let losses = loss_models_fem(&p, &sol, &Ctl::new()).unwrap();
+        for (k, loss) in losses.iter().enumerate() {
+            let reference = from_surface_current(&p, &air.in_mode(k), 0.5e-3) / 2.0;
+            let mode = air.modes[k].kind.key();
+            println!(
+                "{name:28} {mode:4}: integral {reference:.0}, FEM {:.0} ({:+.2e})",
+                loss.dzdn,
+                loss.dzdn / reference - 1.0
+            );
+            assert!(
+                (loss.dzdn / reference - 1.0).abs() < 5e-3,
+                "{name} {mode}: FEM {} vs integral {reference}",
+                loss.dzdn
+            );
+        }
     }
 }

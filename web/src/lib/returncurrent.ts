@@ -19,10 +19,24 @@ function yTop(split: SplitSummary, limit: number): number {
   return m > 0 ? 1.15 * m : 1;
 }
 
+/** Lower limit of the plot for `x0..x1`: 0, or 15 % below the smallest value there if the current has both signs
+ * (the odd mode of a pair). Values that are negative only by a trace do not count. */
+export function yBottom(split: SplitSummary, x0: number, x1: number): number {
+  let low = 0;
+  let high = 0;
+  for (const p of split.profiles) {
+    p.x.forEach((x, i) => {
+      const j = p.j[i] ?? Number.NaN;
+      if (x >= x0 && x <= x1 && Number.isFinite(j)) [low, high] = [Math.min(low, j), Math.max(high, j)];
+    });
+  }
+  return -low > 0.02 * high ? 1.15 * low : 0;
+}
+
 /** The view the plot starts with and "Signal region" returns to. */
 export function fitBounds(split: SplitSummary): Bounds {
   const hw = split.plot.half_width;
-  return [-hw, hw, 0, yTop(split, hw)];
+  return [-hw, hw, yBottom(split, -hw, hw), yTop(split, hw)];
 }
 
 /** Everything the profiles contain. */
@@ -30,7 +44,7 @@ export function allBounds(split: SplitSummary): Bounds {
   let lo = Infinity;
   let hi = -Infinity;
   for (const p of split.profiles) for (const x of p.x) [lo, hi] = [Math.min(lo, x), Math.max(hi, x)];
-  return lo < hi ? [lo, hi, 0, yTop(split, Infinity)] : fitBounds(split);
+  return lo < hi ? [lo, hi, yBottom(split, lo, hi), yTop(split, Infinity)] : fitBounds(split);
 }
 
 /** Value of a profile at `x` by linear interpolation; undefined outside its range or across the

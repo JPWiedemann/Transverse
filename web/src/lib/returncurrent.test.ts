@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allBounds, fitBounds, profileValue, readoutText, segments, yFit } from './returncurrent';
+import { allBounds, fitBounds, profileValue, readoutText, segments, yBottom, yFit } from './returncurrent';
 import type { CurrentProfile, SplitSummary } from './types';
 
 const profile = (broken: boolean): CurrentProfile => ({
@@ -16,7 +16,7 @@ const split = (...profiles: CurrentProfile[]): SplitSummary => ({
   rows: [],
   x90: [],
   profiles,
-  plot: { title: '', half_width: 1.5, signal: null, markers: [], labels: [] },
+  plot: { title: '', half_width: 1.5, signals: [], markers: [], labels: [] },
   info: '',
 });
 
@@ -72,5 +72,20 @@ describe('return current helpers', () => {
     expect(fitBounds(split(p))[3]).toBeCloseTo(1.15, 12);
     expect(allBounds(split(p))[3]).toBeCloseTo(1.15 * 3, 12);
     expect(fitBounds(split())[3]).toBe(1);
+  });
+});
+
+describe('currents of both signs (odd mode of a pair)', () => {
+  const odd: CurrentProfile = { ...profile(false), x: [-1, -0.5, 0.5, 1], j: [1, 3, -3, -1] };
+  const s: SplitSummary = { ...split(odd), plot: { ...split(odd).plot, half_width: 1.5 } };
+
+  it('are inside the plot', () => {
+    expect(fitBounds(s)).toEqual([-1.5, 1.5, -1.15 * 3, 1.15 * 3]);
+    expect(allBounds(s)[2]).toBe(-1.15 * 3);
+    expect(yBottom(s, -1, 0)).toBe(0);
+  });
+
+  it('are not assumed for a trace of negative noise', () => {
+    expect(fitBounds(split({ ...profile(false), j: [1, 3, 2, -0.01] }))[2]).toBe(0);
   });
 });

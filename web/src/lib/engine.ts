@@ -91,17 +91,18 @@ export class Engine {
     return this.run((id) => ({ id, op: 'analyze', line, params: JSON.stringify(params) }), onProgress);
   }
 
-  /** Find the dimension `target` for `z0` Ohm; with `phaseDeg` the line length is set for that electrical length. */
+  /** Find the dimension `target` for `z0` Ohm (a target with two quantities takes the other one in `second`); with `phaseDeg` the line length is set for that electrical length. */
   synthesize(
     line: string,
     params: ParamSet,
     target: string,
     z0: number,
+    second: number | undefined,
     phaseDeg: number | undefined,
     onProgress: (text: string) => void,
   ) {
     return this.run(
-      (id) => ({ id, op: 'synthesize', line, params: JSON.stringify(params), target, z0, phaseDeg }),
+      (id) => ({ id, op: 'synthesize', line, params: JSON.stringify(params), target, z0, second, phaseDeg }),
       onProgress,
     );
   }

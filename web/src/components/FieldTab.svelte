@@ -59,7 +59,6 @@
     permittivity: 'Permittivity er',
     mesh: 'Mesh',
   };
-  const EQUIPOTENTIALS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
   const M = { l: 70, t: 8, r: 8, b: 44 };
   const COPPER = '#c87533';
 
@@ -104,12 +103,17 @@
       return;
     }
     let stale = false;
-    Promise.all([
-      engine.query<string>('field_info'),
-      engine.query<Float64Array>('field_x'),
-      engine.query<Float64Array>('field_y'),
-      engine.query<string>('equipotentials', Float64Array.from(EQUIPOTENTIALS)),
-    ])
+    // the field data says which equipotentials suit its excitation
+    engine
+      .query<string>('field_info')
+      .then((i) =>
+        Promise.all([
+          i,
+          engine.query<Float64Array>('field_x'),
+          engine.query<Float64Array>('field_y'),
+          engine.query<string>('equipotentials', Float64Array.from((JSON.parse(i) as FieldInfo).equipotential_levels)),
+        ]),
+      )
       .then(([i, x, y, eq]) => {
         if (stale) return;
         info = JSON.parse(i) as FieldInfo;
@@ -348,7 +352,7 @@
     return s;
   });
 
-  const title = $derived(`${LABELS[mode]}  -  1 V on signal, Z0 = ${info ? info.z0.toFixed(2) : '…'} Ω`);
+  const title = $derived(`${LABELS[mode]}  -  ${info ? info.drive.replace('Ohm', 'Ω') : '…'}`);
   /** the shortest edge of a triangle mesh is far below the size of the view: its own unit */
   const minUnit = $derived(autoLengthUnit(units, accuracy?.dmin_actual ?? 1));
   const meshInfo = $derived(

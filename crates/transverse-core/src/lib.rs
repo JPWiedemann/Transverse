@@ -11,6 +11,7 @@ pub mod postproc;
 pub mod quasistatic;
 pub mod special;
 pub mod synthesis;
+pub mod synthesis2;
 pub mod units;
 
 pub use control::Ctl;

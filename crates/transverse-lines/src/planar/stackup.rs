@@ -1,7 +1,7 @@
 //! The structure as a stack-up: dielectric layers, copper layers with their traces and coplanar ground,
 //! ground planes and side walls. The mesher's cross-section, the field drawing and the moving mesh of the
-//! conductor loss are made from it. One trace in one copper layer today; further traces and copper layers
-//! (differential pairs) are further entries.
+//! conductor loss are made from it. One or two traces in one copper layer today; further copper layers (the
+//! stacked pair) are further entries.
 //!
 //! y = 0 is the bottom of the (lowest) copper layer, x = 0 the middle of the structure. All lengths in mm.
 
@@ -177,7 +177,17 @@ impl PlanarParams {
             Material { er: er_gap, tand: tand_gap },
         ];
         let (ytop, ybot) = (p.t + p.h1, -p.h2);
-        let half = p.w / 2.0;
+        let outer = p.trace_half_width();
+        let traces = if p.pair() {
+            // signal 1 on the left, signal 2 on the right
+            let inner = p.d / 2.0;
+            vec![
+                Trace { x0: -outer, x1: -inner, signal: SIGNAL },
+                Trace { x0: inner, x1: outer, signal: SIGNAL + 1 },
+            ]
+        } else {
+            vec![Trace { x0: -outer, x1: outer, signal: SIGNAL }]
+        };
         let u = p.undercut();
         let layer = CopperLayer {
             y0: 0.0,
@@ -187,8 +197,8 @@ impl PlanarParams {
                 WideSide::Top => [u, 0.0],
             },
             fill: MAT_GAP,
-            traces: vec![Trace { x0: -half, x1: half, signal: SIGNAL }],
-            ground: p.coplanar.then(|| [-(half + p.s), half + p.s]),
+            traces,
+            ground: p.coplanar.then(|| [-(outer + p.s), outer + p.s]),
         };
         let mut walls = Vec::new();
         if p.side_walls {

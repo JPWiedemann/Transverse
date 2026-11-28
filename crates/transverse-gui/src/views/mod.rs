@@ -37,7 +37,10 @@ mod tests {
         let mut set = m.defaults();
         set.set("plane1", ParamValue::Bool(false));
         set.set("fence1", ParamValue::Bool(false));
-        vec![closed, m.analyze(&set, &Ctl::new()).unwrap()]
+        let mut pair = m.defaults();
+        pair.set("signals", ParamValue::Num(1.0));
+        pair.set("w", ParamValue::Num(0.2));
+        vec![closed, m.analyze(&set, &Ctl::new()).unwrap(), m.analyze(&pair, &Ctl::new()).unwrap()]
     }
 
     #[test]

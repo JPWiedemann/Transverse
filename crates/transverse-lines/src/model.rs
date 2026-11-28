@@ -146,6 +146,10 @@ pub struct Preset {
 pub struct SynthTarget {
     pub id: &'static str,
     pub label: &'static str,
+    /// The impedance the target value is for ("Z0", "Zdiff").
+    pub quantity: &'static str,
+    /// A second impedance that is a target at the same time ("Zcomm"), for a search in two dimensions.
+    pub second: Option<&'static str>,
     pub visible_when: Visibility,
 }
 
@@ -185,8 +189,8 @@ pub struct ProfilePlot {
     pub title: String,
     /// The plot shows x in -half_width..half_width [mm].
     pub half_width: f64,
-    /// Shaded x range (the signal trace).
-    pub signal: Option<[f64; 2]>,
+    /// Shaded x ranges (the signal traces).
+    pub signals: Vec<[f64; 2]>,
     /// Dotted vertical lines [mm].
     pub markers: Vec<f64>,
     /// Texts at the top of the plot: (x [mm], text).
@@ -204,7 +208,8 @@ pub struct SplitSummary {
     pub info: String,
 }
 
-/// Result for one propagation mode (phase 1: always exactly one).
+/// Result for one propagation mode: one for a single trace, the odd and the even mode for a pair. Of a pair the
+/// values are those of one trace while both are driven.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModeResult {
     pub name: String,
@@ -222,6 +227,17 @@ pub struct ModeResult {
     /// Values at the analysis frequency.
     pub at_f: LossPoint,
     pub split: Option<SplitSummary>,
+}
+
+/// What belongs to a differential pair as a whole.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PairResult {
+    /// Between the two traces, driven against each other: twice the odd-mode impedance [Ohm].
+    pub z_diff: f64,
+    /// Both traces in parallel against ground: half the even-mode impedance [Ohm].
+    pub z_comm: f64,
+    /// `(Zeven - Zodd) / (Zeven + Zodd)`.
+    pub coupling: f64,
 }
 
 /// Geometry to draw over a field plot; colours are the frontend's business.
@@ -264,7 +280,8 @@ pub struct FieldData {
     pub dotted_y: Vec<f64>,
     pub view_zoom: Bounds,
     pub view_full: Bounds,
-    pub z0: f64,
+    /// How the signals are driven in these fields, with the impedance of that mode, for the title.
+    pub drive: String,
     /// Solution on a triangle mesh (finite elements). Then `x` and `y` hold only the extent of the mesh, the
     /// grid arrays above are empty, and the methods below and the raster functions work on the mesh.
     pub mesh: Option<Box<MeshFieldData>>,
@@ -285,7 +302,7 @@ impl FieldData {
             dotted_y: m.dotted_y.clone(),
             view_zoom: m.view_zoom,
             view_full: m.view_full,
-            z0: m.z0,
+            drive: m.drive.clone(),
             mesh: Some(Box::new(m)),
         }
     }
@@ -312,6 +329,17 @@ impl FieldData {
         postproc::e_field(if air { &self.v0 } else { &self.v }, &self.x, &self.y, &self.fixed)
     }
 
+    /// The potentials of the equipotentials to draw [V]: in tenths between ground and the signal, or in fifths
+    /// from -1 V to 1 V where signals of both polarities are driven.
+    pub fn equipotential_levels(&self) -> Vec<f64> {
+        let v = self.mesh.as_ref().map_or(&self.v, |m| &m.v);
+        if v.iter().any(|&v| v < -0.5) {
+            (-4..=4).map(|k| f64::from(k) / 5.0).collect()
+        } else {
+            (1..=9).map(|k| f64::from(k) / 10.0).collect()
+        }
+    }
+
     /// Equipotential segments for the given potentials (V).
     pub fn equipotentials(&self, levels: &[f64]) -> Vec<(f64, Vec<[[f64; 2]; 2]>)> {
         if let Some(m) = &self.mesh {
@@ -332,7 +360,9 @@ impl FieldData {
 
 /// Everything a frontend shows after an analysis.
 pub struct Analysis {
+    /// The mode a line is designed for first: the odd (differential) one of a pair.
     pub modes: Vec<ModeResult>,
+    pub pair: Option<PairResult>,
     /// Formatted text of all results.
     pub report: String,
     /// Frequency-dependent values of the first mode.
@@ -445,7 +475,8 @@ pub trait LineModel: Send + Sync {
     fn analyze(&self, p: &ParamSet, ctl: &Ctl) -> TvResult<Analysis>;
 
     /// Find the dimension `target_id` that gives `z0_target` Ohm; returns the new parameters and the
-    /// analysis at that point. With `phase_deg` the line length is set as well, so that the line has
+    /// analysis at that point. A target with a [`SynthTarget::second`] quantity takes its value in `second`
+    /// and finds two dimensions. With `phase_deg` the line length is set as well, so that the line has
     /// that electrical length at the analysis frequency: the length follows from the solution
     /// (through eps_eff), it is never a search variable of its own.
     fn synthesize(
@@ -453,6 +484,7 @@ pub trait LineModel: Send + Sync {
         p: &ParamSet,
         target_id: &str,
         z0_target: f64,
+        second: Option<f64>,
         phase_deg: Option<f64>,
         ctl: &Ctl,
     ) -> TvResult<(ParamSet, Analysis)>;

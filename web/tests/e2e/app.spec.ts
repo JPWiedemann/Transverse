@@ -249,3 +249,78 @@ test('the field views draw the triangle mesh', async ({ page }) => {
   await expect(page.locator('path.tri')).toHaveAttribute('d', /^M/);
   expect(errors).toEqual([]);
 });
+
+test('a differential pair shows both modes and is synthesized for Zdiff', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.locator('#p-signals').selectOption({ label: 'Differential pair (edge-coupled)' });
+  await page.locator('#p-w').fill('0.2');
+  await page.locator('#p-s').fill('0.2');
+  await analyze(page);
+  await expect(status(page)).toContainText(/Zdiff = 92\.4/);
+  await expect(page.locator('.card', { hasText: 'Zdiff' })).toContainText('92.4');
+  await expect(page.locator('.card', { hasText: 'Zcomm' })).toContainText('28.5');
+  await expect(page.locator('.report')).toContainText('Even mode (common)');
+
+  // one ground split per mode
+  await tab(page, 'Return current').click();
+  await expect(page.getByRole('img', { name: /Return current density/ })).toBeVisible();
+  const table = page.locator('table.split');
+  const odd = await table.innerText();
+  await page.getByLabel('Shown mode').selectOption({ label: 'Even (common)' });
+  await expect.poll(() => table.innerText()).not.toBe(odd);
+
+  await tab(page, 'Loss vs f').click();
+  await expect(page.getByText('Odd (differential) mode, values per trace:')).toBeVisible();
+
+  // the field of the differential excitation
+  await tab(page, 'Field').click();
+  await expect(page.locator('.bar canvas')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/\+1 V \/ -1 V on the pair/)).toBeVisible();
+  await page.getByLabel('Field view').selectOption('potential');
+
+  // the target is the differential impedance, and the pair gap can be varied
+  await page.getByLabel('Synthesize').selectOption({ label: 'pair gap d (w fixed)' });
+  await page.getByLabel('Target Zdiff').fill('90');
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('Synthesis done', { timeout: 60_000 });
+  await expect(status(page)).toContainText(/Zdiff = (89\.\d|90\.\d)/);
+  expect(Number(await page.locator('#p-d').inputValue())).toBeLessThan(0.2);
+
+  // back to one trace the target is Z0 again
+  await page.locator('#p-signals').selectOption({ label: 'Single' });
+  await expect(page.getByLabel('Target Z0')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a stripline pair is synthesized by the gap, and by width and gap for Zdiff and Zcomm', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.locator('#p-signals').selectOption({ label: 'Differential pair (edge-coupled)' });
+  await page.getByLabel('Coplanar ground').uncheck();
+  await page.locator('#p-w').fill('0.15');
+  // the pair gap can be varied without a coplanar ground
+  await page.getByLabel('Synthesize').selectOption({ label: 'pair gap d (w fixed)' });
+  await page.getByLabel('Target Zdiff').fill('100');
+  await expect(page.getByLabel('Target Zcomm')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('Synthesis done', { timeout: 60_000 });
+  await expect(status(page)).toContainText(/Zdiff = (99\.[89]|100\.[01])/);
+
+  await page.getByLabel('Synthesize').selectOption({ label: 'w and d (Zdiff + Zcomm)' });
+  await page.getByLabel('Target Zcomm').fill('abc');
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('Target Zcomm');
+  await page.getByLabel('Target Zcomm').fill('33');
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('Synthesis done', { timeout: 90_000 });
+  await expect(page.locator('.card', { hasText: 'Zdiff' })).toContainText(/(99\.[89]|100\.[01])/);
+  await expect(page.locator('.card', { hasText: 'Zcomm' })).toContainText(/(32\.9|33\.0)/);
+  // targets no pair can have are explained
+  await page.getByLabel('Target Zcomm').fill('20');
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('Zcomm must be above Zdiff / 4');
+  await page.getByLabel('Target Zcomm').fill('25.01');
+  await page.getByRole('button', { name: 'Synthesize', exact: true }).click();
+  await expect(status(page)).toContainText('too weak to fix the gap');
+  expect(errors).toEqual([]);
+});
+

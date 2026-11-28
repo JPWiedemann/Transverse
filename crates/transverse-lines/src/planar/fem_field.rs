@@ -4,9 +4,9 @@ use transverse_core::TvResult;
 use transverse_core::fem::{corner_gradients, element_dofs};
 use transverse_core::postproc::mesh::{TriIndex, recover_nodal_corners};
 
-use super::PlanarParams;
 use super::fem::FemSolution;
 use super::field::drawing;
+use super::{ModeKind, PlanarParams};
 use crate::mesh_field::MeshFieldData;
 use crate::section_solve::InputData;
 
@@ -41,6 +41,12 @@ pub fn field_data_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<MeshField
         dotted_y: d.dotted_y,
         view_zoom: d.view_zoom,
         view_full: d.view_full,
-        z0: sol.z0,
+        drive: match sol.modes[sol.mode].kind {
+            ModeKind::Single => format!("1 V on signal, Z0 = {:.2} Ohm", sol.z0),
+            ModeKind::Odd => {
+                format!("+1 V / -1 V on the pair (odd mode), Zdiff = {:.2} Ohm", 2.0 * sol.z0)
+            }
+            ModeKind::Even => format!("1 V on both signals (even mode), Zcomm = {:.2} Ohm", sol.z0 / 2.0),
+        },
     })
 }

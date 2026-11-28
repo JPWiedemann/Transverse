@@ -8,7 +8,7 @@ use transverse_core::postproc::{StreamOptions, field_lines_with};
 use crate::model::{Bounds, DrawRect};
 
 /// Potentials (both solutions), the recovered E field and the drawing information of a mesh solution.
-/// Fields are for 1 V on the signal, lengths in mm, E in V/mm.
+/// Fields are for the excitation named by `drive`, lengths in mm, E in V/mm.
 #[derive(Clone, Debug)]
 pub struct MeshFieldData {
     pub pts: Vec<[f64; 2]>,
@@ -36,7 +36,8 @@ pub struct MeshFieldData {
     pub dotted_y: Vec<f64>,
     pub view_zoom: Bounds,
     pub view_full: Bounds,
-    pub z0: f64,
+    /// How the signals are driven, with the impedance of that mode.
+    pub drive: String,
 }
 
 impl MeshFieldData {
