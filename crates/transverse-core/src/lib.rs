@@ -5,6 +5,8 @@ pub mod error;
 pub mod fd2d;
 pub mod fem;
 pub mod losses;
+pub mod matrix;
+pub mod modes;
 pub mod postproc;
 pub mod quasistatic;
 pub mod special;

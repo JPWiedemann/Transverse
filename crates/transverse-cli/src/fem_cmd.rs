@@ -29,7 +29,7 @@ fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
     println!("C'              = {:8.4} pF/mm", s.c * 1e9);
     println!("G'/omega        = {:8.4} pF/mm", s.g_over_omega * 1e9);
     let levels: Vec<String> =
-        s.accuracy.nodes.iter().zip(&s.accuracy.z0).map(|(n, z)| format!("{n} nodes: {z:.4}")).collect();
+        s.accuracy.nodes.iter().zip(s.accuracy.z0()).map(|(n, z)| format!("{n} nodes: {z:.4}")).collect();
     println!("Mesh levels     : {}", levels.join(", "));
     let order =
         s.accuracy.order.map_or("not extrapolated".to_string(), |p| format!("extrapolated, order {p:.2}"));
@@ -62,7 +62,7 @@ pub fn analyze_command(p: &PlanarParams, json_out: bool) -> Result<(), String> {
         let out = serde_json::json!({
             "params": p, "solver": "fem", "z0": s.z0, "eeff": s.eeff, "l": s.l, "c": s.c, "c0": s.c0,
             "g_over_omega": s.g_over_omega, "nodes": s.mesh.pts.len(), "margin": s.margin,
-            "levels": { "nodes": s.accuracy.nodes, "z0": s.accuracy.z0 },
+            "levels": { "nodes": s.accuracy.nodes, "z0": s.accuracy.z0() },
             "est_err": s.accuracy.est_err, "order": s.accuracy.order, "seconds": secs,
             "dzdn": a.loss.dzdn, "loss": a.loss.at(p.f), "split": a.split,
         });

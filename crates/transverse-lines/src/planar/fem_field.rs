@@ -5,9 +5,10 @@ use transverse_core::fem::{corner_gradients, element_dofs};
 use transverse_core::postproc::mesh::{TriIndex, recover_nodal_corners};
 
 use super::PlanarParams;
-use super::fem::{FemSolution, InputData};
+use super::fem::FemSolution;
 use super::field::drawing;
 use crate::mesh_field::MeshFieldData;
+use crate::section_solve::InputData;
 
 /// Field data of `sol` (quadratic elements): potentials, E recovered at the nodes from the element
 /// gradients, point location and the conductor drawing.
