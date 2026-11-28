@@ -3,9 +3,13 @@
 //! ```text
 //! transverse analyze [params.json|-] [--solver fem|fd] [--json]   analyse one geometry (missing fields use defaults)
 //! transverse compare [params.json|-]                         finite difference vs finite elements on one geometry
-//! transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+//! transverse synth <w|d|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+//! transverse synth w_d <zdiff_ohm> <zcomm_ohm> [params.json|-] [--phase <deg>] [--json]
 //! transverse selftest [--solver fem|fd] [cases.json]          compare against the Python reference cases
 //! ```
+//!
+//! With `"signals": "pair"` the line is a differential pair: `<target_ohm>` is Zdiff, `d` (the pair gap) can be
+//! varied, and `w_d` finds width and gap for Zdiff and Zcomm together.
 //!
 //! The finite elements are the solver of the apps and the default here; `--solver fd` selects the finite-difference
 //! grid, the reference of the tests. `selftest` without `--solver` checks both.
@@ -24,7 +28,8 @@ use transverse_lines::planar::{self, PlanarParams, SynthVar, full_analysis};
 const USAGE: &str = "usage:
   transverse analyze [params.json|-] [--solver fem|fd] [--json]
   transverse compare [params.json|-]
-  transverse synth <w|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+  transverse synth <w|d|s|w_total> <target_ohm> [params.json|-] [--phase <deg>] [--solver fem|fd] [--json]
+  transverse synth w_d <zdiff_ohm> <zcomm_ohm> [params.json|-] [--phase <deg>] [--json]
   transverse selftest [--solver fem|fd] [cases.json]
   transverse --version";
 
@@ -161,10 +166,14 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
         None => None,
     };
     let pos = positional(args);
+    if pos.first().is_some_and(|s| s.as_str() == "w_d") {
+        return cmd_synth_pair(&pos[1..], phase, solver_option(args)?, json_out);
+    }
     let var = match pos.first().map(|s| s.as_str()) {
         Some("w") => SynthVar::W,
         Some("s") => SynthVar::S,
         Some("w_total") => SynthVar::WTotal,
+        Some("d") => SynthVar::D,
         _ => return Err(USAGE.to_string()),
     };
     let target: f64 = pos.get(1).and_then(|s| s.parse().ok()).ok_or(USAGE.to_string())?;
@@ -176,7 +185,11 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
     if solver_option(args)?.unwrap_or(true) {
         let (mut pp, sol) =
             planar::synthesize_fem(&p, target, var, planar::DEFAULT_RTOL, &ctl).map_err(|e| e.to_string())?;
-        eprintln!("Synthesis done: w = {:.4} mm, s = {:.4} mm, running full analysis ...", pp.w, pp.s);
+        let pair_gap = if pp.pair() { format!(", d = {:.4} mm", pp.d) } else { String::new() };
+        eprintln!(
+            "Synthesis done: w = {:.4} mm, s = {:.4} mm{pair_gap}, running full analysis ...",
+            pp.w, pp.s
+        );
         if let Some(ph) = phase {
             pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
         }
@@ -194,5 +207,28 @@ fn cmd_synth(args: &[String]) -> Result<ExitCode, String> {
     eprintln!("Synthesis done, running full analysis ...");
     let a = full_analysis(&pp, &ctl).map_err(|e| e.to_string())?;
     print_analysis(&title, &pp, &a, t0.elapsed().as_secs_f64(), json_out);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `synth w_d <zdiff> <zcomm>`: width and gap of a pair (finite elements, the only solver for pairs).
+fn cmd_synth_pair(
+    pos: &[&String],
+    phase: Option<f64>,
+    solver: Option<bool>,
+    json_out: bool,
+) -> Result<ExitCode, String> {
+    let target = |k: usize| pos.get(k).and_then(|s| s.parse::<f64>().ok()).ok_or(USAGE.to_string());
+    let (zdiff, zcomm) = (target(0)?, target(1)?);
+    if solver == Some(false) {
+        return Err("the grid solver has one signal conductor only: use the finite elements".to_string());
+    }
+    let p = read_params(pos.get(2).map(|s| s.as_str()))?;
+    let (mut pp, sol) = planar::synthesize_pair_fem(&p, zdiff, zcomm, planar::DEFAULT_RTOL, &progress())
+        .map_err(|e| e.to_string())?;
+    eprintln!("Synthesis done: w = {:.4} mm, d = {:.4} mm, running full analysis ...", pp.w, pp.d);
+    if let Some(ph) = phase {
+        pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
+    }
+    fem_cmd::analyze_command(&pp, json_out)?;
     Ok(ExitCode::SUCCESS)
 }

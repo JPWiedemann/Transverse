@@ -21,6 +21,8 @@ pub enum Job {
         params: ParamSet,
         target_id: String,
         z0: f64,
+        /// The second target of a search in two dimensions.
+        second: Option<f64>,
         phase_deg: Option<f64>,
     },
 }
@@ -63,8 +65,8 @@ impl Worker {
                 Job::Analyze { params } => {
                     model.analyze(&params, &run_ctl).map(|analysis| JobOutput { analysis, new_params: None })
                 }
-                Job::Synthesize { params, target_id, z0, phase_deg } => model
-                    .synthesize(&params, &target_id, z0, phase_deg, &run_ctl)
+                Job::Synthesize { params, target_id, z0, second, phase_deg } => model
+                    .synthesize(&params, &target_id, z0, second, phase_deg, &run_ctl)
                     .map(|(p, analysis)| JobOutput { analysis, new_params: Some(p) }),
             };
             let msg = match result {
@@ -194,7 +196,7 @@ mod tests {
         set.set("tol", ParamValue::Num(0.001));
         let mut w = Worker::start(
             m.clone(),
-            Job::Synthesize { params: set, target_id: "w".into(), z0: 50.0, phase_deg: None },
+            Job::Synthesize { params: set, target_id: "w".into(), z0: 50.0, second: None, phase_deg: None },
             || {},
         );
         loop {
@@ -210,8 +212,13 @@ mod tests {
     #[test]
     fn synthesis_returns_new_parameters() {
         let m: Arc<dyn LineModel> = Arc::new(PlanarLine);
-        let job =
-            Job::Synthesize { params: m.defaults(), target_id: "w".into(), z0: 35.0, phase_deg: Some(90.0) };
+        let job = Job::Synthesize {
+            params: m.defaults(),
+            target_id: "w".into(),
+            z0: 35.0,
+            second: None,
+            phase_deg: Some(90.0),
+        };
         let mut w = Worker::start(m, job, || {});
         let (_, end) = run_to_end(&mut w);
         let Msg::Done(out) = end else { panic!("not done") };

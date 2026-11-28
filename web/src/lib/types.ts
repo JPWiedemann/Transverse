@@ -21,6 +21,10 @@ export interface ParamSpec {
 export interface SynthTarget {
   id: string;
   label: string;
+  /** the impedance the target value is for ("Z0", "Zdiff") */
+  quantity: string;
+  /** a second impedance that is a target at the same time ("Zcomm"), for a search in two dimensions */
+  second: string | null;
   visible_when: Visibility;
 }
 
@@ -79,7 +83,8 @@ export interface CurrentProfile {
 export interface ProfilePlot {
   title: string;
   half_width: number;
-  signal: [number, number] | null;
+  /** shaded x ranges: the signal traces */
+  signals: [number, number][];
   markers: number[];
   labels: [number, string][];
 }
@@ -115,8 +120,17 @@ export interface Accuracy {
   est_err: number | null;
 }
 
+/** What belongs to a differential pair as a whole. */
+export interface PairResult {
+  z_diff: number;
+  z_comm: number;
+  coupling: number;
+}
+
 export interface Summary {
+  /** one mode, or the odd and the even mode of a pair (values per trace) */
   modes: ModeResult[];
+  pair: PairResult | null;
   report: string;
   accuracy: Accuracy | null;
   has_field: boolean;
@@ -162,12 +176,25 @@ export interface DrawRect {
   y1: number;
 }
 
+/** One way of driving the signals that the field views can show. */
+export interface Excitation {
+  key: string;
+  label: string;
+  drive: string;
+  voltages: number[];
+}
+
 export interface FieldInfo {
   nx: number;
   ny: number;
   /** solution on a triangle mesh: `field_mesh_edges` gives the mesh, nx and ny are only the extent */
   mesh: boolean;
-  z0: number;
+  /** how the signals are driven, with the impedance of that mode */
+  drive: string;
+  /** the excitations to choose from (empty for one signal) and the shown one */
+  excitations: Excitation[];
+  excitation: number;
+  equipotential_levels: number[];
   conductors: DrawRect[];
   dashed_y: number[];
   dotted_y: number[];

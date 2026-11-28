@@ -16,6 +16,7 @@ mod fem;
 mod fem_analysis;
 mod fem_field;
 mod fem_loss;
+mod fem_modes;
 mod fem_morph;
 mod fem_split;
 mod fem_summary;
@@ -33,21 +34,22 @@ mod synthesis;
 mod wheeler;
 
 pub use fem::{FemOptions, FemSolution, analyze_fem};
-pub use fem_analysis::{PlanarFemAnalysis, full_analysis_fem};
+pub use fem_analysis::{ModeAnalysis, PlanarFemAnalysis, analysis_from_fem, full_analysis_fem};
 pub use fem_field::field_data_fem;
-pub use fem_loss::{loss_model_fem, wheeler_dzdn_fem};
+pub use fem_loss::{loss_model_fem, loss_models_fem, wheeler_dzdn_fem};
+pub use fem_modes::{ModeKind, ModeValues};
 pub use fem_split::ground_split_fem;
 pub use fem_summary::fem_accuracy;
 pub use field::field_data;
 pub use grid::*;
 pub use ground_split::{GroundCat, Profile, Shares, Split, ground_split};
 pub use model::PlanarLine;
-pub use params::{Analytic, EtchMode, GapMode, MeshMode, PlanarParams, WideSide, analytic};
+pub use params::{Analytic, EtchMode, GapMode, MeshMode, PlanarParams, Signals, WideSide, analytic};
 pub use report::{report, report_fem};
 pub use schematic::{SchematicFlags, schematic};
 pub use section::GROWTH;
 pub use stackup::{CopperLayer, MAT_AIR, MAT_GAP, MAT_LOWER, MAT_UPPER, Slab, Stackup, Trace, WallSpan};
-pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize, synthesize_fem};
+pub use synthesis::{DEFAULT_RTOL, SynthVar, synthesize, synthesize_fem, synthesize_pair_fem};
 pub use wheeler::wheeler_dzdn;
 
 use transverse_core::losses::LossModel;
@@ -57,6 +59,11 @@ use transverse_core::{Ctl, TvError, TvResult};
 /// Full analysis of one geometry (Z0, eps_eff, L', C', G'/omega, fields).
 pub fn analyze(p: &PlanarParams, ctl: &Ctl) -> TvResult<Solution> {
     p.validate()?;
+    if p.pair() {
+        return Err(TvError::InvalidParam(
+            "the grid solver has one signal conductor only: use the finite elements".into(),
+        ));
+    }
     if p.undercut() > 0.0 {
         return Err(TvError::InvalidParam(
             "the grid solver cannot represent etched (slanted) flanks: use the finite elements".into(),

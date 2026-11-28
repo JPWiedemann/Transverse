@@ -38,6 +38,8 @@
     showEq: boolean;
     showMesh: boolean;
     dbRange: number;
+    /** the chosen excitation, where there is a choice */
+    excitation: number;
   }
   let {
     engine,
@@ -49,6 +51,7 @@
     showEq = $bindable(),
     showMesh = $bindable(),
     dbRange = $bindable(),
+    excitation = $bindable(),
   }: Props = $props();
 
   const LABELS: Record<FieldMode, string> = {
@@ -59,7 +62,6 @@
     permittivity: 'Permittivity er',
     mesh: 'Mesh',
   };
-  const EQUIPOTENTIALS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
   const M = { l: 70, t: 8, r: 8, b: 44 };
   const COPPER = '#c87533';
 
@@ -96,20 +98,35 @@
     view = fitView(b, PW, PH);
   }
 
-  // ---- load a new result
+  // ---- load a new result, or the same one driven differently (the view then stays)
+  let loaded: number | undefined; // the generation whose field is shown
+  /** The field's description with the chosen excitation selected in the module. */
+  async function fieldInfo(chosen: number): Promise<string> {
+    const text = await engine.query<string>('field_info');
+    const i = JSON.parse(text) as FieldInfo;
+    const want = Math.min(chosen, i.excitations.length - 1);
+    if (want < 0 || want === i.excitation) return text;
+    await engine.query<void>('select_excitation', want);
+    return engine.query<string>('field_info');
+  }
   $effect(() => {
-    void generation;
+    const current = generation;
+    const chosen = excitation;
     if (!canSample) {
       info = undefined;
       return;
     }
     let stale = false;
-    Promise.all([
-      engine.query<string>('field_info'),
-      engine.query<Float64Array>('field_x'),
-      engine.query<Float64Array>('field_y'),
-      engine.query<string>('equipotentials', Float64Array.from(EQUIPOTENTIALS)),
-    ])
+    // the field data says which equipotentials suit its excitation
+    fieldInfo(chosen)
+      .then((i) =>
+        Promise.all([
+          i,
+          engine.query<Float64Array>('field_x'),
+          engine.query<Float64Array>('field_y'),
+          engine.query<string>('equipotentials', Float64Array.from((JSON.parse(i) as FieldInfo).equipotential_levels)),
+        ]),
+      )
       .then(([i, x, y, eq]) => {
         if (stale) return;
         info = JSON.parse(i) as FieldInfo;
@@ -123,7 +140,8 @@
         rendered = undefined;
         raster = undefined;
         error = '';
-        showRegion(info.view_zoom);
+        if (loaded !== current) showRegion(info.view_zoom);
+        loaded = current;
       })
       .catch((e: unknown) => {
         if (!stale) error = e instanceof Error ? e.message : String(e);
@@ -144,14 +162,15 @@
   }
   let raster = $state<Raster | undefined>();
   let rendered = $state<Rendered | undefined>();
-  let rendering = false;
+  // reactive, so that its end runs the effect again: a change made while an image was being made is then rendered
+  let rendering = $state(false);
 
   $effect(() => {
     const i = info;
     if (!i || !canSample || gx.length < 2) return;
-    const key = `${generation}|${mode}|${isDb ? dbRange : 0}|${units}`;
+    const key = `${generation}|${i.excitation}|${mode}|${isDb ? dbRange : 0}|${units}`;
     const visible = bounds;
-    if (rendering || !needsRender(rendered, key, visible)) return;
+    if (!needsRender(rendered, key, visible) || rendering) return;
     rendering = true;
     const want = expand(visible, MARGIN);
     const width = Math.min(Math.max(Math.round(W * (1 + 2 * MARGIN)), 400), 2400);
@@ -191,7 +210,7 @@
   // view leaves the region they cover
   const MESH_EDGE_LIMIT = 300000;
   let meshEdges = $state<{ covered: Bounds; segs: Float64Array; generation: number } | undefined>();
-  let meshBusy = false;
+  let meshBusy = $state(false); // reactive for the same reason as `rendering`
   $effect(() => {
     const i = info;
     const visible = bounds;
@@ -348,7 +367,7 @@
     return s;
   });
 
-  const title = $derived(`${LABELS[mode]}  -  1 V on signal, Z0 = ${info ? info.z0.toFixed(2) : '…'} Ω`);
+  const title = $derived(`${LABELS[mode]}  -  ${info ? info.drive.replace('Ohm', 'Ω') : '…'}`);
   /** the shortest edge of a triangle mesh is far below the size of the view: its own unit */
   const minUnit = $derived(autoLengthUnit(units, accuracy?.dmin_actual ?? 1));
   const meshInfo = $derived(
@@ -359,6 +378,16 @@
 </script>
 
 <div class="controls">
+  {#if info && info.excitations.length > 0}
+    <label>
+      Drive
+      <select value={String(info.excitation)} onchange={(e) => (excitation = Number(e.currentTarget.value))}>
+        {#each info.excitations as x, k (x.key)}
+          <option value={String(k)}>{x.label}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
   <select bind:value={mode} aria-label="Field view">
     {#each FIELD_MODES as m}
       <option value={m}>{LABELS[m]}</option>

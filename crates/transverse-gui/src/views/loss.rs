@@ -26,7 +26,8 @@ const DIELECTRIC: Color32 = Color32::from_rgb(255, 127, 14);
 #[derive(Clone, Copy)]
 pub struct LossData<'a> {
     pub freq: &'a dyn FreqResponse,
-    pub z0: f64,
+    /// The impedance of the line whose losses are shown, with its name ("Z0", "Zodd, per trace").
+    pub impedance: (&'a str, f64),
     /// Analysis frequency [Hz].
     pub f_hz: f64,
     /// The frequency currently typed in the parameter form [Hz], if it parses.
@@ -149,7 +150,7 @@ impl LossView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, data: &LossData<'_>) {
-        let LossData { freq, z0, f_hz, form_f_hz, units, generation } = *data;
+        let LossData { freq, impedance: (name, z), f_hz, form_f_hz, units, generation } = *data;
         let floor = f_hz.max(form_f_hz.unwrap_or(0.0));
         let fmax = self.effective_fmax_hz(floor);
         ui.horizontal(|ui| {
@@ -182,7 +183,7 @@ impl LossView {
                 self.pending = Some(self.full_range_bounds(freq, floor));
             }
         });
-        ui.label(format!("Loss vs frequency (Z0 = {z0:.2} Ohm; er, tan d constant)"));
+        ui.label(format!("Loss vs frequency ({name} = {z:.2} Ohm; er, tan d constant)"));
 
         let c = curves(freq, fmax);
         let pending = self.pending.take();
@@ -291,7 +292,7 @@ mod tests {
                         ui,
                         &LossData {
                             freq: &m,
-                            z0: 50.0,
+                            impedance: ("Z0", 50.0),
                             f_hz: 1e9,
                             form_f_hz: None,
                             units: UnitSystem::Metric,

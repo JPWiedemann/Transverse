@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ticks } from '../lib/plot';
-  import { allBounds, fitBounds, readoutText, segments, yFit } from '../lib/returncurrent';
+  import { allBounds, fitBounds, readoutText, segments, yBottom, yFit } from '../lib/returncurrent';
   import type { SplitSummary } from '../lib/types';
   import { autoLengthUnit, formatG, type UnitSystem } from '../lib/units';
   import Plot, { type Geometry, type Tick, type View } from './Plot.svelte';
@@ -22,6 +22,7 @@
   // x in a length unit that suits the visible range, J_s/I per that unit
   const unit = $derived(autoLengthUnit(units, view[1] - view[0]));
   const uf = $derived(unit[1]);
+  const ymin = $derived(fitBounds(split)[2]);
   const ymax = $derived(fitBounds(split)[3]);
 
   const xTicks = (lo: number, hi: number, n: number): Tick[] =>
@@ -52,7 +53,7 @@
 <p class="info">{split.info}</p>
 
 <div class="bar">
-  <button onclick={() => (view = [view[0], view[1], 0, yFit(split, view[0], view[1])])} title="keep the x range, scale y to the curves in it">Fit y</button>
+  <button onclick={() => (view = [view[0], view[1], yBottom(split, view[0], view[1]), yFit(split, view[0], view[1])])} title="keep the x range, scale y to the curves in it">Fit y</button>
   <button onclick={() => (view = fitBounds(split))} title="the trace and its gaps plus the nearest ground">Signal region</button>
   <button onclick={() => (view = allBounds(split))} title="the whole domain">Full view</button>
   <span class="weak">wheel: zoom   drag: pan   double-click: reset</span>
@@ -69,10 +70,9 @@
   ariaLabel="Return current density along the ground conductors"
 >
   {#snippet children(geo)}
-    {#if split.plot.signal}
-      {@const [a, b] = split.plot.signal}
-      <rect x={geo.sx(a)} y={geo.sy(ymax)} width={Math.max(geo.sx(b) - geo.sx(a), 0)} height={Math.max(geo.sy(0) - geo.sy(ymax), 0)} class="signal" />
-    {/if}
+    {#each split.plot.signals as [a, b]}
+      <rect x={geo.sx(a)} y={geo.sy(ymax)} width={Math.max(geo.sx(b) - geo.sx(a), 0)} height={Math.max(geo.sy(ymin) - geo.sy(ymax), 0)} class="signal" />
+    {/each}
     {#each split.plot.markers as x}
       <line x1={geo.sx(x)} x2={geo.sx(x)} y1={geo.top} y2={geo.top + geo.ih} class="marker" />
     {/each}

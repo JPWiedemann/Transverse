@@ -20,6 +20,17 @@ pub enum MeshMode {
     Manual,
 }
 
+/// The signal conductors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Signals {
+    /// One trace.
+    #[default]
+    Single,
+    /// Two equal traces of width `w` in one layer, `d` apart (differential pair).
+    Pair,
+}
+
 /// How the etched flanks of the copper (trace and coplanar ground) are given.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -42,11 +53,14 @@ pub enum WideSide {
     Top,
 }
 
-/// Parameters of the CPWG inner-layer line (field names match the Python reference).
+/// Parameters of the planar line (the field names of the CPWG match the Python reference).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlanarParams {
     // geometry
+    pub signals: Signals,
+    /// Pair: gap between the two traces, edge to edge.
+    pub d: f64,
     pub w: f64,
     pub s: f64,
     pub t: f64,
@@ -109,6 +123,8 @@ pub struct PlanarParams {
 impl Default for PlanarParams {
     fn default() -> Self {
         Self {
+            signals: Signals::Single,
+            d: 0.2,
             w: 0.3605,
             s: 0.11,
             t: 0.018,
@@ -173,6 +189,7 @@ impl PlanarParams {
         let fences = e.coplanar || e.side_walls;
         let positive = [
             ("w", e.w, true),
+            ("d", e.d, e.pair()),
             ("s", e.s, e.coplanar),
             ("h1", e.h1, true),
             ("h2", e.h2, true),
@@ -262,6 +279,9 @@ pub struct Analytic {
 pub fn analytic(p: &PlanarParams) -> Option<Analytic> {
     use std::f64::consts::PI;
     let p = p.effective();
+    if p.pair() {
+        return None;
+    }
     let microstrip = !p.coplanar && !p.plane1 && p.plane2 && p.er1 == 1.0 && p.gap_props().0 == 1.0;
     if microstrip {
         let (z0, eeff) = hammerstad_jensen(p.w / p.h2, p.er2);

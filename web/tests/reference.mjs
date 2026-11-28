@@ -57,7 +57,7 @@ function toSet(p) {
 
 // the contract itself
 const types = JSON.parse(line_types());
-same('synthesis targets', types[0].synth_targets.map((t) => t.id).join(), 'w,s,w_total');
+same('synthesis targets', types[0].synth_targets.map((t) => t.id).join(), 'w,s,w_total,pair_w,d,pair_s,pair_wd');
 same('line types', types.map((t) => t.id).join(), LINE);
 const specs = JSON.parse(param_specs(LINE));
 same('colour map size', colormap('Inferno').length, 256 * 3);
@@ -78,7 +78,7 @@ for (const c of cases.cases.filter((k) => !k.name.startsWith('manual_mesh'))) {
   close(`${c.name} alpha_c`, m.at_f.alpha_c, c.loss.alpha_c, TOL_LOSS);
   close(`${c.name} alpha_d`, m.at_f.alpha_d, c.loss.alpha_d, TOL_LOSS);
   // loss over frequency through the typed-array path: the same model as the mode result
-  const row = a.sample(new Float64Array([c.params.f]));
+  const row = a.sample(0, new Float64Array([c.params.f]));
   close(`${c.name} sample alpha_c`, row[2], m.at_f.alpha_c, 1e-12);
   // measured: up to 0.4 points, 1.5 for t = 0, and one exception: the field share of the gap flank with an air
   // gap, where the reference grid is not converged (3.86 %; 3.45 % at a target error of 0.03 % and still
@@ -108,7 +108,7 @@ for (const c of cases.cases.filter((k) => !k.name.startsWith('manual_mesh'))) {
 }
 
 for (const c of cases.synthesis) {
-  const a = synthesize(LINE, JSON.stringify(toSet(c.params)), c.var, c.target, undefined, undefined);
+  const a = synthesize(LINE, JSON.stringify(toSet(c.params)), c.var, c.target, undefined, undefined, undefined);
   const p = JSON.parse(a.params());
   close(`${c.name} w`, p.w, c.result.w, TOL_SYNTH);
   // Z0 depends only weakly on the gap, so a Z0 error of 5e-4 moves a synthesised gap by several times that
@@ -121,7 +121,7 @@ for (const c of cases.synthesis) {
 // 90 degrees, with the eps_eff of the synthesised geometry (the 35 ohm synthesis case)
 {
   const c = cases.synthesis[0];
-  const a = synthesize(LINE, JSON.stringify(toSet(c.params)), c.var, c.target, 90, undefined);
+  const a = synthesize(LINE, JSON.stringify(toSet(c.params)), c.var, c.target, undefined, 90, undefined);
   const m = JSON.parse(a.summary()).modes[0];
   const lambdaMm = (299_792_458 / (c.params.f * Math.sqrt(m.eps_eff))) * 1e3;
   close('phase synthesis: length', JSON.parse(a.params()).length, lambdaMm / 4, 1e-9);

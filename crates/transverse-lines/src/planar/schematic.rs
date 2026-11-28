@@ -6,6 +6,8 @@ use crate::model::{Anchor, SchemColor, SchemItem, Schematic};
 /// What the sketch shows (all other parameters do not change the picture).
 #[derive(Clone, Copy, Debug)]
 pub struct SchematicFlags {
+    /// Two traces (differential pair).
+    pub pair: bool,
     pub coplanar: bool,
     pub upper: bool,
     /// The upper dielectric has the material of the lower one.
@@ -25,6 +27,7 @@ impl SchematicFlags {
     pub fn of(p: &PlanarParams) -> Self {
         let e = p.effective();
         Self {
+            pair: e.pair(),
             coplanar: e.coplanar,
             upper: e.upper,
             upper_same: e.upper_same,
@@ -45,6 +48,8 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
     let (xf0, xf1) = (95.0, 555.0); // fences / coplanar outer ends
     let (yt, y1, yc, y2, yb) = (62.0, 72.0, 162.0, 176.0, 266.0);
     let (cx, hw, s) = (325.0, 70.0, 45.0);
+    // the traces of a pair: from the inner edge at `cx -+ hd` to the outer one at `cx -+ hw`
+    let (hw, hd) = if f.pair { (96.0, 20.0) } else { (hw, 0.0) };
     // the same material is drawn in the same colour
     let upper_col = if f.upper_same { LowerDielectric } else { UpperDielectric };
     let gap_col = match f.gap_mode {
@@ -113,7 +118,12 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         copper(&mut it, x0, cx - hw - s, [false, true], Conductor);
         copper(&mut it, cx + hw + s, x1, [true, false], Conductor);
     }
-    copper(&mut it, cx - hw, cx + hw, [true, true], Signal);
+    if f.pair {
+        copper(&mut it, cx - hw, cx - hd, [true, true], Signal);
+        copper(&mut it, cx + hd, cx + hw, [true, true], Signal);
+    } else {
+        copper(&mut it, cx - hw, cx + hw, [true, true], Signal);
+    }
     for xv in [xf0, xf1] {
         if f.fence1 {
             rect(&mut it, xv - 4.0, y1, xv + 4.0, yc, Conductor, Some(ConductorEdge));
@@ -143,7 +153,8 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
         text(&mut it, x0 + 70.0, y1 + 20.0, label, Anchor::Left, false, Text);
     }
     text(&mut it, x0 + 70.0, yb - 20.0, "Lower dielectric:  h2, er2, tan d2", Anchor::Left, false, Text);
-    text(&mut it, cx, y2 + 16.0, "Signal", Anchor::Center, true, Text);
+    let label = if f.pair { "Signals (+ and -)" } else { "Signal" };
+    text(&mut it, cx, y2 + 16.0, label, Anchor::Center, true, Text);
     if f.coplanar {
         text(&mut it, (xf0 + cx - hw - s) / 2.0, y2 + 14.0, "Coplanar ground", Anchor::Center, false, Text);
     }
@@ -153,12 +164,15 @@ pub fn schematic(f: &SchematicFlags) -> Schematic {
     // w, s and g refer to the wide face
     let y_wide = if f.etched == Some(WideSide::Bottom) { y2 } else { yc };
     // the edges next to the trace: the gap edges of a coplanar ground, or the trace edges alone
-    let spans: &[(f64, f64, &str)] = if f.coplanar {
-        &[(cx - hw - s, cx - hw, "s"), (cx - hw, cx + hw, "w"), (cx + hw, cx + hw + s, "s")]
+    let mut spans = if f.pair {
+        vec![(cx - hw, cx - hd, "w"), (cx - hd, cx + hd, "d"), (cx + hd, cx + hw, "w")]
     } else {
-        &[(cx - hw, cx + hw, "w")]
+        vec![(cx - hw, cx + hw, "w")]
     };
-    for &(xa, xb, lab) in spans {
+    if f.coplanar {
+        spans.extend([(cx - hw - s, cx - hw, "s"), (cx + hw, cx + hw + s, "s")]);
+    }
+    for (xa, xb, lab) in spans {
         line(&mut it, xa, ya, xb, ya, Text, false, true);
         text(&mut it, (xa + xb) / 2.0, ya - 9.0, lab, Anchor::Center, false, Text);
         for xv in [xa, xb] {
@@ -219,6 +233,7 @@ mod tests {
 
     fn flags(plane1: bool, plane2: bool, fence1: bool, fence2: bool, gap_mode: GapMode) -> SchematicFlags {
         SchematicFlags {
+            pair: false,
             coplanar: true,
             upper: true,
             upper_same: false,

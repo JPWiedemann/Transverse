@@ -47,7 +47,11 @@ pub struct App {
     model: Arc<dyn LineModel>,
     form: FormState,
     synth_target: usize,
+    /// The mode shown in the return-current and loss tabs (of a pair).
+    shown_mode: usize,
     z_target: String,
+    /// The second target of a search in two dimensions (Zcomm of a pair).
+    z_second: String,
     /// Electrical length to reach in degrees; empty keeps the line length.
     phase_target: String,
     settings: Settings,
@@ -85,17 +89,27 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings_path = settings::default_path();
         let (settings, note) = settings::load(&settings_path);
+        Self::with_settings(&cc.egui_ctx, settings, settings_path, note)
+    }
+
+    fn with_settings(
+        ctx: &egui::Context,
+        settings: Settings,
+        settings_path: PathBuf,
+        note: Option<String>,
+    ) -> Self {
         let model = transverse_lines::find_model(&settings.line_type)
             .unwrap_or_else(|| transverse_lines::registry().remove(0));
         let mut form = FormState::new(&*model);
         let prefs = Prefs::load(&settings.ui);
-        cc.egui_ctx.set_theme(egui_theme(prefs.theme));
+        ctx.set_theme(egui_theme(prefs.theme));
         let mut field_view = FieldView::default();
         field_view.load(&settings.ui);
         let mut loss_view = LossView::default();
         loss_view.load(&settings.ui);
         let mut synth_target = 0;
         let mut z_target = "35".to_string();
+        let mut z_second = "30".to_string();
         let mut phase_target = String::new();
         if let Some(ls) = settings.lines.get(model.id()) {
             form.load_saved(&*model, &ls.fields);
@@ -105,6 +119,9 @@ impl App {
             if let Some(z) = ls.extra.get("z_target").and_then(|v| v.as_str()) {
                 z_target = z.to_string();
             }
+            if let Some(z) = ls.extra.get("z_second").and_then(|v| v.as_str()) {
+                z_second = z.to_string();
+            }
             if let Some(p) = ls.extra.get("phase_target").and_then(|v| v.as_str()) {
                 phase_target = p.to_string();
             }
@@ -113,7 +130,9 @@ impl App {
             model,
             form,
             synth_target,
+            shown_mode: 0,
             z_target,
+            z_second,
             phase_target,
             settings,
             settings_path,
@@ -182,6 +201,7 @@ impl App {
         let target = self.model.synth_targets()[self.synth_target].id;
         ls.extra.insert("synth_target".into(), target.into());
         ls.extra.insert("z_target".into(), self.z_target.clone().into());
+        ls.extra.insert("z_second".into(), self.z_second.clone().into());
         ls.extra.insert("phase_target".into(), self.phase_target.clone().into());
         self.field_view.save(&mut self.settings.ui);
         self.prefs.save(&mut self.settings.ui);
@@ -203,7 +223,7 @@ impl App {
         };
         let job = if synth {
             let Some(z0) = parse_number(&self.z_target).filter(|z| *z > 0.0) else {
-                self.error = Some("Target Z0: enter a positive number".into());
+                self.error = Some("Target impedance: enter a positive number".into());
                 return;
             };
             // the phase is optional: the line length follows from it (and eps_eff) after the Z0 synthesis
@@ -218,8 +238,19 @@ impl App {
                 Some(ph)
             };
             let target = self.shown_target(&self.form.control_set(&*self.model));
-            let target_id = self.model.synth_targets()[target].id.to_string();
-            Job::Synthesize { params, target_id, z0, phase_deg }
+            let target = &self.model.synth_targets()[target];
+            let second = match target.second {
+                Some(name) => {
+                    let Some(z) = parse_number(&self.z_second).filter(|z| *z > 0.0) else {
+                        self.error = Some(format!("Target {name}: enter a positive number"));
+                        return;
+                    };
+                    Some(z)
+                }
+                None => None,
+            };
+            let target_id = target.id.to_string();
+            Job::Synthesize { params, target_id, z0, second, phase_deg }
         } else {
             Job::Analyze { params }
         };
@@ -251,8 +282,11 @@ impl App {
                         self.form.set_params(&*self.model, p);
                     }
                     let nodes = out.analysis.accuracy.as_ref().map_or(0, |a| a.nodes);
-                    self.status =
-                        format!("Done in {el:.1} s: Z0 = {:.3} Ohm, {nodes} nodes", out.analysis.modes[0].z0);
+                    let headline = match &out.analysis.pair {
+                        Some(pair) => format!("Zdiff = {:.3} Ohm", pair.z_diff),
+                        None => format!("Z0 = {:.3} Ohm", out.analysis.modes[0].z0),
+                    };
+                    self.status = format!("Done in {el:.1} s: {headline}, {nodes} nodes");
                     self.result = Some(out.analysis);
                     self.field_view.new_result();
                     self.generation += 1;
@@ -372,11 +406,12 @@ impl App {
         }
     }
 
-    /// The chosen synthesis target, or the first one if the structure does not offer it.
+    /// The chosen synthesis target, or the first one the structure offers if it does not offer the chosen one.
     fn shown_target(&self, controls: &ParamSet) -> usize {
-        match self.model.synth_targets().get(self.synth_target) {
+        let targets = self.model.synth_targets();
+        match targets.get(self.synth_target) {
             Some(t) if is_visible(t.visible_when, controls) => self.synth_target,
-            _ => 0,
+            _ => targets.iter().position(|t| is_visible(t.visible_when, controls)).unwrap_or(0),
         }
     }
 
@@ -390,15 +425,7 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.label(RichText::new("Synthesis").strong());
                 egui::Grid::new("synthesis").num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
-                    ui.label("Target Z0");
-                    entry(ui, &mut self.z_target, true);
-                    ui.label("Ohm");
-                    ui.end_row();
-                    // optional: the line length is set from the phase, it does not change the search
-                    ui.label("Phase");
-                    entry_optional(ui, &mut self.phase_target);
-                    ui.label("deg (empty: keep length)");
-                    ui.end_row();
+                    // first, because it decides which targets there are
                     ui.label("Vary");
                     egui::ComboBox::from_id_salt("synth_target")
                         .selected_text(targets[self.synth_target].label)
@@ -411,6 +438,22 @@ impl App {
                                 ui.selectable_value(&mut self.synth_target, k, t.label);
                             }
                         });
+                    ui.end_row();
+                    // the combo box may just have changed it: draw the targets it has now
+                    ui.label(format!("Target {}", targets[self.synth_target].quantity));
+                    entry(ui, &mut self.z_target, true);
+                    ui.label("Ohm");
+                    ui.end_row();
+                    if let Some(name) = targets[self.synth_target].second {
+                        ui.label(format!("Target {name}"));
+                        entry(ui, &mut self.z_second, true);
+                        ui.label("Ohm");
+                        ui.end_row();
+                    }
+                    // optional: the line length is set from the phase, it does not change the search
+                    ui.label("Phase");
+                    entry_optional(ui, &mut self.phase_target);
+                    ui.label("deg (empty: keep length)");
                     ui.end_row();
                 });
             });
@@ -437,6 +480,24 @@ impl App {
 
     // ------------------------------------------------------------------ tabs
 
+    /// The mode to show of the current result.
+    fn shown_mode_index(&self) -> usize {
+        let modes = self.result.as_ref().map_or(0, |a| a.modes.len());
+        if self.shown_mode < modes { self.shown_mode } else { 0 }
+    }
+
+    /// The choice between the modes of a pair, for the tabs that show one at a time.
+    fn mode_selector(&mut self, ui: &mut egui::Ui) {
+        if let Some(a) = self.result.as_ref().filter(|a| a.modes.len() > 1) {
+            ui.horizontal(|ui| {
+                ui.label("Shown mode");
+                for (k, m) in a.modes.iter().enumerate() {
+                    ui.selectable_value(&mut self.shown_mode, k, mode_label(&m.name));
+                }
+            });
+        }
+    }
+
     fn tab_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             for (t, name) in TABS {
@@ -455,43 +516,60 @@ impl App {
                     ui.label("No result yet. Press Analyze or Synthesize.");
                 }
             },
-            Tab::Field => {
-                match self.result.as_ref().and_then(|a| a.field.as_ref().map(|f| (f, a.accuracy.as_ref()))) {
-                    Some((f, acc)) => self.field_view.ui(ui, f, acc, self.prefs.units),
-                    None => {
-                        ui.label("No result yet. Press Analyze or Synthesize.");
-                    }
+            Tab::Field => match &mut self.result {
+                Some(Analysis { field: Some(f), accuracy, .. }) => {
+                    self.field_view.ui(ui, f, accuracy.as_ref(), self.prefs.units)
                 }
-            }
+                _ => {
+                    ui.label("No result yet. Press Analyze or Synthesize.");
+                }
+            },
             Tab::CrossSection => match self.model.schematic(&self.form.control_set(&*self.model)) {
                 Some(sch) => cross_section::show(ui, &sch),
                 None => {
                     ui.label("This line type has no sketch.");
                 }
             },
-            Tab::ReturnCurrent => match self.result.as_ref().and_then(|a| a.modes.first()?.split.as_ref()) {
-                Some(split) => self.return_view.ui(ui, split, self.generation, self.prefs.units),
-                None => {
-                    ui.label("No result yet. Press Analyze or Synthesize.");
+            Tab::ReturnCurrent => {
+                self.mode_selector(ui);
+                let k = self.shown_mode_index();
+                match self.result.as_ref().and_then(|a| a.modes.get(k)?.split.as_ref()) {
+                    // each mode keeps its own zoom only until the other one is shown
+                    Some(split) => {
+                        let shown = self.generation * 2 + k as u64;
+                        self.return_view.ui(ui, split, shown, self.prefs.units)
+                    }
+                    None => {
+                        ui.label("No result yet. Press Analyze or Synthesize.");
+                    }
                 }
-            },
-            Tab::Loss => match &self.result {
-                Some(a) => {
-                    let live_f = self.form_frequency();
-                    let data = LossData {
-                        freq: &*a.freq,
-                        z0: a.modes[0].z0,
-                        f_hz: a.modes[0].f_hz,
-                        form_f_hz: live_f,
-                        units: self.prefs.units,
-                        generation: self.generation,
-                    };
-                    self.loss_view.ui(ui, &data)
+            }
+            Tab::Loss => {
+                self.mode_selector(ui);
+                let k = self.shown_mode_index();
+                let live_f = self.form_frequency();
+                match self.result.as_ref().and_then(|a| Some((a.modes.get(k)?, a.freq.get(k)?))) {
+                    Some((mode, freq)) => {
+                        let name = match mode.name.as_str() {
+                            "odd" => "Zodd (per trace)",
+                            "even" => "Zeven (per trace)",
+                            _ => "Z0",
+                        };
+                        let data = LossData {
+                            freq: &**freq,
+                            impedance: (name, mode.z0),
+                            f_hz: mode.f_hz,
+                            form_f_hz: live_f,
+                            units: self.prefs.units,
+                            generation: self.generation * 2 + k as u64,
+                        };
+                        self.loss_view.ui(ui, &data)
+                    }
+                    None => {
+                        ui.label("No result yet. Press Analyze or Synthesize.");
+                    }
                 }
-                None => {
-                    ui.label("No result yet. Press Analyze or Synthesize.");
-                }
-            },
+            }
         }
     }
 }
@@ -551,5 +629,64 @@ impl eframe::App for App {
             w.cancel();
         }
         self.save_settings();
+    }
+}
+
+/// The mode of a pair, for the mode selector.
+fn mode_label(name: &str) -> &'static str {
+    if name == "even" { "Even (common)" } else { "Odd (differential)" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Pos2, Rect, Shape, vec2};
+    use transverse_lines::model::ParamValue;
+
+    fn texts(shape: &Shape, out: &mut Vec<String>) {
+        match shape {
+            Shape::Text(t) => out.push(t.galley.text().to_string()),
+            Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+
+    /// The texts the synthesis panel draws.
+    fn synthesis_texts(app: &mut App, ctx: &egui::Context) -> Vec<String> {
+        let mut out = Vec::new();
+        // a new row of a grid is laid out invisibly in its first frame
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(420.0, 700.0))),
+                ..Default::default()
+            };
+            let frame = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.synthesis_ui(ui));
+            });
+            out.clear();
+            frame.shapes.iter().for_each(|s| texts(&s.shape, &mut out));
+        }
+        out
+    }
+
+    #[test]
+    fn the_second_target_is_shown_for_width_and_gap_of_a_pair() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_settings(&ctx, Settings::default(), PathBuf::new(), None);
+        let mut set = app.model.defaults();
+        set.set("signals", ParamValue::Num(1.0));
+        let model = app.model.clone();
+        app.form.set_params(&*model, &set);
+        let before = synthesis_texts(&mut app, &ctx);
+        assert!(before.iter().any(|t| t == "Target Zdiff"), "{before:?}");
+        assert!(!before.iter().any(|t| t == "Target Zcomm"), "{before:?}");
+        app.synth_target = model.synth_targets().iter().position(|t| t.id == "pair_wd").unwrap();
+        let after = synthesis_texts(&mut app, &ctx);
+        for want in ["Target Zdiff", "Target Zcomm", "30", "w and d (Zdiff + Zcomm)"] {
+            assert!(after.iter().any(|t| t == want), "{want}: {after:?}");
+        }
+        // the choice comes before the targets it decides about
+        let row = |text: &str| after.iter().position(|t| t == text).unwrap();
+        assert!(row("Vary") < row("Target Zdiff") && row("Target Zdiff") < row("Target Zcomm"), "{after:?}");
     }
 }

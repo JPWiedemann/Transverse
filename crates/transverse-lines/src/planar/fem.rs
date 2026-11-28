@@ -3,12 +3,13 @@
 //! manual mesh). The finite-difference path ([`super::analyze`]) is separate.
 
 use transverse_core::fem::{self, Level, LevelRun, Order};
-use transverse_core::modes::impedance_matrix;
+use transverse_core::modes::{CapMatrices, impedance_matrix};
 use transverse_core::quasistatic::GridSource;
 use transverse_core::{Ctl, TvResult};
 use transverse_geom::SizeSpec;
 use transverse_mesh::Mesh;
 
+use super::fem_modes::{ModeValues, mode_values};
 use super::{MeshMode, PlanarParams};
 use crate::section_solve::{SectionSolution, refine_adaptively, solve_mesh};
 
@@ -62,6 +63,9 @@ impl PlanarParams {
 }
 
 /// Result of a FEM analysis: lumped values, accuracy, and the finest mesh with its potentials.
+///
+/// The values and potentials `v`, `v0` are those of one mode ([`Self::mode`]) as an equivalent line per trace: of
+/// the line itself with one trace, and of the odd mode of a pair unless [`Self::in_mode`] chose the even one.
 #[derive(Clone, Debug)]
 pub struct FemSolution {
     /// Capacitance with dielectrics [F/m].
@@ -73,6 +77,14 @@ pub struct FemSolution {
     pub eeff: f64,
     /// Inductance per metre [H/m].
     pub l: f64,
+    /// All modes, and the one the values above belong to.
+    pub modes: Vec<ModeValues>,
+    pub mode: usize,
+    /// Capacitance matrices (symmetric for a pair).
+    pub caps: CapMatrices,
+    /// Potentials with one signal at 1 V each, with dielectrics and in air.
+    pub signal_v: Vec<Vec<f64>>,
+    pub signal_v0: Vec<Vec<f64>>,
     pub accuracy: Level,
     /// Domain extension used [mm] (0 for closed structures).
     pub margin: f64,
@@ -124,7 +136,9 @@ pub fn analyze_fem(p: &PlanarParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<Fe
         fem::auto_margin_with(p.initial_margin(), opt.tol_pct, ctl, |m| {
             ctl.msg(&format!("Domain size check: margin {m:.3} mm ..."));
             let spec = level_spec(p, m, opt.manual, 2.0);
-            impedance_matrix(&solve_level(p, m, &spec, opt.max_nodes, opt.order, ctl)?.caps)
+            let run = solve_level(p, m, &spec, opt.max_nodes, opt.order, ctl)?;
+            // of a pair the symmetric matrices: the asymmetry of a coarse mesh alone is more than the check allows
+            impedance_matrix(&mode_values(run.caps)?.0)
         })?
     };
     let adaptive = opt.adaptive && opt.manual.is_none() && opt.order == Order::P2;
@@ -153,24 +167,30 @@ pub fn analyze_fem(p: &PlanarParams, opt: &FemOptions, ctl: &Ctl) -> TvResult<Fe
         })?,
     };
     let scale = if adaptive { opt.start_scale } else { accuracy.scales.last().copied().unwrap_or(1.0) };
-    // the planar line has one signal so far
-    let lumped = caps.single()?;
-    let only = |mut v: Vec<Vec<f64>>| v.swap_remove(0);
-    Ok(FemSolution {
-        c: lumped.c,
-        c0: lumped.c0,
-        g_over_omega: lumped.g_over_omega,
-        z0: lumped.z0(),
-        eeff: lumped.eeff(),
-        l: lumped.l(),
+    let (caps, modes) = mode_values(caps)?;
+    let mut out = FemSolution {
+        // the values and potentials are those of the first mode, filled in below
+        c: 0.0,
+        c0: 0.0,
+        g_over_omega: 0.0,
+        z0: 0.0,
+        eeff: 0.0,
+        l: 0.0,
+        modes,
+        mode: 0,
+        caps,
+        signal_v: solved.v,
+        signal_v0: solved.v0,
         accuracy,
         margin,
         mesh,
-        v: only(solved.v),
-        v0: only(solved.v0),
+        v: Vec::new(),
+        v0: Vec::new(),
         edges: solved.edges,
         order: opt.order,
         spec: level_spec(p, margin, opt.manual, scale),
         adaptive,
-    })
+    };
+    out.select_mode(0);
+    Ok(out)
 }

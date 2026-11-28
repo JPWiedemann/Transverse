@@ -4,13 +4,13 @@ use transverse_core::units::format_g;
 use transverse_core::{Ctl, TvError, TvResult, guided_wavelength_mm, length_for_phase_mm, phase_deg};
 
 use super::{
-    DEFAULT_RTOL, EtchMode, GapMode, GroundCat, MeshMode, PlanarFemAnalysis, PlanarParams, SchematicFlags,
-    Shares, Split, SynthVar, WideSide, fem_accuracy, field_data_fem, full_analysis_fem, ground_split_fem,
-    loss_model_fem, report_fem, schematic, synthesize_fem,
+    DEFAULT_RTOL, EtchMode, GapMode, GroundCat, MeshMode, ModeKind, ModeValues, PlanarFemAnalysis,
+    PlanarParams, SchematicFlags, Shares, Signals, Split, SynthVar, WideSide, analysis_from_fem,
+    fem_accuracy, field_data_fem, full_analysis_fem, report_fem, schematic, synthesize_fem,
+    synthesize_pair_fem,
 };
 use crate::model::*;
 use transverse_core::losses::LossModel;
-use transverse_core::quasistatic::Accuracy;
 
 const STRUCTURE: &str = "Structure";
 const GEO: &str = "Geometry";
@@ -38,6 +38,10 @@ const fn is(key: &'static str, value: usize) -> Condition {
 const THICK: Condition = Condition { key: "t", value: 0, not: true };
 
 const COPLANAR: Visibility = &[&[is("coplanar", 1)]];
+const SINGLE: Visibility = &[&[is("signals", 0)]];
+const PAIR: Visibility = &[&[is("signals", 1)]];
+const PAIR_COPLANAR: Visibility = &[&[is("signals", 1), is("coplanar", 1)]];
+const SINGLE_COPLANAR: Visibility = &[&[is("signals", 0), is("coplanar", 1)]];
 const UPPER: Visibility = &[&[is("upper", 1)]];
 const OWN_UPPER_MATERIAL: Visibility = &[&[is("upper", 1), is("upper_same", 0)]];
 const UPPER_FENCE: Visibility = &[&[is("upper", 1), is("coplanar", 1)]];
@@ -67,16 +71,19 @@ const fn num(default: f64, unit: &'static str) -> ParamKind {
     ParamKind::Number { default, unit, scale: 1.0 }
 }
 
+const SIGNAL_CHOICES: &[&str] = &["Single", "Differential pair (edge-coupled)"];
 const GAP_CHOICES: &[&str] = &["upper (or air)", "lower", "custom"];
 const ETCH_CHOICES: &[&str] = &["Rectangular", "Etch factor", "Width difference"];
 const WIDE_CHOICES: &[&str] = &["bottom", "top"];
 const MESH_CHOICES: &[&str] = &["Auto (target error)", "Manual"];
 
 /// Parameter form of the planar line (defaults equal [`PlanarParams::default`]).
-static SPECS: [ParamSpec; 35] = [
+static SPECS: [ParamSpec; 37] = [
+    spec("signals", "Signals", STRUCTURE, ParamKind::Choice(SIGNAL_CHOICES, 0)),
     spec("coplanar", "Coplanar ground", STRUCTURE, ParamKind::Bool(true)),
     spec("upper", "Upper half (else air above)", STRUCTURE, ParamKind::Bool(true)),
     spec("w", "Trace width w", GEO, len(0.3605, "mm")),
+    when(spec("d", "Pair gap d (edge to edge)", GEO, len(0.2, "mm")), PAIR),
     when(spec("s", "Gap s", GEO, len(0.11, "mm")), COPLANAR),
     spec("t", "Copper thickness t", GEO, len(0.018, "µm")),
     when(spec("etch", "Etched flanks", GEO, ParamKind::Choice(ETCH_CHOICES, 0)), ETCHING),
@@ -111,10 +118,29 @@ static SPECS: [ParamSpec; 35] = [
     spec("margin", "Domain margin (0=auto)", MESH, len(0.0, "mm")),
 ];
 
-static SYNTH: [SynthTarget; 3] = [
-    SynthTarget { id: "w", label: "w", visible_when: &[] },
-    SynthTarget { id: "s", label: "s (w fixed)", visible_when: COPLANAR },
-    SynthTarget { id: "w_total", label: "w (2s+w fixed)", visible_when: COPLANAR },
+const fn target(
+    id: &'static str,
+    label: &'static str,
+    quantity: &'static str,
+    visible_when: Visibility,
+) -> SynthTarget {
+    SynthTarget { id, label, quantity, second: None, visible_when }
+}
+
+static SYNTH: [SynthTarget; 7] = [
+    target("w", "w", "Z0", SINGLE),
+    target("s", "s (w fixed)", "Z0", SINGLE_COPLANAR),
+    target("w_total", "w (2s+w fixed)", "Z0", SINGLE_COPLANAR),
+    target("pair_w", "w", "Zdiff", PAIR),
+    target("d", "pair gap d (w fixed)", "Zdiff", PAIR),
+    target("pair_s", "s (w fixed)", "Zdiff", PAIR_COPLANAR),
+    SynthTarget {
+        id: "pair_wd",
+        label: "w and d (Zdiff + Zcomm)",
+        quantity: "Zdiff",
+        second: Some("Zcomm"),
+        visible_when: PAIR,
+    },
 ];
 
 /// The settings of a preset: all structure switches, and the upper dielectric beside the trace (which is air
@@ -183,7 +209,10 @@ impl PlanarParams {
         if max_nodes < 1.0 || max_nodes.fract() != 0.0 {
             return Err(TvError::InvalidParam("max_nodes must be a positive integer".into()));
         }
+        let signals = [Signals::Single, Signals::Pair][get_choice(s, "signals", 0, 2)?];
         Ok(Self {
+            signals,
+            d: get_num(s, "d", d.d)?,
             w: get_num(s, "w", d.w)?,
             s: get_num(s, "s", d.s)?,
             t: get_num(s, "t", d.t)?,
@@ -228,6 +257,7 @@ impl PlanarParams {
         use ParamValue::{Bool, Num};
         let mut s = ParamSet::default();
         for (k, v) in [
+            ("d", self.d),
             ("w", self.w),
             ("s", self.s),
             ("t", self.t),
@@ -266,6 +296,7 @@ impl PlanarParams {
         ] {
             s.set(k, Bool(v));
         }
+        s.set("signals", Num(self.signals as usize as f64));
         s.set("gap_mode", Num(self.gap_mode as usize as f64));
         s.set("mesh_mode", Num(self.mesh_mode as usize as f64));
         s.set("etch", Num(self.etch as usize as f64));
@@ -274,7 +305,13 @@ impl PlanarParams {
     }
 }
 
-fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64) -> SplitSummary {
+fn split_summary(
+    p: &PlanarParams,
+    split: &Split,
+    loss: &LossModel,
+    margin: f64,
+    mode: ModeKind,
+) -> SplitSummary {
     let e = &p.effective();
     let (fd, cur) = (&split.field, &split.current);
     let row = |c: GroundCat, indent: u8| SplitRow {
@@ -334,23 +371,37 @@ fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64)
         x90.push(("90 % of coplanar current within (from the gap edge)".to_string(), split.x90_cop));
     }
 
-    let w2 = p.w / 2.0;
+    // the outer edge of the traces
+    let w2 = p.trace_half_width();
     let xd = p.geometry(margin).xd;
-    let mut markers = vec![-w2, w2];
-    let mut labels = vec![(0.0, "signal".to_string())];
+    let (signals, mut markers, mut labels) = if p.pair() {
+        let (inner, centre) = (p.d / 2.0, p.d / 2.0 + p.w / 2.0);
+        (
+            vec![[-w2, -inner], [inner, w2]],
+            vec![-w2, -inner, inner, w2],
+            vec![(-centre, "signal 1".to_string()), (centre, "signal 2".to_string()), (0.0, "d".to_string())],
+        )
+    } else {
+        (vec![[-w2, w2]], vec![-w2, w2], vec![(0.0, "signal".to_string())])
+    };
+    let name = match mode {
+        ModeKind::Single => "HF return-current density".to_string(),
+        _ => format!("{}: ground return-current density", mode.label()),
+    };
     let (title, half_width) = if e.coplanar {
         let sw = w2 + p.s;
-        markers = vec![-sw, -w2, w2, sw];
+        markers.insert(0, -sw);
+        markers.push(sw);
         labels.extend([(-(w2 + p.s / 2.0), "s".into()), (w2 + p.s / 2.0, "s".into())]);
         let title = format!(
-            "HF return-current density (coplanar gap flank {:.1} %, not shown as a curve)",
+            "{name} (coplanar gap flank {:.1} %, not shown as a curve)",
             cur.get(GroundCat::CopFlank)
         );
         (title, (sw + p.g.min(1.5 * sw)).min(xd))
     } else {
-        ("HF return-current density".to_string(), (w2 + p.w.max(2.0 * e.h1.max(e.h2))).min(xd))
+        (name, (w2 + p.w.max(2.0 * e.h1.max(e.h2))).min(xd))
     };
-    let plot = ProfilePlot { title, half_width, signal: Some([-w2, w2]), markers, labels };
+    let plot = ProfilePlot { title, half_width, signals, markers, labels };
     let delta_um = loss.at(p.f).delta * 1e6;
     let valid = p.t > 0.0 && delta_um * 1e-3 < p.t / 3.0;
     let mut info = String::new();
@@ -367,6 +418,9 @@ fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64)
         delta_um,
         if valid { "valid." } else { "NOT well below t: the real current spreads more widely." }
     );
+    if mode == ModeKind::Odd {
+        info += "\nOdd mode: part of each trace's current returns in the other trace; the shares divide what returns in the grounds.";
+    }
     if !p.closed() {
         info += "\nDomain boundary = flux / current reaching the outer edge of the computation domain (remote ground).";
     }
@@ -397,54 +451,51 @@ fn split_summary(p: &PlanarParams, split: &Split, loss: &LossModel, margin: f64)
     SplitSummary { rows, x90, profiles, plot, info }
 }
 
-/// The solver-independent parts of a result.
-struct Parts {
-    z0: f64,
-    eeff: f64,
-    l: f64,
-    c: f64,
+/// The result of one mode.
+fn mode_result(
+    p: &PlanarParams,
+    mode: &ModeValues,
+    loss: &LossModel,
+    split: &Split,
     margin: f64,
-    report: String,
-    field: FieldData,
-    accuracy: Accuracy,
-}
-
-fn assemble(p: &PlanarParams, parts: Parts, loss: LossModel, split: &Split) -> Analysis {
-    let wavelength_mm = guided_wavelength_mm(p.f, parts.eeff);
-    let mode = ModeResult {
-        name: "single".into(),
-        z0: parts.z0,
-        eps_eff: parts.eeff,
-        l: parts.l,
-        c: parts.c,
+) -> ModeResult {
+    let wavelength_mm = guided_wavelength_mm(p.f, mode.eeff);
+    ModeResult {
+        name: mode.kind.key().into(),
+        z0: mode.z0,
+        eps_eff: mode.eeff,
+        l: mode.l,
+        c: mode.c,
         f_hz: p.f,
         wavelength_mm,
         phase_deg: phase_deg(p.length, wavelength_mm),
         at_f: loss.at(p.f),
-        split: Some(split_summary(p, split, &loss, parts.margin)),
-    };
-    Analysis {
-        report: parts.report,
-        field: Some(parts.field),
-        accuracy: Some(parts.accuracy),
-        freq: Box::new(loss),
-        modes: vec![mode],
+        split: Some(split_summary(p, split, loss, margin, mode.kind)),
     }
 }
 
 fn to_analysis(title: &str, p: &PlanarParams, a: PlanarFemAnalysis) -> TvResult<Analysis> {
     let s = &a.sol;
-    let parts = Parts {
-        z0: s.z0,
-        eeff: s.eeff,
-        l: s.l,
-        c: s.c,
-        margin: s.margin,
+    let mut modes = vec![mode_result(p, &s.modes[0], &a.loss, &a.split, s.margin)];
+    if let Some(even) = &a.even {
+        modes.push(mode_result(p, &s.modes[1], &even.loss, &even.split, s.margin));
+    }
+    let pair = s.common_impedance().zip(s.coupling()).map(|(z_comm, coupling)| PairResult {
+        z_diff: s.target_impedance(),
+        z_comm,
+        coupling,
+    });
+    Ok(Analysis {
+        modes,
+        pair,
         report: report_fem(title, p, &a),
-        field: FieldData::from_mesh(field_data_fem(p, s)?),
-        accuracy: fem_accuracy(s),
-    };
-    Ok(assemble(p, parts, a.loss, &a.split))
+        field: Some(FieldData::from_mesh(field_data_fem(p, s)?)),
+        accuracy: Some(fem_accuracy(s)),
+        freq: std::iter::once(a.loss)
+            .chain(a.even.as_ref().map(|even| even.loss))
+            .map(|loss| Box::new(loss) as _)
+            .collect(),
+    })
 }
 
 /// Planar transmission lines, solved with finite elements.
@@ -482,6 +533,7 @@ impl LineModel for PlanarLine {
         let etched = get_choice(p, "etch", 0, 3).ok()? != 0 && p.num("t").ok() != Some(0.0);
         let wide = [WideSide::Bottom, WideSide::Top][get_choice(p, "etch_wide", 0, 2).ok()?];
         let params = PlanarParams {
+            signals: [Signals::Single, Signals::Pair][get_choice(p, "signals", 0, 2).ok()?],
             coplanar: flag("coplanar", d.coplanar)?,
             upper: flag("upper", d.upper)?,
             upper_same: flag("upper_same", d.upper_same)?,
@@ -507,6 +559,7 @@ impl LineModel for PlanarLine {
         p: &ParamSet,
         target_id: &str,
         z0_target: f64,
+        second: Option<f64>,
         phase_deg: Option<f64>,
         ctl: &Ctl,
     ) -> TvResult<(ParamSet, Analysis)> {
@@ -517,28 +570,34 @@ impl LineModel for PlanarLine {
         if phase_deg.is_some_and(|ph| !(ph.is_finite() && ph > 0.0)) {
             return Err(TvError::Synthesis("the target phase must be a positive number of degrees".into()));
         }
-        let var = match t.id {
-            "w" => SynthVar::W,
-            "s" => SynthVar::S,
-            _ => SynthVar::WTotal,
-        };
         if !is_visible(t.visible_when, p) {
-            return Err(TvError::Synthesis(format!("'{}' needs a coplanar ground", t.label)));
+            return Err(TvError::Synthesis(format!("'{}' does not apply to this structure", t.label)));
         }
         let p = PlanarParams::from_set(p)?;
-        let (mut pp, sol) = synthesize_fem(&p, z0_target, var, DEFAULT_RTOL, ctl)?;
+        let mut title = format!("Synthesis: {} = {} Ohm", t.quantity, format_g(z0_target));
+        let (mut pp, sol) = if let Some(name) = t.second {
+            let second = second.ok_or_else(|| TvError::Synthesis(format!("a target {name} is needed")))?;
+            title += &format!(", {name} = {} Ohm", format_g(second));
+            synthesize_pair_fem(&p, z0_target, second, DEFAULT_RTOL, ctl)?
+        } else {
+            let var = match t.id {
+                "w" | "pair_w" => SynthVar::W,
+                "d" => SynthVar::D,
+                "s" | "pair_s" => SynthVar::S,
+                _ => SynthVar::WTotal,
+            };
+            synthesize_fem(&p, z0_target, var, DEFAULT_RTOL, ctl)?
+        };
+        title += &format!(", vary {}", t.label);
         // the length follows from the solution: eps_eff does not depend on it
-        let mut title = format!("Synthesis: Z0 = {} Ohm, vary {}", format_g(z0_target), t.label);
         if let Some(ph) = phase_deg {
             pp.length = length_for_phase_mm(pp.f, sol.eeff, ph);
             title += &format!(", phase = {} deg at {} GHz -> length", format_g(ph), format_g(pp.f / 1e9));
         }
-        let loss = loss_model_fem(&pp, &sol, ctl)?;
-        let split = ground_split_fem(&pp, &sol)?;
-        let analysis = to_analysis(&title, &pp, PlanarFemAnalysis { sol, loss, split })?;
+        let analysis = to_analysis(&title, &pp, analysis_from_fem(&pp, sol, ctl)?)?;
         // only the dimensions (and the length, if a phase was asked for) change; the domain margin
         // found during synthesis stays internal
-        let out = PlanarParams { w: pp.w, s: pp.s, length: pp.length, ..p };
+        let out = PlanarParams { w: pp.w, s: pp.s, d: pp.d, length: pp.length, ..p };
         Ok((out.to_set(), analysis))
     }
 }

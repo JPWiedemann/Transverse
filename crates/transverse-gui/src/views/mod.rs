@@ -37,7 +37,10 @@ mod tests {
         let mut set = m.defaults();
         set.set("plane1", ParamValue::Bool(false));
         set.set("fence1", ParamValue::Bool(false));
-        vec![closed, m.analyze(&set, &Ctl::new()).unwrap()]
+        let mut pair = m.defaults();
+        pair.set("signals", ParamValue::Num(1.0));
+        pair.set("w", ParamValue::Num(0.2));
+        vec![closed, m.analyze(&set, &Ctl::new()).unwrap(), m.analyze(&pair, &Ctl::new()).unwrap()]
     }
 
     #[test]
@@ -63,8 +66,8 @@ mod tests {
                 view.ui(
                     ui,
                     &LossData {
-                        freq: &*a.freq,
-                        z0: m.z0,
+                        freq: &*a.freq[0],
+                        impedance: ("Z0", m.z0),
                         f_hz: m.f_hz,
                         form_f_hz: None,
                         units: UnitSystem::Metric,
@@ -82,8 +85,8 @@ mod tests {
                 view.ui(
                     ui,
                     &LossData {
-                        freq: &*a.freq,
-                        z0: m.z0,
+                        freq: &*a.freq[0],
+                        impedance: ("Z0", m.z0),
                         f_hz: m.f_hz,
                         form_f_hz: None,
                         units: UnitSystem::Metric,
@@ -98,8 +101,8 @@ mod tests {
                 view.ui(
                     ui,
                     &LossData {
-                        freq: &*a.freq,
-                        z0: m.z0,
+                        freq: &*a.freq[0],
+                        impedance: ("Z0", m.z0),
                         f_hz: m.f_hz,
                         form_f_hz: Some(30e9),
                         units: UnitSystem::Imperial,

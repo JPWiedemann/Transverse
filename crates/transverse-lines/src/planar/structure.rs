@@ -1,7 +1,7 @@
 //! The switches of the structure and what they mean: which conductors exist, where the side walls stand, how
 //! far the region of interest reaches.
 
-use super::{EtchMode, PlanarParams};
+use super::{EtchMode, PlanarParams, Signals};
 
 impl PlanarParams {
     /// The parameters as the solvers see them, with the switches resolved:
@@ -57,6 +57,21 @@ impl PlanarParams {
         if u > 0.0 { self.t.atan2(u).to_degrees() } else { 90.0 }
     }
 
+    pub fn pair(&self) -> bool {
+        self.signals == Signals::Pair
+    }
+
+    /// Width of the copper from the outer edge of one trace to the outer edge of the other (`w` for one trace),
+    /// at the wide face.
+    pub fn trace_span(&self) -> f64 {
+        if self.pair() { 2.0 * self.w + self.d } else { self.w }
+    }
+
+    /// |x| of the outermost trace edge.
+    pub fn trace_half_width(&self) -> f64 {
+        self.trace_span() / 2.0
+    }
+
     /// Side walls from plane to plane, `g` outside the trace edges (only without a coplanar ground).
     pub fn has_walls(&self) -> bool {
         self.effective().side_walls
@@ -68,10 +83,10 @@ impl PlanarParams {
         e.plane1 && e.plane2 && if e.coplanar { e.fence1 && e.fence2 } else { e.side_walls }
     }
 
-    /// Outer edge of the conductors of the copper layer next to the trace: the gap edge of the coplanar ground,
-    /// or the trace edge itself without one.
+    /// Outer edge of the conductors of the copper layer next to the traces: the gap edge of the coplanar ground,
+    /// or the outer trace edge itself without one.
     pub fn inner_half_width(&self) -> f64 {
-        self.w / 2.0 + self.gap_or_zero()
+        self.trace_half_width() + self.gap_or_zero()
     }
 
     /// The gap to the coplanar ground, 0 without one (for sizes that grow with it).
@@ -94,7 +109,7 @@ impl PlanarParams {
         } else if e.coplanar || e.side_walls {
             e.wall_x()
         } else {
-            e.w / 2.0 + e.w.max(2.0 * e.h1.max(e.h2))
+            e.trace_half_width() + e.w.max(2.0 * e.h1.max(e.h2))
         }
     }
 

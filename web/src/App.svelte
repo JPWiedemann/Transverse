@@ -34,6 +34,7 @@
   let wavelength: F.Wavelength = () => undefined;
   let synthTarget = $state('');
   let synthZ0 = $state('50');
+  let synthSecond = $state('30');
   // electrical length to reach in degrees; empty keeps the line length
   let synthPhase = $state('');
   let theme = $state<Theme>(settings.theme);
@@ -59,6 +60,14 @@
   // the synthesis targets the structure offers, and the chosen one among them (else the first)
   const targets = $derived(line ? line.synth_targets.filter((t) => F.isVisible(t.visible_when, controls)) : []);
   const target = $derived(targets.some((t) => t.id === synthTarget) ? synthTarget : (targets[0]?.id ?? ''));
+  const quantity = $derived(targets.find((t) => t.id === target)?.quantity ?? 'Z0');
+  const secondQuantity = $derived(targets.find((t) => t.id === target)?.second ?? undefined);
+  /** the mode shown in the return-current and loss tabs (of a pair) */
+  let shownMode = $state(0);
+  /** the excitation shown in the field tab (of a pair) */
+  let excitation = $state(0);
+  const modes = $derived(result?.summary.modes ?? []);
+  const shown = $derived(modes[shownMode] ? shownMode : 0);
 
   // the parameters as currently typed, if they are valid (sketch and loss plot follow the form)
   const current = $derived.by(() => {
@@ -115,12 +124,13 @@
     form = f;
     synthTarget = l.synth_targets.some((t) => t.id === saved?.synthTarget) ? saved!.synthTarget! : (l.synth_targets[0]?.id ?? '');
     synthZ0 = saved?.synthZ0 ?? '50';
+    synthSecond = saved?.synthSecond ?? '30';
     synthPhase = saved?.synthPhase ?? '';
   }
 
   function persist() {
     if (!line) return;
-    settings.lines[line.id] = { form: F.toSaved(form), synthTarget, synthZ0, synthPhase };
+    settings.lines[line.id] = { form: F.toSaved(form), synthTarget, synthZ0, synthSecond, synthPhase };
     saveSettings(settings);
   }
 
@@ -168,7 +178,9 @@
       if (r.params) form = F.setParams(specs, form, r.params, wavelength);
       persist();
       const z0 = r.summary.modes[0]?.z0;
-      setStatus(`${what} done in ${((performance.now() - t0) / 1000).toFixed(1)} s${z0 ? `, Z0 = ${z0.toFixed(3)} Ω` : ''}`, 'ok');
+      const pair = r.summary.pair;
+      const headline = pair ? `, Zdiff = ${pair.z_diff.toFixed(3)} Ω` : z0 ? `, Z0 = ${z0.toFixed(3)} Ω` : '';
+      setStatus(`${what} done in ${((performance.now() - t0) / 1000).toFixed(1)} s${headline}`, 'ok');
     } catch (e) {
       if (e instanceof Cancelled) setStatus('Cancelled');
       else setStatus(e instanceof Error ? e.message : String(e), 'error');
@@ -195,14 +207,34 @@
         return;
       }
     }
+    let second: number | undefined;
+    if (secondQuantity) {
+      second = parseNumber(synthSecond);
+      if (second === undefined || second <= 0) {
+        setStatus(`Target ${secondQuantity}: '${synthSecond.trim()}' is not a positive number`, 'error');
+        return;
+      }
+    }
     persist();
-    return run((p) => engine.synthesize(line!.id, p, target, z0, phase, (t) => setStatus(t)), 'Synthesis');
+    return run((p) => engine.synthesize(line!.id, p, target, z0, second, phase, (t) => setStatus(t)), 'Synthesis');
   }
 </script>
 
 <svelte:head>
   <title>Transverse{line ? ` – ${line.name}` : ''}</title>
 </svelte:head>
+
+{#snippet modeSelector()}
+  {#if modes.length > 1}
+    <label class="shown-mode">Shown mode
+      <select value={String(shown)} onchange={(e) => (shownMode = Number(e.currentTarget.value))}>
+        {#each modes as m, k (m.name)}
+          <option value={String(k)}>{m.name === 'even' ? 'Even (common)' : 'Odd (differential)'}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
+{/snippet}
 
 {#if fatal}
   <main class="fatal"><h1>Transverse</h1><p>The calculation module could not be loaded: {fatal}</p></main>
@@ -241,9 +273,14 @@
         {/each}
       </select>
     </label>
-    <label>for Z0 =
-      <input type="text" inputmode="decimal" class="value" aria-label="Target Z0" bind:value={synthZ0} disabled={busy} onchange={persist} /> Ω
+    <label>for {quantity} =
+      <input type="text" inputmode="decimal" class="value" aria-label="Target {quantity}" bind:value={synthZ0} disabled={busy} onchange={persist} /> Ω
     </label>
+    {#if secondQuantity}
+      <label>{secondQuantity} =
+        <input type="text" inputmode="decimal" class="value" aria-label="Target {secondQuantity}" bind:value={synthSecond} disabled={busy} onchange={persist} /> Ω
+      </label>
+    {/if}
     <label title="electrical length at the analysis frequency; the line length is set from it. Empty keeps the line length.">phase =
       <input type="text" inputmode="decimal" class="value" aria-label="Target phase" placeholder="keep length" bind:value={synthPhase} disabled={busy} onchange={persist} /> °
     </label>
@@ -276,9 +313,10 @@
           <p class="hint">{current ? 'This line type has no cross-section sketch.' : 'Fix the invalid parameter to see the sketch.'}</p>
         {/if}
       {:else if tab === 'return-current'}
-        {@const split = result?.summary.modes[0]?.split}
+        {@const split = modes[shown]?.split}
         {#if split}
-          <ReturnTab {split} {generation} {units} />
+          {@render modeSelector()}
+          <ReturnTab {split} generation={generation * 2 + shown} {units} />
         {:else}
           <p class="hint">Press Analyze to see how the return current splits over the ground conductors.</p>
         {/if}
@@ -294,18 +332,21 @@
             bind:showEq
             bind:showMesh
             bind:dbRange
+            bind:excitation
           />
         {:else}
           <p class="hint">Press Analyze to see the field.</p>
         {/if}
       {:else if result}
-        {@const mode = result.summary.modes[0]}
+        {@const mode = modes[shown]}
         {#if mode}
+          {@render modeSelector()}
           <LossTab
             {engine}
             {canSample}
-            {generation}
-            z0={mode.z0}
+            generation={generation * 2 + shown}
+            mode={shown}
+            impedance={[mode.name === 'odd' ? 'Zodd (per trace)' : mode.name === 'even' ? 'Zeven (per trace)' : 'Z0', mode.z0]}
             fHz={mode.f_hz}
             {formFHz}
             {units}

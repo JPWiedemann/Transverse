@@ -5,10 +5,18 @@ use transverse_core::fem::p2_values;
 use transverse_core::postproc::mesh::{Located, TriIndex, triangle_contour};
 use transverse_core::postproc::{StreamOptions, field_lines_with};
 
-use crate::model::{Bounds, DrawRect};
+use crate::model::{Bounds, DrawRect, Excitation};
+
+/// The fields with one signal at 1 V and all others at 0 V. The fields of any excitation are sums of these.
+#[derive(Clone, Debug)]
+pub struct FieldBasis {
+    pub v: Vec<f64>,
+    pub v0: Vec<f64>,
+    pub e_nodal: Vec<[f64; 2]>,
+}
 
 /// Potentials (both solutions), the recovered E field and the drawing information of a mesh solution.
-/// Fields are for 1 V on the signal, lengths in mm, E in V/mm.
+/// Fields are for the excitation named by `drive`, lengths in mm, E in V/mm.
 #[derive(Clone, Debug)]
 pub struct MeshFieldData {
     pub pts: Vec<[f64; 2]>,
@@ -36,10 +44,34 @@ pub struct MeshFieldData {
     pub dotted_y: Vec<f64>,
     pub view_zoom: Bounds,
     pub view_full: Bounds,
-    pub z0: f64,
+    /// How the signals are driven, with the impedance of that mode.
+    pub drive: String,
+    /// Where there is a choice (several signals): the excitations, the one shown, and one basis per signal. Empty
+    /// otherwise.
+    pub excitations: Vec<Excitation>,
+    pub excitation: usize,
+    pub basis: Vec<FieldBasis>,
 }
 
 impl MeshFieldData {
+    /// Makes `v`, `v0`, `e_nodal` and `drive` those of excitation `k`; false if there is no such one.
+    pub fn select(&mut self, k: usize) -> bool {
+        let Some(x) = self.excitations.get(k) else { return false };
+        let weighted = || self.basis.iter().zip(&x.voltages);
+        let mut v = vec![0.0; self.v.len()];
+        let mut v0 = vec![0.0; self.v0.len()];
+        let mut e = vec![[0.0; 2]; self.e_nodal.len()];
+        for (b, &a) in weighted() {
+            v.iter_mut().zip(&b.v).for_each(|(o, x)| *o += a * x);
+            v0.iter_mut().zip(&b.v0).for_each(|(o, x)| *o += a * x);
+            e.iter_mut().zip(&b.e_nodal).for_each(|(o, x)| *o = [o[0] + a * x[0], o[1] + a * x[1]]);
+        }
+        (self.v, self.v0, self.e_nodal) = (v, v0, e);
+        self.drive.clone_from(&x.drive);
+        self.excitation = k;
+        true
+    }
+
     pub fn locate(&self, p: [f64; 2]) -> Option<Located> {
         self.index.locate(&self.pts, &self.tris, p)
     }

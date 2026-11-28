@@ -12,6 +12,8 @@ export interface LineSettings {
   form?: SavedForm;
   synthTarget?: string;
   synthZ0?: string;
+  /** the second target of a search in two dimensions, as typed */
+  synthSecond?: string;
   /** electrical length to reach in degrees, as typed; empty keeps the line length */
   synthPhase?: string;
 }

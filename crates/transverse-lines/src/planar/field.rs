@@ -109,7 +109,7 @@ pub fn field_data(p: &PlanarParams, sol: &Solution) -> FieldData {
         dotted_y: d.dotted_y,
         view_zoom: d.view_zoom,
         view_full: d.view_full,
-        z0: sol.z0,
+        drive: format!("1 V on signal, Z0 = {:.2} Ohm", sol.z0),
         mesh: None,
     }
 }

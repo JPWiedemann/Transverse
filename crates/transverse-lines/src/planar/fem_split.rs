@@ -4,7 +4,9 @@
 //! (where the field lines end), the air solution the return-current share (valid when the skin depth is much
 //! smaller than the thickness). The fluxes come from the reactions at the midpoints of the conductor boundary
 //! edges (`transverse_core::fem::boundary_fluxes`); the coplanar-ground faces are told apart by the side of the
-//! edge the element lies on.
+//! edge the element lies on. In the odd mode of a pair the ground currents of the two halves have opposite signs:
+//! the shares are of their magnitudes, and the profiles keep the sign. Part of each trace's current then returns
+//! in the other trace; the shares only divide what returns in the grounds.
 
 use std::collections::HashMap;
 
@@ -27,6 +29,8 @@ struct Contact {
     len: f64,
     flux_d: f64,
     flux_0: f64,
+    /// `flux_0` with its sign, for the current profiles.
+    signed_0: f64,
 }
 
 /// Ground split of a FEM solution (quadratic elements).
@@ -45,6 +49,10 @@ pub fn ground_split_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<Split> 
     if fd.len() != f0.len() {
         return Err(TvError::Solver("ground split: inconsistent boundary fluxes".into()));
     }
+    // With traces driven against each other the grounds carry as much flux of one sign as of the other: the
+    // shares are then those of the magnitudes (in the odd mode the sign only changes between the two halves).
+    let opposed = sol.modes[sol.mode].voltages.iter().any(|v| *v < 0.0);
+    let size = |flux: f64| if opposed { flux.abs() } else { flux };
 
     let mut contacts = Vec::with_capacity(fd.len());
     for (d, z) in fd.iter().zip(&f0) {
@@ -78,7 +86,15 @@ pub fn ground_split_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<Split> 
         let (xa, xb) = (pa[0].abs(), pb[0].abs());
         let low = if pa[0] * pb[0] < 0.0 { 0.0 } else { xa.min(xb) };
         let reach = (low, xa.max(xb));
-        contacts.push(Contact { cat, x: mid[0], reach, len: dx.hypot(dy), flux_d: d.flux, flux_0: z.flux });
+        contacts.push(Contact {
+            cat,
+            x: mid[0],
+            reach,
+            len: dx.hypot(dy),
+            flux_d: size(d.flux),
+            flux_0: size(z.flux),
+            signed_0: z.flux,
+        });
     }
 
     let sums = |pick: fn(&Contact) -> f64| {
@@ -96,12 +112,12 @@ pub fn ground_split_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<Split> 
         contacts.iter().filter(|c| cats.contains(&c.cat)).map(|c| (c.reach, c.flux_0)).collect()
     };
     let x90_planes = x90_spread(&spread(&[GroundCat::Plane1, GroundCat::Plane2]));
-    let x90_cop = x90_spread(&spread(&GroundCat::COPLANAR)).map_or(f64::NAN, |x| x - (p.w / 2.0 + p.s));
+    let x90_cop = x90_spread(&spread(&GroundCat::COPLANAR)).map_or(f64::NAN, |x| x - p.inner_half_width());
 
     let mut profiles = Vec::new();
     for cat in [GroundCat::Plane1, GroundCat::Plane2, GroundCat::CopTop, GroundCat::CopBottom] {
         let mut v: Vec<(f64, f64)> =
-            contacts.iter().filter(|c| c.cat == cat).map(|c| (c.x, c.flux_0 / c.len / tot)).collect();
+            contacts.iter().filter(|c| c.cat == cat).map(|c| (c.x, c.signed_0 / c.len / tot)).collect();
         if v.is_empty() {
             continue;
         }

@@ -8,25 +8,27 @@ use transverse_core::{Ctl, TvResult};
 use super::{GapMode, MeshMode, PlanarParams, analyze};
 
 impl PlanarParams {
-    /// The structure with every metal surface moved by `d` into its metal (`d < 0`: out of it), as new
+    /// The structure with every metal surface moved by `by` into its metal (`by < 0`: out of it), as new
     /// dimensions. The heights h1 and h2 are measured from the copper surfaces, which move as well, so a plane
-    /// that recedes gets `2 d` further from a thick copper layer (`d` from a zero-thickness one, whose faces
-    /// cannot move). Via fences and side walls are vertical and move by `d` as well.
+    /// that recedes gets `2 by` further from a thick copper layer (`by` from a zero-thickness one, whose faces
+    /// cannot move). Via fences and side walls are vertical and move by `by` as well.
     ///
     /// A surface moves along its normal, so an etched flank keeps its angle `a` to the wide face. With both
-    /// faces and the flank moved by `d`, the wide edge moves sideways by `k d` with `k = cot(a / 2)`, which is
-    /// 1 for a vertical flank: `w - 2 k d` and `s + 2 k d`. The undercut shrinks with the thickness.
-    pub fn walls_receded(&self, d: f64) -> Self {
+    /// faces and the flank moved, the wide edge moves sideways by `k by` with `k = cot(a / 2)`, which is 1 for a
+    /// vertical flank: `w - 2 k by`, `s + 2 k by` and for a pair `d + 2 k by`. The undercut shrinks with the
+    /// thickness.
+    pub fn walls_receded(&self, by: f64) -> Self {
         let thick = self.t > 0.0;
-        let plane = if thick { 2.0 * d } else { d };
-        let t = if thick { (self.t - 2.0 * d).max(0.0) } else { 0.0 };
+        let plane = if thick { 2.0 * by } else { by };
+        let t = if thick { (self.t - 2.0 * by).max(0.0) } else { 0.0 };
         let k = self.edge_shift_ratio();
-        // a side wall is measured from the trace edge (which moves by -k d, the wall by +d), a fence on the
-        // coplanar ground from the ground edge (which moves by +k d)
-        let g = if self.has_walls() { self.g + d * (1.0 + k) } else { self.g - d * (k - 1.0) };
+        // a side wall is measured from the outer trace edge (which moves by -k by, the wall by +by), a fence on
+        // the coplanar ground from the ground edge (which moves by +k by)
+        let g = if self.has_walls() { self.g + by * (1.0 + k) } else { self.g - by * (k - 1.0) };
         Self {
-            w: self.w - 2.0 * k * d,
-            s: self.s + 2.0 * k * d,
+            w: self.w - 2.0 * k * by,
+            s: self.s + 2.0 * k * by,
+            d: if self.pair() { self.d + 2.0 * k * by } else { self.d },
             t,
             etch_delta: if thick { self.etch_delta * t / self.t } else { self.etch_delta },
             h1: if self.plane1 { self.h1 + plane } else { self.h1 },
@@ -49,6 +51,9 @@ pub(super) fn wheeler_step(p: &PlanarParams) -> f64 {
     let mut dn = p.narrow_width() / 20.0;
     if p.coplanar {
         dn = dn.min(p.s / 20.0);
+    }
+    if p.pair() {
+        dn = dn.min(p.d / 20.0);
     }
     if p.t > 0.0 {
         dn = dn.min(p.t / 8.0);

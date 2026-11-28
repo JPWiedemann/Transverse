@@ -19,7 +19,10 @@ struct Lumped {
 
 pub fn report(title: &str, p: &PlanarParams, a: &PlanarAnalysis) -> String {
     let sol = &a.sol;
-    let mut s = body(title, p, &Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c }, &a.loss, &a.split);
+    let mut s = heading(title, p);
+    let lumped = Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c };
+    mode_lines(&mut s, p, "Z0", &lumped, &a.loss, &a.split);
+    analytic_line(&mut s, p);
     let acc = &sol.accuracy;
     let _ = writeln!(
         s,
@@ -44,7 +47,31 @@ pub fn report(title: &str, p: &PlanarParams, a: &PlanarAnalysis) -> String {
 /// Report of a finite-element analysis.
 pub fn report_fem(title: &str, p: &PlanarParams, a: &PlanarFemAnalysis) -> String {
     let sol = &a.sol;
-    let mut s = body(title, p, &Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c }, &a.loss, &a.split);
+    let mut s = heading(title, p);
+    let lumped = |k: usize| {
+        let m = &sol.modes[k];
+        Lumped { z0: m.z0, eeff: m.eeff, l: m.l, c: m.c }
+    };
+    match (&a.even, sol.common_impedance(), sol.coupling()) {
+        (Some(even), Some(common), Some(coupling)) => {
+            let _ =
+                writeln!(s, "Zdiff           = {:8.3} Ohm  (2 x odd-mode impedance)", sol.target_impedance());
+            let _ = writeln!(s, "Zcomm           = {common:8.3} Ohm  (even-mode impedance / 2)");
+            let _ = writeln!(s, "Coupling        = {coupling:8.4}      ((Zeven - Zodd) / (Zeven + Zodd))\n");
+            let _ = writeln!(
+                s,
+                "Per mode below: impedance, L', C', R' and G' are those of one trace; the losses in dB, delay and phase\nare those of the mode as a whole.\n"
+            );
+            for (k, (loss, split)) in [(&a.loss, &a.split), (&even.loss, &even.split)].into_iter().enumerate()
+            {
+                let kind = sol.modes[k].kind;
+                let _ = writeln!(s, "--- {} ---", kind.label());
+                mode_lines(&mut s, p, kind.impedance_name(), &lumped(k), loss, split);
+            }
+        }
+        _ => mode_lines(&mut s, p, "Z0", &lumped(0), &a.loss, &a.split),
+    }
+    analytic_line(&mut s, p);
     let acc = &sol.accuracy;
     let (nodes, elements) = (sol.mesh.pts.len(), sol.mesh.tris.len());
     let _ = writeln!(
@@ -60,9 +87,11 @@ pub fn report_fem(title: &str, p: &PlanarParams, a: &PlanarFemAnalysis) -> Strin
             (false, Some(_)) => format!("{k} mesh levels, extrapolated"),
             (false, None) => format!("{k} mesh levels"),
         };
+        // of a pair the refinement is judged by every entry of the impedance matrix; Z11 is shown
+        let name = if p.pair() { "Z11" } else { "Z0" };
         let _ = writeln!(
             s,
-            "Accuracy        : {how}; Z0 of the last two {:.3} / {:.3} Ohm (estimated error {:.2} %)",
+            "Accuracy        : {how}; {name} of the last two {:.3} / {:.3} Ohm (estimated error {:.2} %)",
             z0[k - 2],
             z0[k - 1],
             acc.est_err * 100.0
@@ -85,6 +114,9 @@ fn domain_line(s: &mut String, p: &PlanarParams, margin: f64) {
 /// The structure and its dimensions.
 fn geometry_lines(w: &mut String, e: &PlanarParams) {
     let mut sizes = vec![format!("w = {:.2} um", e.w * 1e3)];
+    if e.pair() {
+        sizes.push(format!("d = {:.2} um", e.d * 1e3));
+    }
     if e.coplanar {
         sizes.push(format!("s = {:.2} um", e.s * 1e3));
     }
@@ -125,23 +157,32 @@ fn geometry_lines(w: &mut String, e: &PlanarParams) {
     } else if e.side_walls {
         parts.push("via fences".to_string());
     }
-    let total =
-        if e.coplanar { format!("2s + w = {:.2} um   ", (2.0 * e.s + e.w) * 1e3) } else { String::new() };
-    let _ = writeln!(w, "           {total}{}  [{}]\n", e.structure_name(), parts.join(", "));
+    let total = match (e.coplanar, e.pair()) {
+        (true, false) => format!("2s + w = {:.2} um   ", (2.0 * e.s + e.w) * 1e3),
+        (true, true) => format!("2s + 2w + d = {:.2} um   ", (2.0 * e.s + e.trace_span()) * 1e3),
+        _ => String::new(),
+    };
+    let kind = if e.pair() { "edge-coupled differential pair, " } else { "" };
+    let _ = writeln!(w, "           {total}{kind}{}  [{}]\n", e.structure_name(), parts.join(", "));
 }
 
-fn body(title: &str, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &Split) -> String {
+/// Title and geometry.
+fn heading(title: &str, p: &PlanarParams) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "=== {title} ===");
+    geometry_lines(&mut s, &p.effective());
+    s
+}
+
+/// The values, losses and ground split of one mode.
+fn mode_lines(w: &mut String, p: &PlanarParams, z: &str, sol: &Lumped, loss: &LossModel, split: &Split) {
     let lo = loss.at(p.f);
     let to_db_mm = NP2DB / 1000.0;
     let (ac, ad) = (lo.alpha_c * to_db_mm, lo.alpha_d * to_db_mm);
     let tot = ac + ad;
     let vp = C_LIGHT / sol.eeff.sqrt();
     let e = p.effective();
-    let mut s = String::new();
-    let w = &mut s;
-    let _ = writeln!(w, "=== {title} ===");
-    geometry_lines(w, &e);
-    let _ = writeln!(w, "Z0              = {:8.3} Ohm", sol.z0);
+    let _ = writeln!(w, "{z:15} = {:8.3} Ohm", sol.z0);
     let _ = writeln!(w, "eps_eff         = {:8.4}", sol.eeff);
     let _ = writeln!(w, "v_p             = {:8.4} c", vp / C_LIGHT);
     let _ =
@@ -227,7 +268,10 @@ fn body(title: &str, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &S
         let _ = writeln!(w, "  90 % of coplanar current within {:.3} mm of the gap edge", split.x90_cop);
     }
     let _ = writeln!(w);
+}
 
+fn analytic_line(w: &mut String, p: &PlanarParams) {
+    let e = p.effective();
     if let Some(a) = analytic(p) {
         let note = match (a.method, a.exact) {
             ("conformal mapping", true) => String::new(),
@@ -239,5 +283,4 @@ fn body(title: &str, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &S
         };
         let _ = writeln!(w, "Analytic (t=0)  : Z0 = {:.2} Ohm, eps_eff = {:.3}{note}", a.z0, a.eeff);
     }
-    s
 }

@@ -355,7 +355,7 @@ mod tests {
             dotted_y: vec![],
             view_zoom: [0.0, 3.0, 0.0, 3.0],
             view_full: [0.0, 3.0, 0.0, 3.0],
-            z0: 50.0,
+            drive: String::new(),
             mesh: None,
         };
         let e = e_field(&v, &x, &y, &fixed);
