@@ -62,14 +62,14 @@ pub fn ground_split_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<Split> 
             C_BND => GroundCat::Boundary,
             // the flux around the tip of a zero-thickness coplanar ground faces the gap: the gap flank
             C_COP if d.side == 0 => GroundCat::CopFlank,
-            C_COP if dy < dx => {
+            C_COP if dy <= 1e-6 * dx => {
                 if centre[1] > mid[1] {
                     GroundCat::CopTop
                 } else {
                     GroundCat::CopBottom
                 }
             }
-            C_COP if centre[0].abs() < mid[0].abs() => GroundCat::CopFlank,
+            C_COP if faces_the_trace(pa, pb, mid, centre) => GroundCat::CopFlank,
             C_COP => GroundCat::CopOuter,
             _ => continue,
         };
@@ -109,6 +109,14 @@ pub fn ground_split_fem(p: &PlanarParams, sol: &FemSolution) -> TvResult<Split> 
         profiles.push(Profile { cat, x, js });
     }
     Ok(Split { field, current, x90_planes, x90_cop, profiles })
+}
+
+/// Whether the face along the edge `a`-`b` looks towards x = 0: its normal on the side of the element (with
+/// centre `centre`) points that way. Right also for slanted flanks.
+fn faces_the_trace(a: [f64; 2], b: [f64; 2], mid: [f64; 2], centre: [f64; 2]) -> bool {
+    let n = [b[1] - a[1], a[0] - b[0]];
+    let to_element = n[0] * (centre[0] - mid[0]) + n[1] * (centre[1] - mid[1]);
+    n[0] * to_element.signum() * mid[0] < 0.0
 }
 
 /// The |x| within which 90 % of the flux lies, with the flux of every edge spread evenly over the range of |x| the

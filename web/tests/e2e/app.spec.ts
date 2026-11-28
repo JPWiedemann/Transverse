@@ -172,6 +172,38 @@ test('fields that do not apply are hidden', async ({ page }) => {
   await expect(page.getByText('Upper half', { exact: true })).toHaveCount(0);
 });
 
+test('etched flanks: fields follow the choice and zero thickness, and the analysis uses them', async ({ page }) => {
+  const errors = watchErrors(page);
+  const etch = page.getByLabel('Etched flanks', { exact: true });
+  await expect(page.locator('#p-etch_factor')).toHaveCount(0);
+  await expect(page.locator('#p-etch_delta')).toHaveCount(0);
+  await etch.selectOption({ label: 'Etch factor' });
+  await expect(page.locator('#p-etch_factor')).toBeVisible();
+  await expect(page.getByLabel('Wide side (w, s, g are there)')).toBeVisible();
+  // copper without thickness has no flanks
+  await page.locator('#p-t').fill('0');
+  await expect(etch).toHaveCount(0);
+  await expect(page.locator('#p-etch_factor')).toHaveCount(0);
+  await page.locator('#p-t').fill('35');
+  await expect(page.locator('#p-etch_factor')).toBeVisible();
+
+  await analyze(page);
+  await expect(page.locator('.report')).toContainText('narrow width 325.50 um');
+  await expect(page.locator('.report')).toContainText('flank angle 63.4 deg');
+  await tab(page, 'Cross-section').click();
+  await expect(page.locator('svg.sketch polygon[fill="var(--sk-signal)"]')).toHaveCount(1);
+  await tab(page, 'Field').click();
+  await expect(page.locator('.bar canvas')).toBeVisible({ timeout: 20_000 });
+
+  await etch.selectOption({ label: 'Width difference' });
+  await expect(page.locator('#p-etch_delta')).toBeVisible();
+  await expect(page.locator('#p-etch_factor')).toHaveCount(0);
+  await analyze(page);
+  await tab(page, 'Results').click();
+  await expect(page.locator('.report')).toContainText('width difference 20.00 um');
+  expect(errors).toEqual([]);
+});
+
 test('presets set the structure and keep the dimensions', async ({ page }) => {
   const errors = watchErrors(page);
   await page.locator('#p-w').fill('0.5');

@@ -142,8 +142,11 @@ impl GridSource for PlanarParams {
     fn base_sizes(&self) -> (f64, f64) {
         let p = self.effective();
         let hmin = p.h1.min(p.h2);
-        let mut feat = vec![p.w / 60.0, hmin / 60.0];
-        let mut narrowest = p.w.min(hmin);
+        // of an etched trace the mean width: the corners of a narrow face need no fine mesh all around them
+        // beyond what the adaptive refinement gives them, even where the face is almost a point
+        let w = p.w - p.undercut();
+        let mut feat = vec![w / 60.0, hmin / 60.0];
+        let mut narrowest = w.min(hmin);
         // the width of the copper layer the core cells have to resolve: strip and gaps, or three strip widths
         let mut across = 3.0 * p.w;
         if p.coplanar {

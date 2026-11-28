@@ -21,6 +21,8 @@ Calculates the impedance, losses and fields of a transmission line from its 2D c
 
 The form shows only the fields the structure uses. The upper dielectric can take εr and tan δ of the lower one.
 
+**Etched flanks.** Etching also works sideways under the resist, so the cross-section of the copper is a trapezoid, wider on the side that lies on the laminate it was etched on. Trace and coplanar ground can be given such flanks in one of two ways: an **etch factor**, copper thickness divided by the undercut of one side (2 means 17.5 µm per side on 35 µm copper), or the **width difference** between the wide and the narrow face of a trace. Other tools and fabricators define the etch factor differently, so check which definition a number comes with; the report states the resulting narrow width and flank angle. `w`, `s` and `g` are measured at the wide face, which is at the bottom unless set to the top, and synthesis varies the dimensions there. The flanks are straight; real etched flanks are often curved.
+
 Transverse is a desktop application (Rust, egui) and a web version (the same core as WebAssembly), with a command line interface. A Python reference implementation of the coplanar structures lives in [`python/`](python/); the Rust port reproduces its results (see [Validation](#validation)).
 
 ## Features
@@ -83,7 +85,7 @@ echo '{}' | transverse compare                      # both solvers, relative dif
 transverse --version
 ```
 
-The parameters are `w`, `s`, `t`, `g`, `h1`, `er1`, `tand1`, `plane1`, `fence1`, `h2`, `er2`, `tand2`, `plane2`, `fence2`, the structure switches `coplanar`, `upper`, `upper_same`, `side_walls`, then `gap_mode` (`upper`, `lower`, `custom`), `er_gap`, `tand_gap`, `sigma`, `rq` (RMS roughness), `f`, `length`, `mesh_mode` (`auto`, `manual`), `tol` (target error in %), `dmin`, `dmax`, `max_nodes` and `margin`. `richardson` applies to the grid solver only.
+The parameters are `w`, `s`, `t`, `g`, the etching `etch` (`rect`, `factor`, `delta`), `etch_factor`, `etch_delta`, `etch_wide` (`bottom`, `top`), `h1`, `er1`, `tand1`, `plane1`, `fence1`, `h2`, `er2`, `tand2`, `plane2`, `fence2`, the structure switches `coplanar`, `upper`, `upper_same`, `side_walls`, then `gap_mode` (`upper`, `lower`, `custom`), `er_gap`, `tand_gap`, `sigma`, `rq` (RMS roughness), `f`, `length`, `mesh_mode` (`auto`, `manual`), `tol` (target error in %), `dmin`, `dmax`, `max_nodes` and `margin`. `richardson` applies to the grid solver only, which cannot do etched flanks.
 
 ## Method
 
@@ -100,6 +102,8 @@ The grid solver is checked against the Python implementation on 14 analysis and 
 - zero-thickness coplanar lines and the symmetric stripline against conformal-mapping values (0.3 % and 0.2 %),
 - zero-thickness microstrip against the formulas of Hammerstad and Jensen (1 %),
 - the conductor loss against the integral of the squared surface current over all conductors (0.5 %).
+
+The grid cannot follow slanted flanks. Etched copper is checked by that integral (0.5 %) and by what must hold for any solver: nearly vertical flanks give the rectangle, Z0 lies between those of the rectangles around and inside the trapezoid, flipping the trace of a symmetric stripline changes nothing, and the default accuracy holds against much finer meshes.
 
 Grid reference values:
 

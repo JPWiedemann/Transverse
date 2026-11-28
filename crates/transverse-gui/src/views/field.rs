@@ -454,9 +454,13 @@ impl FieldView {
             }
             // conductors
             for c in &f.conductors {
-                let r = Rect::from_two_pos(to_screen([c.x0, c.y1]), to_screen([c.x1, c.y0]));
-                painter.rect_filled(r, 0.0, COPPER);
-                painter.rect_stroke(r, 0.0, Stroke::new(0.5, Color32::BLACK), egui::StrokeKind::Inside);
+                let [t0, t1] = c.top.unwrap_or([c.x0, c.x1]);
+                let corners = [[c.x0, c.y0], [c.x1, c.y0], [t1, c.y1], [t0, c.y1]].map(&to_screen);
+                painter.add(Shape::convex_polygon(
+                    corners.to_vec(),
+                    COPPER,
+                    Stroke::new(0.5, Color32::BLACK),
+                ));
             }
             let [bx0, bx1] = [b.min()[0], b.max()[0]];
             for (ys, alpha, width, dash) in [(&f.dashed_y, 200u8, 0.8, 6.0), (&f.dotted_y, 90u8, 0.5, 2.0)] {

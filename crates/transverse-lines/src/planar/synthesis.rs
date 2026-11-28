@@ -103,6 +103,8 @@ fn synthesize_with<S>(
         SynthVar::W => (1e-3 * scale, 20.0 * hmax + 10.0 * p.w),
         SynthVar::S => (1e-3 * scale, 20.0 * hmax + 10.0 * p.s),
     };
+    // the narrow face of an etched trace must stay wider than nothing
+    let lo_lim = if var == SynthVar::S { lo_lim } else { lo_lim.max(2.0 * p.undercut() + 1e-3 * scale) };
     let spec = SynthSpec {
         target,
         x0: if var == SynthVar::S { p.s } else { p.w },

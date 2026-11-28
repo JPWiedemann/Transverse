@@ -23,7 +23,7 @@ pub(super) fn drawing(p: &PlanarParams, margin: f64) -> Drawing {
     // conductors, drawn thick enough to see even for t = 0
     let th = p.t.max((p.h1 + p.h2) / 300.0);
     let y0c = if p.t > 0.0 { 0.0 } else { -th / 2.0 };
-    let rect = |kind, x0, y0, x1, y1| DrawRect { kind, x0, y0, x1, y1 };
+    let rect = |kind, x0, y0, x1, y1| DrawRect { kind, x0, y0, x1, y1, top: None };
     let xd = g.xd;
     // Via fences and side walls are walls without thickness in the solution. They are drawn with a width, outwards
     // from the wall like the planes, so that the inner face is where the wall is and nothing inside it is covered.
@@ -32,12 +32,20 @@ pub(super) fn drawing(p: &PlanarParams, margin: f64) -> Drawing {
     let outer = if stack.walls.is_empty() { xd } else { xd.max(stack.wall_x + fw) };
     let mut conductors = Vec::new();
     for layer in &stack.layers {
+        let [ib, it] = layer.inset;
+        // a piece of the copper layer; the sides that are etched flanks are set back by the insets
+        let piece = |kind, x0: f64, x1: f64, flank0: bool, flank1: bool| {
+            let at = |flank: bool, i: f64| if flank { i } else { 0.0 };
+            let face = |i: f64| [x0 + at(flank0, i), x1 - at(flank1, i)];
+            let ([b0, b1], top) = (face(ib), face(it));
+            DrawRect { top: (ib != it).then_some(top), ..rect(kind, b0, y0c, b1, y0c + th) }
+        };
         for t in &layer.traces {
-            conductors.push(rect(ShapeKind::Signal, t.x0, y0c, t.x1, y0c + th));
+            conductors.push(piece(ShapeKind::Signal, t.x0, t.x1, true, true));
         }
         if let Some([left, right]) = layer.ground {
-            conductors.push(rect(ShapeKind::Ground, -outer, y0c, left, y0c + th));
-            conductors.push(rect(ShapeKind::Ground, right, y0c, outer, y0c + th));
+            conductors.push(piece(ShapeKind::Ground, -outer, left, false, true));
+            conductors.push(piece(ShapeKind::Ground, right, outer, true, false));
         }
     }
     let pl = (p.h1 + p.h2) / 60.0;
