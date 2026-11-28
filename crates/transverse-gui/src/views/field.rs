@@ -56,6 +56,8 @@ pub struct FieldView {
     pub show_eq: bool,
     pub show_mesh: bool,
     pub db_range: f64,
+    /// The chosen excitation, where there is a choice (it stays chosen for the next result).
+    pub excitation: usize,
     generation: u64,
     /// Visible bounds of the plot as of the last frame.
     plot_bounds: Option<Bounds>,
@@ -75,6 +77,7 @@ impl Default for FieldView {
             show_eq: true,
             show_mesh: false,
             db_range: 40.0,
+            excitation: 0,
             generation: 0,
             plot_bounds: None,
             pending_view: None,
@@ -187,6 +190,16 @@ impl FieldView {
         ui.insert("db_range".into(), self.db_range.into());
     }
 
+    /// Shows the chosen excitation in `f`. What was made from another one is dropped; the view stays.
+    fn apply_excitation(&mut self, f: &mut FieldData) {
+        let Some(last) = f.excitations().len().checked_sub(1) else { return };
+        let want = self.excitation.min(last);
+        if f.excitation() != want {
+            f.select_excitation(want);
+            (self.render, self.e, self.eq) = (None, None, None);
+        }
+    }
+
     /// Unit (symbol, factor to mm) for lengths, chosen from the size of the visible region.
     fn length_unit(&self, f: &FieldData, units: UnitSystem) -> (&'static str, f64) {
         let b = self.plot_bounds.unwrap_or(f.view_zoom);
@@ -273,9 +286,20 @@ impl FieldView {
         });
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, f: &FieldData, acc: Option<&Accuracy>, units: UnitSystem) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, f: &mut FieldData, acc: Option<&Accuracy>, units: UnitSystem) {
         // ---- controls
         ui.horizontal_wrapped(|ui| {
+            if let Some(last) = f.excitations().len().checked_sub(1) {
+                self.excitation = self.excitation.min(last);
+                ui.label("Drive");
+                egui::ComboBox::from_id_salt("field_excitation")
+                    .selected_text(f.excitations()[self.excitation].label)
+                    .show_ui(ui, |ui| {
+                        for (k, x) in f.excitations().iter().enumerate() {
+                            ui.selectable_value(&mut self.excitation, k, x.label);
+                        }
+                    });
+            }
             egui::ComboBox::from_id_salt("field_mode").selected_text(self.mode.label()).width(190.0).show_ui(
                 ui,
                 |ui| {
@@ -303,6 +327,8 @@ impl FieldView {
                 self.pending_view = Some(f.view_full);
             }
         });
+        self.apply_excitation(f);
+        let f = &*f;
         let show_mesh = self.show_mesh || self.mode == FieldMode::Mesh;
         let (unit, unit_f) = self.length_unit(f, units);
 
@@ -571,7 +597,7 @@ mod tests {
     fn run_frame(
         ctx: &egui::Context,
         view: &mut FieldView,
-        f: &FieldData,
+        f: &mut FieldData,
         acc: Option<&Accuracy>,
         hover: Option<Pos2>,
     ) {
@@ -587,7 +613,7 @@ mod tests {
         });
     }
 
-    fn frames(ctx: &egui::Context, view: &mut FieldView, f: &FieldData, acc: &Accuracy, n: usize) {
+    fn frames(ctx: &egui::Context, view: &mut FieldView, f: &mut FieldData, acc: &Accuracy, n: usize) {
         for _ in 0..n {
             run_frame(ctx, view, f, Some(acc), None);
         }
@@ -607,7 +633,7 @@ mod tests {
     #[test]
     fn a_finite_element_result_renders_in_every_mode_with_its_triangle_mesh() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         assert!(f.mesh.is_some() && acc.nx == 0);
         let mut view = FieldView::default();
         view.new_result();
@@ -616,12 +642,12 @@ mod tests {
             for pending in [f.view_zoom, f.view_full] {
                 view.mode = mode;
                 view.pending_view = Some(pending);
-                run_frame(&ctx, &mut view, &f, Some(&acc), None);
-                run_frame(&ctx, &mut view, &f, Some(&acc), Some(Pos2::new(500.0, 350.0)));
+                run_frame(&ctx, &mut view, &mut f, Some(&acc), None);
+                run_frame(&ctx, &mut view, &mut f, Some(&acc), Some(Pos2::new(500.0, 350.0)));
             }
         }
         view.mode = FieldMode::EDbLines;
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         assert!(view.render.as_ref().unwrap().lines.len() > 20);
     }
 
@@ -633,7 +659,7 @@ mod tests {
     fn every_mode_renders_for_closed_and_open_structures_with_all_overlays() {
         let ctx = egui::Context::default();
         for open in [false, true] {
-            let (f, acc) = analysis(open);
+            let (mut f, acc) = analysis(open);
             let mut view = FieldView::default();
             view.new_result();
             for mode in FieldMode::ALL {
@@ -642,13 +668,13 @@ mod tests {
                     view.show_mesh = true;
                     view.pending_view = Some(pending);
                     // two frames: the first builds the caches, the second draws with a hovering cursor
-                    run_frame(&ctx, &mut view, &f, Some(&acc), None);
-                    run_frame(&ctx, &mut view, &f, Some(&acc), Some(Pos2::new(500.0, 350.0)));
+                    run_frame(&ctx, &mut view, &mut f, Some(&acc), None);
+                    run_frame(&ctx, &mut view, &mut f, Some(&acc), Some(Pos2::new(500.0, 350.0)));
                 }
             }
             assert!(view.render.as_ref().unwrap().legend.is_none(), "last mode is Mesh");
             view.mode = FieldMode::EDbLines;
-            frames(&ctx, &mut view, &f, &acc, 2);
+            frames(&ctx, &mut view, &mut f, &acc, 2);
             assert!(view.render.as_ref().unwrap().lines.len() > 20);
         }
     }
@@ -656,10 +682,10 @@ mod tests {
     #[test]
     fn image_follows_the_visible_bounds_with_hysteresis() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 3);
+        frames(&ctx, &mut view, &mut f, &acc, 3);
         let key = view.render.as_ref().unwrap().key;
         let v = view.render.as_ref().unwrap().visible;
         let w = v[1] - v[0];
@@ -685,20 +711,20 @@ mod tests {
         // the next frame renders for the bounds the plot reported
         let target = zoom(v, 0.4);
         view.plot_bounds = Some(target);
-        run_frame(&ctx, &mut view, &f, Some(&acc), None);
+        run_frame(&ctx, &mut view, &mut f, Some(&acc), None);
         assert_eq!(view.render.as_ref().unwrap().visible, target);
     }
 
     #[test]
     fn colour_scale_does_not_change_when_zooming() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 3);
+        frames(&ctx, &mut view, &mut f, &acc, 3);
         let a = view.render.as_ref().unwrap().legend.clone().unwrap();
         view.plot_bounds = Some(expand(f.view_zoom, -0.45));
-        run_frame(&ctx, &mut view, &f, Some(&acc), None);
+        run_frame(&ctx, &mut view, &mut f, Some(&acc), None);
         let b = view.render.as_ref().unwrap().legend.clone().unwrap();
         assert_eq!((a.vmin, a.vmax), (b.vmin, b.vmax));
     }
@@ -706,14 +732,14 @@ mod tests {
     #[test]
     fn toggling_the_mesh_overlay_does_not_change_the_view() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 4);
+        frames(&ctx, &mut view, &mut f, &acc, 4);
         let before = view.plot_bounds.unwrap();
         for k in 0..8 {
             view.show_mesh = k % 2 == 0;
-            frames(&ctx, &mut view, &f, &acc, 2);
+            frames(&ctx, &mut view, &mut f, &acc, 2);
             assert!(
                 close(view.plot_bounds.unwrap(), before),
                 "toggle {k}: {:?} vs {before:?}",
@@ -725,23 +751,23 @@ mod tests {
     #[test]
     fn view_buttons_do_not_remember_earlier_zoom_or_pan() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         view.pending_view = Some(f.view_zoom);
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         let first = view.plot_bounds.unwrap();
         // wander off somewhere else, then press the button again
         view.pending_view = Some(expand(f.view_zoom, -0.4));
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         assert!(!close(view.plot_bounds.unwrap(), first));
         view.pending_view = Some(f.view_zoom);
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         assert!(close(view.plot_bounds.unwrap(), first), "{:?} vs {first:?}", view.plot_bounds);
         // the full view shows (at least) the whole domain
         view.pending_view = Some(f.view_full);
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         let b = view.plot_bounds.unwrap();
         let tol = 1e-6;
         assert!(b[0] <= f.view_full[0] + tol && b[1] >= f.view_full[1] - tol);
@@ -751,15 +777,15 @@ mod tests {
     #[test]
     fn a_new_result_resets_to_the_signal_region() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         view.pending_view = Some(f.view_full);
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         view.new_result();
         assert!(view.plot_bounds.is_none() && view.render.is_none());
-        frames(&ctx, &mut view, &f, &acc, 2);
+        frames(&ctx, &mut view, &mut f, &acc, 2);
         let b = view.plot_bounds.unwrap();
         // the signal region (default bounds) is visible again; the full domain is not
         assert!(b[0] <= f.view_zoom[0] + 1e-6 && b[1] >= f.view_zoom[1] - 1e-6);
@@ -790,7 +816,7 @@ mod tests {
     fn pointer(
         ctx: &egui::Context,
         view: &mut FieldView,
-        f: &FieldData,
+        f: &mut FieldData,
         acc: &Accuracy,
         events: Vec<egui::Event>,
     ) {
@@ -808,10 +834,10 @@ mod tests {
     fn dragging_a_zoom_box_zooms_without_a_stretched_intermediate_view() {
         use egui::{Event, Modifiers};
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 3);
+        frames(&ctx, &mut view, &mut f, &acc, 3);
         let before = view.plot_bounds.unwrap();
         let (a, b) = (Pos2::new(400.0, 250.0), Pos2::new(560.0, 330.0));
         let button = |pos, pressed| Event::PointerButton {
@@ -820,12 +846,12 @@ mod tests {
             pressed,
             modifiers: Modifiers::NONE,
         };
-        pointer(&ctx, &mut view, &f, &acc, vec![Event::PointerMoved(a)]);
-        pointer(&ctx, &mut view, &f, &acc, vec![button(a, true)]);
-        pointer(&ctx, &mut view, &f, &acc, vec![Event::PointerMoved(Pos2::new(480.0, 290.0))]);
-        pointer(&ctx, &mut view, &f, &acc, vec![Event::PointerMoved(b)]);
+        pointer(&ctx, &mut view, &mut f, &acc, vec![Event::PointerMoved(a)]);
+        pointer(&ctx, &mut view, &mut f, &acc, vec![button(a, true)]);
+        pointer(&ctx, &mut view, &mut f, &acc, vec![Event::PointerMoved(Pos2::new(480.0, 290.0))]);
+        pointer(&ctx, &mut view, &mut f, &acc, vec![Event::PointerMoved(b)]);
         assert!(view.box_start.is_some(), "the box is being dragged");
-        pointer(&ctx, &mut view, &f, &acc, vec![button(b, false)]);
+        pointer(&ctx, &mut view, &mut f, &acc, vec![button(b, false)]);
         let target = view.pending_view.expect("release requests the zoom");
         // the requested view has the aspect of the plot, so the plot has nothing left to correct
         let plot = view.plot_bounds.unwrap();
@@ -833,7 +859,7 @@ mod tests {
             ((target[1] - target[0]) / (target[3] - target[2]), (plot[1] - plot[0]) / (plot[3] - plot[2]));
         assert!((ta - pa).abs() < 1e-6 * pa, "aspect {ta} vs plot {pa}");
         assert!(view.box_start.is_none());
-        frames(&ctx, &mut view, &f, &acc, 1);
+        frames(&ctx, &mut view, &mut f, &acc, 1);
         assert!(close(view.plot_bounds.unwrap(), target), "{:?} vs {target:?}", view.plot_bounds);
         // and it is a real zoom in
         assert!(view.plot_bounds.unwrap()[1] - view.plot_bounds.unwrap()[0] < 0.5 * (before[1] - before[0]));
@@ -842,10 +868,10 @@ mod tests {
     #[test]
     fn length_unit_follows_the_visible_size_and_the_unit_system() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 3);
+        frames(&ctx, &mut view, &mut f, &acc, 3);
         // the signal region is about 1.3 mm wide
         assert_eq!(view.length_unit(&f, UnitSystem::Metric).0, "mm");
         assert_eq!(view.length_unit(&f, UnitSystem::Imperial).0, "mil");
@@ -866,10 +892,10 @@ mod tests {
     #[test]
     fn switching_the_unit_system_does_not_move_the_view() {
         let ctx = egui::Context::default();
-        let (f, acc) = analysis(false);
+        let (mut f, acc) = analysis(false);
         let mut view = FieldView::default();
         view.new_result();
-        frames(&ctx, &mut view, &f, &acc, 4);
+        frames(&ctx, &mut view, &mut f, &acc, 4);
         let before = view.plot_bounds.unwrap();
         for k in 0..6 {
             let units = if k % 2 == 0 { UnitSystem::Imperial } else { UnitSystem::Metric };
@@ -879,7 +905,7 @@ mod tests {
                     ..Default::default()
                 };
                 let _ = ctx.run_ui(input, |ui| {
-                    egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &f, Some(&acc), units));
+                    egui::CentralPanel::default().show(ui, |ui| view.ui(ui, &mut f, Some(&acc), units));
                 });
             }
             assert!(
@@ -967,5 +993,42 @@ mod tests {
         ui.insert("db_range".into(), 1e9.into());
         v.load(&ui);
         assert_eq!((v.mode, v.db_range), (FieldMode::Potential, 55.0));
+    }
+
+    /// A pair offers its modes and each trace alone; switching changes what is drawn but not the view, and a choice
+    /// stays for the next result.
+    #[test]
+    fn a_pair_can_be_driven_four_ways() {
+        let ctx = egui::Context::default();
+        let mut set = PlanarLine.defaults();
+        set.set("signals", ParamValue::Num(1.0));
+        set.set("w", ParamValue::Num(0.2));
+        let a = PlanarLine.analyze(&set, &Ctl::new()).unwrap();
+        let (mut f, acc) = (a.field.unwrap(), a.accuracy.unwrap());
+        let keys: Vec<&str> = f.excitations().iter().map(|x| x.key).collect();
+        assert_eq!(keys, ["odd", "even", "trace1", "trace2"]);
+        let mut view = FieldView::default();
+        view.new_result();
+        frames(&ctx, &mut view, &mut f, &acc, 3);
+        let before = view.plot_bounds.unwrap();
+        for k in [1, 2, 3, 0] {
+            view.excitation = k;
+            frames(&ctx, &mut view, &mut f, &acc, 3);
+            assert_eq!(f.excitation(), k);
+            assert_eq!(f.drive, f.excitations()[k].drive);
+            assert!(close(view.plot_bounds.unwrap(), before), "the view stays");
+            assert!(view.render.is_some());
+        }
+        // chosen before the next result arrives: applied to it
+        view.excitation = 2;
+        let mut next = PlanarLine.analyze(&set, &Ctl::new()).unwrap().field.unwrap();
+        view.new_result();
+        frames(&ctx, &mut view, &mut next, &acc, 2);
+        assert_eq!(next.excitation(), 2);
+        // a single line has nothing to choose, and the choice is kept for later pairs
+        let (mut single, acc) = analysis(false);
+        view.new_result();
+        frames(&ctx, &mut view, &mut single, &acc, 2);
+        assert_eq!((single.excitations().len(), view.excitation), (0, 2));
     }
 }

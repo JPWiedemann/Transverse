@@ -166,9 +166,9 @@ fn analysis_through_the_trait_matches_the_reference() {
     assert!(s.rows.iter().any(|r| r.key == "plane1" && (r.current_pct - 39.2).abs() < 0.1));
     assert!(s.profiles.iter().any(|p| p.key == "cop_top") && !s.x90.is_empty());
     // frequency response is the same model the mode result was taken from
-    let at = a.freq.at(1e9);
+    let at = a.freq[0].at(1e9);
     assert!(rel(at.alpha_c, m.at_f.alpha_c) < 1e-12 && rel(at.alpha_d, m.at_f.alpha_d) < 1e-12);
-    assert_eq!(a.freq.sample(&[1e9, 2e9]).len(), 2);
+    assert_eq!(a.freq[0].sample(&[1e9, 2e9]).len(), 2);
     assert!(a.accuracy.unwrap().nodes > 1000);
 }
 

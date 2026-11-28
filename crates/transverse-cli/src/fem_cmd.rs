@@ -29,7 +29,7 @@ fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
         println!("Zcomm           = {common:8.3} Ohm");
         println!("Coupling        = {coupling:8.4}");
     } else {
-        print_values(s.z0, s.eeff, s.l, s.c, s.g_over_omega);
+        print_values("Z0", s.z0, s.eeff, s.l, s.c, s.g_over_omega);
     }
     let levels: Vec<String> =
         s.accuracy.nodes.iter().zip(s.accuracy.z0()).map(|(n, z)| format!("{n} nodes: {z:.4}")).collect();
@@ -44,11 +44,14 @@ fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
     match &a.even {
         None => print_mode(p, &a.loss, &a.split),
         Some(even) => {
+            println!(
+                "Per mode below: impedance, L', C' and G' are those of one trace, the losses those of the mode."
+            );
             for (k, (loss, split)) in [(&a.loss, &a.split), (&even.loss, &even.split)].into_iter().enumerate()
             {
                 let m = &s.modes[k];
-                println!("--- {}: values per trace ---", m.kind.label());
-                print_values(m.z0, m.eeff, m.l, m.c, m.g_over_omega);
+                println!("--- {} ---", m.kind.label());
+                print_values(m.kind.impedance_name(), m.z0, m.eeff, m.l, m.c, m.g_over_omega);
                 print_mode(p, loss, split);
             }
         }
@@ -56,8 +59,8 @@ fn print_fem(p: &PlanarParams, a: &PlanarFemAnalysis, secs: f64) {
     println!("Time            : {secs:.2} s");
 }
 
-fn print_values(z0: f64, eeff: f64, l: f64, c: f64, g_over_omega: f64) {
-    println!("Z0              = {z0:8.3} Ohm");
+fn print_values(z_name: &str, z: f64, eeff: f64, l: f64, c: f64, g_over_omega: f64) {
+    println!("{z_name:15} = {z:8.3} Ohm");
     println!("eps_eff         = {eeff:8.4}");
     println!("L'              = {:8.4} nH/mm", l * 1e6);
     println!("C'              = {:8.4} pF/mm", c * 1e9);

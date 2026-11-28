@@ -22,7 +22,9 @@
     canSample: boolean;
     /** Counts results; the view resets when it changes. */
     generation: number;
-    z0: number;
+    /** The mode whose losses are shown, and its impedance with the name of that ("Z0", "Zodd (per trace)"). */
+    mode: number;
+    impedance: [string, number];
     /** Analysis frequency [Hz]. */
     fHz: number;
     /** Frequency typed in the form [Hz], if it parses. */
@@ -32,7 +34,7 @@
     fmaxUnit: string;
     onFmax: (text: string, unit: string) => void;
   }
-  let { engine, canSample, generation, z0, fHz, formFHz, units, fmaxText, fmaxUnit, onFmax }: Props = $props();
+  let { engine, canSample, generation, mode, impedance, fHz, formFHz, units, fmaxText, fmaxUnit, onFmax }: Props = $props();
 
   const floor = $derived(Math.max(fHz, formFHz ?? 0));
   const entryHz = $derived(fmaxHz(fmaxText, fmaxUnit));
@@ -48,7 +50,7 @@
 
   // curves for the current result and range
   $effect(() => {
-    const [fm, gen, ok] = [fmax, generation, canSample];
+    const [fm, gen, ok, m] = [fmax, generation, canSample, mode];
     void gen;
     if (!ok) {
       curves = undefined;
@@ -57,7 +59,7 @@
     let stale = false;
     const fs = sweep(fm, POINTS);
     engine
-      .sample(fs)
+      .sample(m, fs)
       .then((data) => {
         if (stale) return;
         curves = curvesFrom(fs, data);
@@ -82,7 +84,7 @@
     }
     const mine = ++seq;
     engine
-      .sample([x * 1e9])
+      .sample(mode, [x * 1e9])
       .then((row) => {
         if (mine === seq) readout = readoutText(row, x, units);
       })
@@ -125,7 +127,7 @@
   <button onclick={fit} disabled={!curves} title="keep the frequency range, scale y to the curves in it">Fit</button>
   <button onclick={fullRange} disabled={!curves} title="0 to f max">Full range</button>
 </div>
-<p class="caption">Loss vs frequency (Z0 = {z0.toFixed(2)} Ω; εr, tan δ constant)</p>
+<p class="caption">Loss vs frequency ({impedance[0]} = {impedance[1].toFixed(2)} Ω; εr, tan δ constant)</p>
 
 {#if !canSample}
   <p class="hint">The last calculation was cancelled, so there is no result to plot. Press Analyze again.</p>

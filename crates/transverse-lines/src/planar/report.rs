@@ -20,7 +20,8 @@ struct Lumped {
 pub fn report(title: &str, p: &PlanarParams, a: &PlanarAnalysis) -> String {
     let sol = &a.sol;
     let mut s = heading(title, p);
-    mode_lines(&mut s, p, &Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c }, &a.loss, &a.split);
+    let lumped = Lumped { z0: sol.z0, eeff: sol.eeff, l: sol.l, c: sol.c };
+    mode_lines(&mut s, p, "Z0", &lumped, &a.loss, &a.split);
     analytic_line(&mut s, p);
     let acc = &sol.accuracy;
     let _ = writeln!(
@@ -57,13 +58,18 @@ pub fn report_fem(title: &str, p: &PlanarParams, a: &PlanarFemAnalysis) -> Strin
                 writeln!(s, "Zdiff           = {:8.3} Ohm  (2 x odd-mode impedance)", sol.target_impedance());
             let _ = writeln!(s, "Zcomm           = {common:8.3} Ohm  (even-mode impedance / 2)");
             let _ = writeln!(s, "Coupling        = {coupling:8.4}      ((Zeven - Zodd) / (Zeven + Zodd))\n");
+            let _ = writeln!(
+                s,
+                "Per mode below: impedance, L', C', R' and G' are those of one trace; the losses in dB, delay and phase\nare those of the mode as a whole.\n"
+            );
             for (k, (loss, split)) in [(&a.loss, &a.split), (&even.loss, &even.split)].into_iter().enumerate()
             {
-                let _ = writeln!(s, "--- {}: values per trace ---", sol.modes[k].kind.label());
-                mode_lines(&mut s, p, &lumped(k), loss, split);
+                let kind = sol.modes[k].kind;
+                let _ = writeln!(s, "--- {} ---", kind.label());
+                mode_lines(&mut s, p, kind.impedance_name(), &lumped(k), loss, split);
             }
         }
-        _ => mode_lines(&mut s, p, &lumped(0), &a.loss, &a.split),
+        _ => mode_lines(&mut s, p, "Z0", &lumped(0), &a.loss, &a.split),
     }
     analytic_line(&mut s, p);
     let acc = &sol.accuracy;
@@ -169,14 +175,14 @@ fn heading(title: &str, p: &PlanarParams) -> String {
 }
 
 /// The values, losses and ground split of one mode.
-fn mode_lines(w: &mut String, p: &PlanarParams, sol: &Lumped, loss: &LossModel, split: &Split) {
+fn mode_lines(w: &mut String, p: &PlanarParams, z: &str, sol: &Lumped, loss: &LossModel, split: &Split) {
     let lo = loss.at(p.f);
     let to_db_mm = NP2DB / 1000.0;
     let (ac, ad) = (lo.alpha_c * to_db_mm, lo.alpha_d * to_db_mm);
     let tot = ac + ad;
     let vp = C_LIGHT / sol.eeff.sqrt();
     let e = p.effective();
-    let _ = writeln!(w, "Z0              = {:8.3} Ohm", sol.z0);
+    let _ = writeln!(w, "{z:15} = {:8.3} Ohm", sol.z0);
     let _ = writeln!(w, "eps_eff         = {:8.4}", sol.eeff);
     let _ = writeln!(w, "v_p             = {:8.4} c", vp / C_LIGHT);
     let _ =

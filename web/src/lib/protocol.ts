@@ -4,6 +4,7 @@
 export type QueryName =
   | 'sample'
   | 'field_info'
+  | 'select_excitation'
   | 'field_x'
   | 'field_y'
   | 'field_mesh_edges'

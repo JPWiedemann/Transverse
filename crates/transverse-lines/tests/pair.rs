@@ -9,7 +9,7 @@ use transverse_core::{Ctl, ETA0};
 use transverse_lines::model::{LineModel, ParamValue};
 use transverse_lines::planar::{
     DEFAULT_RTOL, FemSolution, ModeKind, PlanarLine, PlanarParams, Signals, SynthVar, analyze, analyze_fem,
-    full_analysis_fem, synthesize_fem, synthesize_pair_fem,
+    field_data_fem, full_analysis_fem, synthesize_fem, synthesize_pair_fem,
 };
 
 fn solve(p: &PlanarParams) -> FemSolution {
@@ -305,4 +305,78 @@ fn the_line_model_synthesizes_both_pair_targets() {
     assert!(a.report.contains("Zdiff = 100 Ohm, Zcomm = 28 Ohm, vary w and d"), "{}", a.report);
     let out = PlanarParams::from_set(&out).unwrap();
     assert!(out.w != 0.15 && out.d != 0.2);
+}
+
+/// Each excitation of the field puts its voltages on the traces, and the combined fields are those made directly
+/// from a solution in that mode.
+#[test]
+fn the_field_excitations_of_a_pair_apply_their_voltages() {
+    let p = pair();
+    let sol = solve(&p);
+    let mut f = field_data_fem(&p, &sol).unwrap();
+    let keys: Vec<&str> = f.excitations.iter().map(|x| x.key).collect();
+    assert_eq!(keys, ["odd", "even", "trace1", "trace2"]);
+    assert_eq!(f.excitation, 0);
+    let traces: [Vec<usize>; 2] =
+        [1, 2].map(|id| (0..sol.mesh.pts.len()).filter(|&k| sol.mesh.node_cond[k] == Some(id)).collect());
+    let grounds: Vec<usize> = (0..sol.mesh.pts.len()).filter(|&k| sol.mesh.node_cond[k] == Some(0)).collect();
+    for k in 0..4 {
+        assert!(f.select(k));
+        let x = f.excitations[k].clone();
+        for (nodes, want) in traces.iter().zip(&x.voltages) {
+            assert!(!nodes.is_empty() && nodes.iter().all(|&n| (f.v[n] - want).abs() < 1e-12), "{}", x.key);
+        }
+        assert!(grounds.iter().all(|&n| f.v[n].abs() < 1e-12));
+        assert_eq!(f.drive, x.drive);
+    }
+    assert!(!f.select(4) && f.excitation == 3, "there is no fifth");
+    // mirrored points: the odd mode is antisymmetric, the even mode symmetric, one trace is the other one mirrored
+    let mut at = |k: usize, point: [f64; 2]| {
+        f.select(k);
+        (f.potential(point, false).unwrap(), f.e_vector(point).unwrap())
+    };
+    for point in [[0.05, 0.1], [0.25, -0.1], [0.6, 0.05]] {
+        let mirrored = [-point[0], point[1]];
+        for (k, sign) in [(0, -1.0), (1, 1.0)] {
+            let (a, b) = (at(k, point), at(k, mirrored));
+            assert!((a.0 - sign * b.0).abs() < 3e-3, "excitation {k} at {point:?}: {} {}", a.0, b.0);
+        }
+        let (one, two) = (at(2, point), at(3, mirrored));
+        assert!((one.0 - two.0).abs() < 3e-3, "{point:?}: {} {}", one.0, two.0);
+    }
+    // the even excitation equals the field of a solution in the even mode
+    let direct = field_data_fem(&p, &sol.in_mode(1)).unwrap();
+    f.select(1);
+    assert_eq!(direct.excitation, 1);
+    assert!(f.v.iter().zip(&direct.v).all(|(a, b)| (a - b).abs() < 1e-12));
+    let peak = direct.e_mag_nodal().iter().fold(0.0f64, |m, &e| m.max(e));
+    for (a, b) in f.e_nodal.iter().zip(&direct.e_nodal) {
+        assert!((a[0] - b[0]).hypot(a[1] - b[1]) < 1e-9 * peak);
+    }
+    assert!(f.drive.contains("even mode") && f.drive.contains("Zcomm"), "{}", f.drive);
+    // a single line has no choice
+    let single = PlanarParams::default();
+    assert!(field_data_fem(&single, &solve(&single)).unwrap().excitations.is_empty());
+}
+
+#[test]
+fn a_pair_has_loss_over_frequency_for_both_modes_and_no_z0_in_its_report() {
+    let mut set = PlanarLine.defaults();
+    set.set("signals", ParamValue::Num(1.0));
+    set.set("w", ParamValue::Num(0.2));
+    let a = PlanarLine.analyze(&set, &Ctl::new()).unwrap();
+    assert_eq!(a.freq.len(), 2);
+    for (mode, freq) in a.modes.iter().zip(&a.freq) {
+        let at = freq.at(mode.f_hz);
+        assert_eq!((at.z0, at.alpha_c, at.alpha_d), (mode.z0, mode.at_f.alpha_c, mode.at_f.alpha_d));
+    }
+    assert!(a.freq[0].at(1e9).alpha_c != a.freq[1].at(1e9).alpha_c);
+    assert!(!a.report.contains("Z0"), "{}", a.report);
+    for needle in ["Zodd            =", "Zeven           =", "those of one trace", "of the mode as a whole"] {
+        assert!(a.report.contains(needle), "{needle}\n{}", a.report);
+    }
+    assert!(a.modes.iter().all(|m| !m.split.as_ref().unwrap().info.contains("Z0")));
+    let single = PlanarLine.analyze(&PlanarLine.defaults(), &Ctl::new()).unwrap();
+    assert!(single.report.contains("Z0              =") && !single.report.contains("Zodd"));
+    assert_eq!(single.freq.len(), 1);
 }

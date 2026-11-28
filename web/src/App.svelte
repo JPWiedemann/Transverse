@@ -62,8 +62,12 @@
   const target = $derived(targets.some((t) => t.id === synthTarget) ? synthTarget : (targets[0]?.id ?? ''));
   const quantity = $derived(targets.find((t) => t.id === target)?.quantity ?? 'Z0');
   const secondQuantity = $derived(targets.find((t) => t.id === target)?.second ?? undefined);
-  /** the mode shown in the return-current tab (of a pair) */
-  let splitMode = $state(0);
+  /** the mode shown in the return-current and loss tabs (of a pair) */
+  let shownMode = $state(0);
+  /** the excitation shown in the field tab (of a pair) */
+  let excitation = $state(0);
+  const modes = $derived(result?.summary.modes ?? []);
+  const shown = $derived(modes[shownMode] ? shownMode : 0);
 
   // the parameters as currently typed, if they are valid (sketch and loss plot follow the form)
   const current = $derived.by(() => {
@@ -220,6 +224,18 @@
   <title>Transverse{line ? ` – ${line.name}` : ''}</title>
 </svelte:head>
 
+{#snippet modeSelector()}
+  {#if modes.length > 1}
+    <label class="shown-mode">Shown mode
+      <select value={String(shown)} onchange={(e) => (shownMode = Number(e.currentTarget.value))}>
+        {#each modes as m, k (m.name)}
+          <option value={String(k)}>{m.name === 'even' ? 'Even (common)' : 'Odd (differential)'}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
+{/snippet}
+
 {#if fatal}
   <main class="fatal"><h1>Transverse</h1><p>The calculation module could not be loaded: {fatal}</p></main>
 {:else if !ready || !line}
@@ -297,19 +313,9 @@
           <p class="hint">{current ? 'This line type has no cross-section sketch.' : 'Fix the invalid parameter to see the sketch.'}</p>
         {/if}
       {:else if tab === 'return-current'}
-        {@const modes = result?.summary.modes ?? []}
-        {@const shown = modes[splitMode] ? splitMode : 0}
         {@const split = modes[shown]?.split}
         {#if split}
-          {#if modes.length > 1}
-            <label class="split-mode">Shown mode
-              <select value={String(shown)} onchange={(e) => (splitMode = Number(e.currentTarget.value))}>
-                {#each modes as m, k (m.name)}
-                  <option value={String(k)}>{m.name === 'even' ? 'Even (common)' : 'Odd (differential)'}</option>
-                {/each}
-              </select>
-            </label>
-          {/if}
+          {@render modeSelector()}
           <ReturnTab {split} generation={generation * 2 + shown} {units} />
         {:else}
           <p class="hint">Press Analyze to see how the return current splits over the ground conductors.</p>
@@ -326,21 +332,21 @@
             bind:showEq
             bind:showMesh
             bind:dbRange
+            bind:excitation
           />
         {:else}
           <p class="hint">Press Analyze to see the field.</p>
         {/if}
       {:else if result}
-        {@const mode = result.summary.modes[0]}
+        {@const mode = modes[shown]}
         {#if mode}
-          {#if result.summary.pair}
-            <p class="hint">Odd (differential) mode, values per trace:</p>
-          {/if}
+          {@render modeSelector()}
           <LossTab
             {engine}
             {canSample}
-            {generation}
-            z0={mode.z0}
+            generation={generation * 2 + shown}
+            mode={shown}
+            impedance={[mode.name === 'odd' ? 'Zodd (per trace)' : mode.name === 'even' ? 'Zeven (per trace)' : 'Z0', mode.z0]}
             fHz={mode.f_hz}
             {formFHz}
             {units}

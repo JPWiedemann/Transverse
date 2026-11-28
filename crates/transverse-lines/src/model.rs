@@ -261,7 +261,21 @@ pub struct DrawRect {
 /// (x0, x1, y0, y1) in mm.
 pub type Bounds = [f64; 4];
 
-/// Potentials and geometry for the field views. Fields are for 1 V on the signal.
+/// One way of driving the signals that the field views can show.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Excitation {
+    /// Stable identifier ("odd", "even", "trace1", "trace2").
+    pub key: &'static str,
+    /// Short name for a selector.
+    pub label: &'static str,
+    /// What is applied, with the impedance of the mode if it is one: for the title of the view.
+    pub drive: String,
+    /// Voltage of every signal [V].
+    pub voltages: Vec<f64>,
+}
+
+/// Potentials and geometry for the field views. Fields are those of the selected excitation (1 V on the signal of
+/// a line with one signal).
 #[derive(Clone, Debug)]
 pub struct FieldData {
     pub x: Vec<f64>,
@@ -329,6 +343,26 @@ impl FieldData {
         postproc::e_field(if air { &self.v0 } else { &self.v }, &self.x, &self.y, &self.fixed)
     }
 
+    /// The excitations to choose from; empty if there is only the one the data were made for.
+    pub fn excitations(&self) -> &[Excitation] {
+        self.mesh.as_ref().map_or(&[], |m| &m.excitations)
+    }
+
+    /// The index of the shown excitation in [`Self::excitations`].
+    pub fn excitation(&self) -> usize {
+        self.mesh.as_ref().map_or(0, |m| m.excitation)
+    }
+
+    /// Shows excitation `k` of [`Self::excitations`] (nothing happens if there is no such one). Everything derived
+    /// from the potentials has to be made again afterwards.
+    pub fn select_excitation(&mut self, k: usize) {
+        if let Some(m) = &mut self.mesh
+            && m.select(k)
+        {
+            self.drive.clone_from(&m.drive);
+        }
+    }
+
     /// The potentials of the equipotentials to draw [V]: in tenths between ground and the signal, or in fifths
     /// from -1 V to 1 V where signals of both polarities are driven.
     pub fn equipotential_levels(&self) -> Vec<f64> {
@@ -365,8 +399,8 @@ pub struct Analysis {
     pub pair: Option<PairResult>,
     /// Formatted text of all results.
     pub report: String,
-    /// Frequency-dependent values of the first mode.
-    pub freq: Box<dyn FreqResponse>,
+    /// Frequency-dependent values, one per mode in the order of `modes`.
+    pub freq: Vec<Box<dyn FreqResponse>>,
     pub field: Option<FieldData>,
     pub accuracy: Option<Accuracy>,
 }

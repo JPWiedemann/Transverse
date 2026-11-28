@@ -269,14 +269,50 @@ test('a differential pair shows both modes and is synthesized for Zdiff', async 
   await page.getByLabel('Shown mode').selectOption({ label: 'Even (common)' });
   await expect.poll(() => table.innerText()).not.toBe(odd);
 
+  // the loss tab shows the mode chosen there or in the return-current tab, each with its own losses
   await tab(page, 'Loss vs f').click();
-  await expect(page.getByText('Odd (differential) mode, values per trace:')).toBeVisible();
+  await expect(page.getByText(/Loss vs frequency \(Zeven \(per trace\)/)).toBeVisible();
+  const plot = page.getByRole('img', { name: /loss versus frequency/ });
+  await expect(plot.locator('path.total')).toHaveAttribute('d', /^M/);
+  const readLoss = async () => {
+    const box = (await plot.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(page.locator('.readout')).toContainText('Total:');
+    return page.locator('.readout').innerText();
+  };
+  const evenLoss = await readLoss();
+  await page.getByLabel('Shown mode').selectOption({ label: 'Odd (differential)' });
+  await expect(page.getByText(/Loss vs frequency \(Zodd \(per trace\)/)).toBeVisible();
+  await expect.poll(readLoss).not.toBe(evenLoss);
 
   // the field of the differential excitation
   await tab(page, 'Field').click();
   await expect(page.locator('.bar canvas')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(/\+1 V \/ -1 V on the pair/)).toBeVisible();
   await page.getByLabel('Field view').selectOption('potential');
+  // the other excitations: the title, the potential under the cursor and the colour scale follow
+  const field = page.getByRole('img', { name: 'Field in the cross-section' });
+  const drive = page.getByLabel('Drive');
+  await expect(drive.locator('option')).toHaveText(['Differential', 'Common', 'Trace 1 (left)', 'Trace 2 (right)']);
+  const image = () => page.locator('.box canvas').evaluate((c: HTMLCanvasElement) => c.toDataURL());
+  let before = await image();
+  for (const [label, title] of [
+    ['Common', /even mode\), Zcomm = 28\.5/],
+    ['Trace 1 (left)', /\+1 V on trace 1, trace 2 at 0 V/],
+    ['Trace 2 (right)', /\+1 V on trace 2, trace 1 at 0 V/],
+    ['Differential', /odd mode\), Zdiff = 92\.4/],
+  ] as const) {
+    await drive.selectOption({ label });
+    await expect(page.getByText(title)).toBeVisible();
+    await expect.poll(image).not.toBe(before);
+    before = await image();
+  }
+  // the choice stays when the tab is left, and the view is not moved by a change of drive
+  await drive.selectOption({ label: 'Common' });
+  await tab(page, 'Results').click();
+  await tab(page, 'Field').click();
+  await expect(drive).toHaveValue('1');
+  await expect(field).toBeVisible();
 
   // the target is the differential impedance, and the pair gap can be varied
   await page.getByLabel('Synthesize').selectOption({ label: 'pair gap d (w fixed)' });
@@ -324,3 +360,20 @@ test('a stripline pair is synthesized by the gap, and by width and gap for Zdiff
   expect(errors).toEqual([]);
 });
 
+
+test('a change made while the field image is still rendering is not lost', async ({ page }) => {
+  await page.locator('#p-signals').selectOption({ label: 'Differential pair (edge-coupled)' });
+  await analyze(page);
+  await tab(page, 'Field').click();
+  await expect(page.locator('.bar')).toContainText('dBV/m', { timeout: 20_000 });
+  // drive and view changed in one go: the second change arrives while the image of the first is being made
+  for (const [drive, view, unit] of [
+    ['Common', 'potential', 'V [V]'],
+    ['Differential', 'e_db', 'dBV/m'],
+    ['Trace 1 (left)', 'permittivity', 'er'],
+  ] as const) {
+    await page.getByLabel('Drive').selectOption({ label: drive });
+    await page.getByLabel('Field view').selectOption(view);
+    await expect(page.locator('.bar')).toContainText(unit);
+  }
+});

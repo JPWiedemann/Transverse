@@ -66,8 +66,8 @@ mod tests {
                 view.ui(
                     ui,
                     &LossData {
-                        freq: &*a.freq,
-                        z0: m.z0,
+                        freq: &*a.freq[0],
+                        impedance: ("Z0", m.z0),
                         f_hz: m.f_hz,
                         form_f_hz: None,
                         units: UnitSystem::Metric,
@@ -85,8 +85,8 @@ mod tests {
                 view.ui(
                     ui,
                     &LossData {
-                        freq: &*a.freq,
-                        z0: m.z0,
+                        freq: &*a.freq[0],
+                        impedance: ("Z0", m.z0),
                         f_hz: m.f_hz,
                         form_f_hz: None,
                         units: UnitSystem::Metric,
@@ -101,8 +101,8 @@ mod tests {
                 view.ui(
                     ui,
                     &LossData {
-                        freq: &*a.freq,
-                        z0: m.z0,
+                        freq: &*a.freq[0],
+                        impedance: ("Z0", m.z0),
                         f_hz: m.f_hz,
                         form_f_hz: Some(30e9),
                         units: UnitSystem::Imperial,

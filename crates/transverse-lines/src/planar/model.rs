@@ -491,7 +491,10 @@ fn to_analysis(title: &str, p: &PlanarParams, a: PlanarFemAnalysis) -> TvResult<
         report: report_fem(title, p, &a),
         field: Some(FieldData::from_mesh(field_data_fem(p, s)?)),
         accuracy: Some(fem_accuracy(s)),
-        freq: Box::new(a.loss),
+        freq: std::iter::once(a.loss)
+            .chain(a.even.as_ref().map(|even| even.loss))
+            .map(|loss| Box::new(loss) as _)
+            .collect(),
     })
 }
 

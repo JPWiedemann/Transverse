@@ -117,9 +117,9 @@ export class Engine {
     });
   }
 
-  /** Loss values of the last result: `SAMPLE_COLUMNS.length` numbers per frequency [Hz]. */
-  sample(freqs: number[]): Promise<Float64Array> {
-    return this.query<Float64Array>('sample', Float64Array.from(freqs));
+  /** Loss values of one mode of the last result: `SAMPLE_COLUMNS.length` numbers per frequency [Hz]. */
+  sample(mode: number, freqs: number[]): Promise<Float64Array> {
+    return this.query<Float64Array>('sample', mode, Float64Array.from(freqs));
   }
 
   /** Stop the running job: the worker is terminated and replaced (no shared memory needed).

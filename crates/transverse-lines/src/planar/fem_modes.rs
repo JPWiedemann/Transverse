@@ -30,6 +30,15 @@ impl ModeKind {
         }
     }
 
+    /// What the impedance of one trace in this mode is called.
+    pub fn impedance_name(self) -> &'static str {
+        match self {
+            Self::Single => "Z0",
+            Self::Odd => "Zodd",
+            Self::Even => "Zeven",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Single => "Single-ended",

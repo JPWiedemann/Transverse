@@ -176,6 +176,14 @@ export interface DrawRect {
   y1: number;
 }
 
+/** One way of driving the signals that the field views can show. */
+export interface Excitation {
+  key: string;
+  label: string;
+  drive: string;
+  voltages: number[];
+}
+
 export interface FieldInfo {
   nx: number;
   ny: number;
@@ -183,6 +191,9 @@ export interface FieldInfo {
   mesh: boolean;
   /** how the signals are driven, with the impedance of that mode */
   drive: string;
+  /** the excitations to choose from (empty for one signal) and the shown one */
+  excitations: Excitation[];
+  excitation: number;
   equipotential_levels: number[];
   conductors: DrawRect[];
   dashed_y: number[];

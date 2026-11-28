@@ -148,6 +148,8 @@ struct FieldInfo<'a> {
     /// Solution on a triangle mesh (`nx` and `ny` are then 2: only the extent).
     mesh: bool,
     drive: &'a str,
+    excitations: &'a [transverse_lines::model::Excitation],
+    excitation: usize,
     equipotential_levels: Vec<f64>,
     conductors: &'a [transverse_lines::model::DrawRect],
     dashed_y: &'a [f64],
@@ -223,13 +225,15 @@ impl AnalysisHandle {
         self.params.as_ref().map(json).transpose()
     }
 
-    /// Loss values at the given frequencies [Hz]: a flat array with [`SAMPLE_COLUMNS`] per row.
-    pub fn sample(&self, freqs: &[f64]) -> Vec<f64> {
+    /// Loss values of mode `mode` (as in the summary) at the given frequencies [Hz]: a flat array with
+    /// [`SAMPLE_COLUMNS`] per row.
+    pub fn sample(&self, mode: usize, freqs: &[f64]) -> Result<Vec<f64>, JsError> {
+        let freq = self.analysis.freq.get(mode).ok_or_else(|| js_err(format!("there is no mode {mode}")))?;
         let mut out = Vec::with_capacity(freqs.len() * SAMPLE_COLUMNS.len());
-        for p in self.analysis.freq.sample(freqs) {
+        for p in freq.sample(freqs) {
             out.extend([p.z0, p.beta, p.alpha_c, p.alpha_d, p.r, p.g, p.rs, p.krough, p.delta]);
         }
-        out
+        Ok(out)
     }
 
     /// Column names of [`sample`](Self::sample).
@@ -244,6 +248,8 @@ impl AnalysisHandle {
             ny: f.ny(),
             mesh: f.mesh.is_some(),
             drive: &f.drive,
+            excitations: f.excitations(),
+            excitation: f.excitation(),
             equipotential_levels: f.equipotential_levels(),
             conductors: &f.conductors,
             dashed_y: &f.dashed_y,
@@ -251,6 +257,15 @@ impl AnalysisHandle {
             view_zoom: f.view_zoom,
             view_full: f.view_full,
         }))
+    }
+
+    /// Shows excitation `k` of the field (see `field_info`): all field queries after this are for it.
+    pub fn select_excitation(&mut self, k: usize) -> Result<(), JsError> {
+        let field = self.analysis.field.as_mut().ok_or_else(|| js_err("no field data"))?;
+        field.select_excitation(k);
+        // computed from the potentials of the excitation shown before
+        self.e = OnceCell::new();
+        Ok(())
     }
 
     fn field(&self) -> Result<&transverse_lines::model::FieldData, JsError> {

@@ -47,8 +47,8 @@ pub struct App {
     model: Arc<dyn LineModel>,
     form: FormState,
     synth_target: usize,
-    /// The mode shown in the return-current tab (of a pair).
-    split_mode: usize,
+    /// The mode shown in the return-current and loss tabs (of a pair).
+    shown_mode: usize,
     z_target: String,
     /// The second target of a search in two dimensions (Zcomm of a pair).
     z_second: String,
@@ -130,7 +130,7 @@ impl App {
             model,
             form,
             synth_target,
-            split_mode: 0,
+            shown_mode: 0,
             z_target,
             z_second,
             phase_target,
@@ -480,6 +480,24 @@ impl App {
 
     // ------------------------------------------------------------------ tabs
 
+    /// The mode to show of the current result.
+    fn shown_mode_index(&self) -> usize {
+        let modes = self.result.as_ref().map_or(0, |a| a.modes.len());
+        if self.shown_mode < modes { self.shown_mode } else { 0 }
+    }
+
+    /// The choice between the modes of a pair, for the tabs that show one at a time.
+    fn mode_selector(&mut self, ui: &mut egui::Ui) {
+        if let Some(a) = self.result.as_ref().filter(|a| a.modes.len() > 1) {
+            ui.horizontal(|ui| {
+                ui.label("Shown mode");
+                for (k, m) in a.modes.iter().enumerate() {
+                    ui.selectable_value(&mut self.shown_mode, k, mode_label(&m.name));
+                }
+            });
+        }
+    }
+
     fn tab_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             for (t, name) in TABS {
@@ -498,14 +516,14 @@ impl App {
                     ui.label("No result yet. Press Analyze or Synthesize.");
                 }
             },
-            Tab::Field => {
-                match self.result.as_ref().and_then(|a| a.field.as_ref().map(|f| (f, a.accuracy.as_ref()))) {
-                    Some((f, acc)) => self.field_view.ui(ui, f, acc, self.prefs.units),
-                    None => {
-                        ui.label("No result yet. Press Analyze or Synthesize.");
-                    }
+            Tab::Field => match &mut self.result {
+                Some(Analysis { field: Some(f), accuracy, .. }) => {
+                    self.field_view.ui(ui, f, accuracy.as_ref(), self.prefs.units)
                 }
-            }
+                _ => {
+                    ui.label("No result yet. Press Analyze or Synthesize.");
+                }
+            },
             Tab::CrossSection => match self.model.schematic(&self.form.control_set(&*self.model)) {
                 Some(sch) => cross_section::show(ui, &sch),
                 None => {
@@ -513,23 +531,12 @@ impl App {
                 }
             },
             Tab::ReturnCurrent => {
-                // a pair has one split per mode
-                if let Some(a) = self.result.as_ref().filter(|a| a.modes.len() > 1) {
-                    ui.horizontal(|ui| {
-                        ui.label("Shown mode");
-                        for (k, m) in a.modes.iter().enumerate() {
-                            ui.selectable_value(&mut self.split_mode, k, mode_label(&m.name));
-                        }
-                    });
-                }
-                let split = self
-                    .result
-                    .as_ref()
-                    .and_then(|a| a.modes.get(self.split_mode).or_else(|| a.modes.first())?.split.as_ref());
-                match split {
+                self.mode_selector(ui);
+                let k = self.shown_mode_index();
+                match self.result.as_ref().and_then(|a| a.modes.get(k)?.split.as_ref()) {
                     // each mode keeps its own zoom only until the other one is shown
                     Some(split) => {
-                        let shown = self.generation * 2 + self.split_mode as u64;
+                        let shown = self.generation * 2 + k as u64;
                         self.return_view.ui(ui, split, shown, self.prefs.units)
                     }
                     None => {
@@ -537,26 +544,32 @@ impl App {
                     }
                 }
             }
-            Tab::Loss => match &self.result {
-                Some(a) => {
-                    let live_f = self.form_frequency();
-                    if a.pair.is_some() {
-                        ui.label("Odd (differential) mode, values per trace:");
+            Tab::Loss => {
+                self.mode_selector(ui);
+                let k = self.shown_mode_index();
+                let live_f = self.form_frequency();
+                match self.result.as_ref().and_then(|a| Some((a.modes.get(k)?, a.freq.get(k)?))) {
+                    Some((mode, freq)) => {
+                        let name = match mode.name.as_str() {
+                            "odd" => "Zodd (per trace)",
+                            "even" => "Zeven (per trace)",
+                            _ => "Z0",
+                        };
+                        let data = LossData {
+                            freq: &**freq,
+                            impedance: (name, mode.z0),
+                            f_hz: mode.f_hz,
+                            form_f_hz: live_f,
+                            units: self.prefs.units,
+                            generation: self.generation * 2 + k as u64,
+                        };
+                        self.loss_view.ui(ui, &data)
                     }
-                    let data = LossData {
-                        freq: &*a.freq,
-                        z0: a.modes[0].z0,
-                        f_hz: a.modes[0].f_hz,
-                        form_f_hz: live_f,
-                        units: self.prefs.units,
-                        generation: self.generation,
-                    };
-                    self.loss_view.ui(ui, &data)
+                    None => {
+                        ui.label("No result yet. Press Analyze or Synthesize.");
+                    }
                 }
-                None => {
-                    ui.label("No result yet. Press Analyze or Synthesize.");
-                }
-            },
+            }
         }
     }
 }
@@ -619,7 +632,7 @@ impl eframe::App for App {
     }
 }
 
-/// The mode of a pair, for the selector of the return-current tab.
+/// The mode of a pair, for the mode selector.
 fn mode_label(name: &str) -> &'static str {
     if name == "even" { "Even (common)" } else { "Odd (differential)" }
 }
