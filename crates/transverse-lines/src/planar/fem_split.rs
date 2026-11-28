@@ -12,9 +12,10 @@ use transverse_core::fem::{BoundaryFlux, boundary_fluxes};
 use transverse_core::{TvError, TvResult};
 use transverse_geom::GROUND;
 
-use super::fem::{FemSolution, InputData};
+use super::fem::FemSolution;
 use super::ground_split::{GroundCat, Profile, Shares, Split, merge_equal_x};
 use super::{C_BND, C_COP, C_F1, C_F2, C_PL1, C_PL2, PlanarParams};
+use crate::section_solve::InputData;
 
 /// One side of a ground boundary edge.
 struct Contact {

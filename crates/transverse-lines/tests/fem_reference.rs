@@ -328,7 +328,7 @@ fn report_levels() {
     };
     let sol = analyze_fem(&p, &opt, &Ctl::new()).unwrap();
     println!("{name} (reference z0 {})", case.z0);
-    for (n, z) in sol.accuracy.nodes.iter().zip(&sol.accuracy.z0) {
+    for (n, z) in sol.accuracy.nodes.iter().zip(sol.accuracy.z0()) {
         println!("   {n:8} nodes  z0 {z:.5}  rel {:+.2e}", z / case.z0 - 1.0);
     }
 }

@@ -1,15 +1,18 @@
 //! Adaptive refinement: a per-element error indicator, a marking rule, and the loop that repeats solve and
-//! local refinement until Z0 has settled. The meshes are nested (marked triangles are split, nothing is moved),
+//! local refinement until the impedances have settled. The meshes are nested (marked triangles are split, nothing is moved),
 //! so the capacitances fall monotonically towards their limits.
 
 use std::collections::{HashMap, HashSet};
 
-use super::converge::{Level, LevelRun};
+use super::converge::{Level, LevelRun, impedance_change, summary};
+use super::element::{Tri, p2_gradients, tri};
 use super::field::element_dofs;
-use super::solve::{FemInput, Lumped, Tri, p2_gradients, tri};
+use super::solve::{FemInput, Solved};
 use crate::EPS0;
 use crate::control::Ctl;
 use crate::error::{TvError, TvResult};
+use crate::matrix::SymMatrix;
+use crate::modes::{CapMatrices, impedance_matrix};
 
 /// Squared residual error indicator of every triangle for quadratic elements and the potential `v` with
 /// element weights `weight(k)` (the permittivity, or 1), in the energy norm:
@@ -33,7 +36,7 @@ pub fn residual_indicators(
         return Err(TvError::InvalidParam("fem: wrong number of potentials".into()));
     }
     let conductor: HashSet<(u32, u32)> =
-        inp.fixed_edges.iter().map(|(e, _)| (e[0].min(e[1]), e[0].max(e[1]))).collect();
+        inp.edge_cond.iter().map(|(e, _)| (e[0].min(e[1]), e[0].max(e[1]))).collect();
     let geo: Vec<Tri> = inp.tris.iter().map(|&t| tri(inp.pts, t)).collect();
     let gradient = |k: usize, l: [f64; 3]| {
         let gr = p2_gradients(&geo[k], l);
@@ -102,18 +105,19 @@ pub fn residual_indicators(
     Ok(eta)
 }
 
-/// The indicators of both solutions (with dielectrics and in air; Z0 depends on both capacitances), each
-/// relative to the energy of its solution.
-pub fn error_indicators(
-    inp: &FemInput<'_>,
-    edges: &[[u32; 2]],
-    v: &[f64],
-    v0: &[f64],
-    lumped: &Lumped,
-) -> TvResult<Vec<f64>> {
-    let with = residual_indicators(inp, edges, v, &|k| inp.er[k])?;
-    let air = residual_indicators(inp, edges, v0, &|_| 1.0)?;
-    Ok(with.iter().zip(&air).map(|(a, b)| a * EPS0 / lumped.c + b * EPS0 / lumped.c0).collect())
+/// The indicators of all solutions (every signal, with dielectrics and in air; the impedances depend on both
+/// capacitances), each relative to the energy of its solution.
+pub fn error_indicators(inp: &FemInput<'_>, solved: &Solved) -> TvResult<Vec<f64>> {
+    let mut sum = vec![0.0; inp.tris.len()];
+    for i in 0..solved.v.len() {
+        let with = residual_indicators(inp, &solved.edges, &solved.v[i], &|k| inp.er[k])?;
+        let air = residual_indicators(inp, &solved.edges, &solved.v0[i], &|_| 1.0)?;
+        let (c, c0) = (solved.caps.c.get(i, i), solved.caps.c0.get(i, i));
+        for (s, (a, b)) in sum.iter_mut().zip(with.iter().zip(&air)) {
+            *s += a * EPS0 / c + b * EPS0 / c0;
+        }
+    }
+    Ok(sum)
 }
 
 /// Elements to refine: the largest indicators that together carry `fraction` of the total (Doerfler marking),
@@ -140,48 +144,49 @@ const WINDOW: f64 = 1.6;
 /// Fewest meshes before the loop may stop: the first ones are too coarse for their changes to mean much.
 const MIN_ROUNDS: usize = 4;
 
-/// Estimated relative error of the last Z0. It is compared with the latest mesh that had `WINDOW` times fewer
-/// nodes (one round can change very little by chance). With the error falling at least like `1 / nodes`
-/// (adaptive quadratic elements reach `1 / nodes^2` once the edges are resolved) the remaining error is at most
-/// that change divided by `growth - 1`.
-fn estimate(z: &[f64], nodes: &[usize]) -> f64 {
-    let k = z.len() - 1;
+/// Estimated relative error of the last impedances. They are compared with those of the latest mesh that had
+/// `WINDOW` times fewer nodes (one round can change very little by chance). With the error falling at least like
+/// `1 / nodes` (adaptive quadratic elements reach `1 / nodes^2` once the edges are resolved) the remaining error
+/// is at most that change divided by `growth - 1`.
+fn estimate(zc: &[SymMatrix], nodes: &[usize]) -> f64 {
+    let k = zc.len() - 1;
     let ratio = |j: usize| nodes[k] as f64 / nodes[j] as f64;
     let j = (0..k).rev().find(|&j| ratio(j) >= WINDOW).unwrap_or(0);
-    (z[k] - z[j]).abs() / z[k] / (ratio(j) - 1.0).max(0.1)
+    impedance_change(&zc[j], &zc[k]).0 / (ratio(j) - 1.0).max(0.1)
 }
 
 /// Round 0, 1, 2, ...: `solve(round, previous)` meshes and solves (round 0 gets `None`; later rounds get the
-/// payload of the previous one, to refine it) until the estimated error of Z0 is below `tol_pct / 100`, after
-/// at least `MIN_ROUNDS` rounds. A round that hits the node limit ends the loop with the rounds so far.
+/// payload of the previous one, to refine it) until the estimated error of every entry of the impedance matrix
+/// is below `tol_pct / 100`, after at least `MIN_ROUNDS` rounds. A round that hits the node limit ends the loop
+/// with the rounds so far.
 pub fn converge_adaptive<T>(
     tol_pct: f64,
     max_rounds: usize,
     ctl: &Ctl,
     mut solve: impl FnMut(usize, Option<&T>) -> TvResult<LevelRun<T>>,
-) -> TvResult<(Lumped, T, Level)> {
+) -> TvResult<(CapMatrices, T, Level)> {
     let mut info = Level::default();
-    let mut last: Option<(Lumped, T)> = None;
+    let mut last: Option<(CapMatrices, T)> = None;
     for round in 0..max_rounds.max(3) {
         ctl.check()?;
         let run = match solve(round, last.as_ref().map(|l| &l.1)) {
             Ok(r) => r,
-            Err(TvError::MeshTooLarge { .. }) if info.z0.len() >= 2 => {
+            Err(TvError::MeshTooLarge { .. }) if info.zc.len() >= 2 => {
                 ctl.msg("Node limit reached - using the current mesh");
                 break;
             }
             Err(e) => return Err(e),
         };
         info.nodes.push(run.nodes);
-        info.z0.push(run.lumped.z0());
-        last = Some((run.lumped, run.payload));
-        let k = info.z0.len();
+        info.zc.push(impedance_matrix(&run.caps)?);
+        last = Some((run.caps, run.payload));
+        let k = info.zc.len();
         if k >= 2 {
-            info.est_err = estimate(&info.z0, &info.nodes);
+            info.est_err = estimate(&info.zc, &info.nodes);
             ctl.msg(&format!(
-                "Refinement {k} ({} nodes): Z0 = {:.4} Ohm, estimated error {:.3} %",
+                "Refinement {k} ({} nodes): {}, estimated error {:.3} %",
                 run.nodes,
-                info.z0[k - 1],
+                summary(&info.zc[k - 1]),
                 info.est_err * 100.0
             ));
             if k >= MIN_ROUNDS && info.est_err < tol_pct / 100.0 {
@@ -189,15 +194,15 @@ pub fn converge_adaptive<T>(
             }
         }
     }
-    let Some((lumped, payload)) = last else {
+    let Some((caps, payload)) = last else {
         return Err(TvError::Solver("no mesh could be solved".into()));
     };
-    Ok((lumped, payload, info))
+    Ok((caps, payload, info))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::solve::{Order, solve_lumped};
+    use super::super::solve::{Order, solve_signals};
     use super::*;
 
     #[test]
@@ -212,11 +217,12 @@ mod tests {
 
     #[test]
     fn the_estimate_compares_with_a_mesh_that_had_clearly_fewer_nodes() {
+        let z = |v: &[f64]| v.iter().map(|&v| SymMatrix::from_fn(1, |_, _| v)).collect::<Vec<_>>();
         // doubling nodes: the change over the last doubling
-        let e = estimate(&[99.0, 99.5, 99.75], &[100, 200, 400]);
+        let e = estimate(&z(&[99.0, 99.5, 99.75]), &[100, 200, 400]);
         assert!((e - 0.25 / 99.75).abs() < 1e-12, "{e}");
         // small steps: the last one is nearly zero by chance, the window still sees the change before it
-        let e = estimate(&[99.0, 99.5, 99.7, 99.7], &[100, 250, 400, 440]);
+        let e = estimate(&z(&[99.0, 99.5, 99.7, 99.7]), &[100, 250, 400, 440]);
         assert!(e > 0.1 / 99.7, "{e}");
     }
 
@@ -241,25 +247,26 @@ mod tests {
             vec![[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4], [3, 4, 7], [3, 7, 6], [4, 5, 8], [4, 8, 7]];
         let er: Vec<f64> = (0..8).map(|k| if k < 4 { 4.0 } else { 1.0 }).collect();
         let tand = vec![0.0; 8];
-        let fixed: Vec<Option<f64>> = (0..9)
+        let node_cond: Vec<Option<u8>> = (0..9)
             .map(|k| {
                 if k < 3 {
-                    Some(1.0)
+                    Some(1)
                 } else if k >= 6 {
-                    Some(0.0)
+                    Some(0)
                 } else {
                     None
                 }
             })
             .collect();
-        let fe: Vec<([u32; 2], f64)> = vec![([0, 1], 1.0), ([1, 2], 1.0), ([6, 7], 0.0), ([7, 8], 0.0)];
-        let inp = FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, fixed: &fixed, fixed_edges: &fe };
+        let ec: Vec<([u32; 2], u8)> = vec![([0, 1], 1), ([1, 2], 1), ([6, 7], 0), ([7, 8], 0)];
+        let inp =
+            FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, node_cond: &node_cond, edge_cond: &ec };
         // the sides of the box are open (no flux): their edges have one triangle only
-        let s = solve_lumped(&inp, Order::P2, &Ctl::new()).unwrap();
-        let eta = residual_indicators(&inp, &s.edges, &s.v, &|k| er[k]).unwrap();
+        let s = solve_signals(&inp, Order::P2, &Ctl::new()).unwrap();
+        let eta = residual_indicators(&inp, &s.edges, &s.v[0], &|k| er[k]).unwrap();
         assert!(eta.iter().all(|e| *e < 1e-20), "{eta:?}");
         // the same potential judged with equal permittivities has a kink: a jump at the interface
-        let wrong = residual_indicators(&inp, &s.edges, &s.v, &|_| 1.0).unwrap();
+        let wrong = residual_indicators(&inp, &s.edges, &s.v[0], &|_| 1.0).unwrap();
         assert!(wrong.iter().sum::<f64>() > 1e-2, "{wrong:?}");
     }
 }

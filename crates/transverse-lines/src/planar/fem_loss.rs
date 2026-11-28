@@ -8,10 +8,11 @@
 use transverse_core::losses::LossModel;
 use transverse_core::{Ctl, TvResult};
 
-use super::fem::{FemSolution, solve_mesh};
+use super::fem::FemSolution;
 use super::fem_morph::move_mesh;
 use super::wheeler::wheeler_step;
 use super::{GapMode, MeshMode, PlanarParams};
+use crate::section_solve::solve_mesh;
 
 /// dZ0_air/dn [Ohm/m] with the mesh settings and domain of `sol`.
 pub fn wheeler_dzdn_fem(p: &PlanarParams, sol: &FemSolution, ctl: &Ctl) -> TvResult<f64> {
@@ -30,7 +31,7 @@ pub fn wheeler_dzdn_fem(p: &PlanarParams, sol: &FemSolution, ctl: &Ctl) -> TvRes
         let q = pa.walls_receded(d);
         let mesh = move_mesh(&sol.mesh, p, &q, sol.margin, q.margin);
         let run = solve_mesh(&q.cross_section(q.margin), mesh, sol.order, ctl)?;
-        Ok(run.lumped.z0())
+        Ok(run.caps.single()?.z0())
     };
     Ok((z(dn)? - z(-dn)?) / (2.0 * dn * 1e-3))
 }

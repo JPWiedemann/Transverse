@@ -1,6 +1,7 @@
 //! Field quantities of a quadratic solution: gradients and values at points of the elements.
 
-use super::solve::{FemInput, Order, System, p2_gradients, tri};
+use super::element::{System, p2_gradients, tri};
+use super::solve::{FemInput, Order};
 use crate::error::{TvError, TvResult};
 
 /// Degrees of freedom of every triangle: its three nodes, then the midpoints of the edges opposite to them.
@@ -50,7 +51,7 @@ pub fn p2_values(l: [f64; 3], dof: [f64; 6]) -> f64 {
 mod tests {
     use super::*;
     use crate::control::Ctl;
-    use crate::fem::{Order, solve_lumped};
+    use crate::fem::{Order, solve_signals};
 
     #[test]
     fn gradients_and_values_of_a_linear_potential_are_exact() {
@@ -68,12 +69,12 @@ mod tests {
         }
         let er = vec![1.0; tris.len()];
         let tand = vec![0.0; tris.len()];
-        let fixed: Vec<Option<f64>> = (0..nx * ny)
+        let fixed: Vec<Option<u8>> = (0..nx * ny)
             .map(|k| {
                 if k < nx {
-                    Some(1.0)
+                    Some(1)
                 } else if k >= nx * (ny - 1) {
-                    Some(0.0)
+                    Some(0)
                 } else {
                     None
                 }
@@ -81,22 +82,23 @@ mod tests {
             .collect();
         let mut fe = Vec::new();
         for i in 0..nx - 1 {
-            fe.push(([i as u32, i as u32 + 1], 1.0));
+            fe.push(([i as u32, i as u32 + 1], 1));
             let t = (nx * (ny - 1) + i) as u32;
-            fe.push(([t, t + 1], 0.0));
+            fe.push(([t, t + 1], 0));
         }
-        let inp = FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, fixed: &fixed, fixed_edges: &fe };
-        let s = solve_lumped(&inp, Order::P2, &Ctl::new()).unwrap();
-        for g in corner_gradients(&inp, &s.edges, &s.v).unwrap().into_iter().flatten() {
+        let inp =
+            FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, node_cond: &fixed, edge_cond: &fe };
+        let s = solve_signals(&inp, Order::P2, &Ctl::new()).unwrap();
+        for g in corner_gradients(&inp, &s.edges, &s.v[0]).unwrap().into_iter().flatten() {
             assert!((g[0]).abs() < 1e-12 && (g[1] + 1.0).abs() < 1e-12, "{g:?}");
         }
         let dofs = element_dofs(&inp, &s.edges).unwrap();
         for (t, d) in tris.iter().zip(&dofs) {
-            let dof = d.map(|k| s.v[k as usize]);
+            let dof = d.map(|k| s.v[0][k as usize]);
             let l = [0.2, 0.3, 0.5];
             let y: f64 = (0..3).map(|i| l[i] * pts[t[i] as usize][1]).sum();
             assert!((p2_values(l, dof) - (1.0 - y)).abs() < 1e-12);
         }
-        assert!(corner_gradients(&inp, &s.edges[1..], &s.v).is_err());
+        assert!(corner_gradients(&inp, &s.edges[1..], &s.v[0]).is_err());
     }
 }

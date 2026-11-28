@@ -16,13 +16,14 @@ pub(super) fn min_edge(mesh: &Mesh) -> f64 {
 
 /// The accuracy record shown next to the field views. A triangle mesh has no grid size: `nx` and `ny` are 0.
 pub fn fem_accuracy(sol: &FemSolution) -> Accuracy {
-    let k = sol.accuracy.z0.len();
+    let z0 = sol.accuracy.z0();
+    let k = z0.len();
     Accuracy {
         nodes: sol.mesh.pts.len(),
         nx: 0,
         ny: 0,
         dmin_actual: min_edge(&sol.mesh),
-        levels: (k >= 2).then(|| (sol.accuracy.z0[k - 2], sol.accuracy.z0[k - 1])),
+        levels: (k >= 2).then(|| (z0[k - 2], z0[k - 1])),
         est_err: (k >= 2).then_some(sol.accuracy.est_err),
         mesh_used: (sol.spec.dmin, sol.spec.dmax, sol.adaptive),
         margin: sol.margin,

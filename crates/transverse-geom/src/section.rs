@@ -6,7 +6,8 @@ use transverse_core::{TvError, TvResult};
 use crate::shape::Shape;
 
 pub type MaterialId = u16;
-/// Conductor number: [`GROUND`] is at 0 V, the others are driven (phase 2: only [`SIGNAL`], at 1 V).
+/// Conductor number: [`GROUND`] is at 0 V, the numbers 1 to N are the signals, without gaps. The solver drives one
+/// signal at a time. A line with one signal uses [`SIGNAL`].
 pub type ConductorId = u8;
 /// Meaning of a conductor piece for the line type (e.g. "plane 1", "coplanar ground"); opaque to the mesher.
 pub type Tag = u8;

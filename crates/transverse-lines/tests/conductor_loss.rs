@@ -15,7 +15,6 @@ use std::collections::HashMap;
 
 use transverse_core::fem::{FemInput, corner_gradients};
 use transverse_core::{Ctl, EPS0};
-use transverse_geom::SIGNAL;
 use transverse_lines::planar::{
     C_BND, EtchMode, FemSolution, PlanarParams, WideSide, analyze, analyze_fem, wheeler_dzdn,
     wheeler_dzdn_fem,
@@ -28,18 +27,16 @@ const ETA0: f64 = 376.730_313;
 /// The grounded box far from an open structure is no conductor and is left out.
 fn from_surface_current(p: &PlanarParams, sol: &FemSolution, r0: f64) -> f64 {
     let m = &sol.mesh;
-    let volt = |id: u8| if id == SIGNAL { 1.0 } else { 0.0 };
     let (er, tand) = (vec![1.0; m.tris.len()], vec![0.0; m.tris.len()]);
-    let fixed: Vec<Option<f64>> = m.node_cond.iter().map(|c| c.map(volt)).collect();
-    let fixed_edges: Vec<([u32; 2], f64)> =
-        m.edges.iter().map(|e| ([e.a.min(e.b), e.a.max(e.b)], volt(e.id))).collect();
+    let edge_cond: Vec<([u32; 2], u8)> =
+        m.edges.iter().map(|e| ([e.a.min(e.b), e.a.max(e.b)], e.id)).collect();
     let inp = FemInput {
         pts: &m.pts,
         tris: &m.tris,
         er: &er,
         tand: &tand,
-        fixed: &fixed,
-        fixed_edges: &fixed_edges,
+        node_cond: &m.node_cond,
+        edge_cond: &edge_cond,
     };
     let grad = corner_gradients(&inp, &sol.edges, &sol.v0).unwrap();
     let tags: HashMap<(u32, u32), u8> =

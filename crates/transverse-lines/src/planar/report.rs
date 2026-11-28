@@ -53,7 +53,8 @@ pub fn report_fem(title: &str, p: &PlanarParams, a: &PlanarFemAnalysis) -> Strin
         super::fem_summary::min_edge(&sol.mesh) * 1e3
     );
     if acc.nodes.len() >= 2 {
-        let k = acc.z0.len();
+        let z0 = acc.z0();
+        let k = z0.len();
         let how = match (sol.adaptive, acc.order) {
             (true, _) => format!("adaptive refinement, {k} meshes"),
             (false, Some(_)) => format!("{k} mesh levels, extrapolated"),
@@ -62,8 +63,8 @@ pub fn report_fem(title: &str, p: &PlanarParams, a: &PlanarFemAnalysis) -> Strin
         let _ = writeln!(
             s,
             "Accuracy        : {how}; Z0 of the last two {:.3} / {:.3} Ohm (estimated error {:.2} %)",
-            acc.z0[k - 2],
-            acc.z0[k - 1],
+            z0[k - 2],
+            z0[k - 1],
             acc.est_err * 100.0
         );
     }

@@ -4,6 +4,7 @@ pub mod mesh_field;
 pub mod model;
 pub mod planar;
 pub mod render;
+pub mod section_solve;
 
 use std::sync::Arc;
 

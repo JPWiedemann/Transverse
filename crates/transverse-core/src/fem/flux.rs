@@ -20,7 +20,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::solve::{FemInput, Order, System};
+use super::element::System;
+use super::solve::{FemInput, Order};
 use crate::error::{TvError, TvResult};
 
 /// Flux through one side of a boundary edge into the conductor, positive when the potential falls towards
@@ -161,11 +162,11 @@ pub fn boundary_fluxes(
 
 #[cfg(test)]
 mod tests {
-    use super::super::solve::solve_lumped;
+    use super::super::solve::solve_signals;
     use super::*;
     use crate::control::Ctl;
 
-    type Plate = (Vec<[f64; 2]>, Vec<[u32; 3]>, Vec<f64>, Vec<Option<f64>>, Vec<([u32; 2], f64)>);
+    type Plate = (Vec<[f64; 2]>, Vec<[u32; 3]>, Vec<f64>, Vec<Option<u8>>, Vec<([u32; 2], u8)>);
 
     /// Plate 3 x 2 split into triangles, bottom row 1 V, top row 0 V, one er per row of cells.
     fn plate(nx: usize, ny: usize, er_row: &[f64], power: f64) -> Plate {
@@ -188,9 +189,9 @@ mod tests {
         let fixed = (0..nx * ny)
             .map(|k| {
                 if k < nx {
-                    Some(1.0)
+                    Some(1)
                 } else if k >= (ny - 1) * nx {
-                    Some(0.0)
+                    Some(0)
                 } else {
                     None
                 }
@@ -198,9 +199,9 @@ mod tests {
             .collect();
         let mut fe = Vec::new();
         for i in 0..nx - 1 {
-            fe.push(([i as u32, i as u32 + 1], 1.0));
+            fe.push(([i as u32, i as u32 + 1], 1));
             let t = ((ny - 1) * nx + i) as u32;
-            fe.push(([t, t + 1], 0.0));
+            fe.push(([t, t + 1], 0));
         }
         (pts, tris, er, fixed, fe)
     }
@@ -214,9 +215,10 @@ mod tests {
         // uniform spacing: every edge carries exactly its share, also the end edges
         let (pts, tris, er, fixed, fe) = plate(6, 5, &[4.0; 4], 1.0);
         let tand = vec![0.0; er.len()];
-        let inp = FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, fixed: &fixed, fixed_edges: &fe };
-        let s = solve_lumped(&inp, Order::P2, &Ctl::new()).unwrap();
-        let f = boundary_fluxes(&inp, &s.edges, &s.v, &|k| er[k], &row(6, 4)).unwrap();
+        let inp =
+            FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, node_cond: &fixed, edge_cond: &fe };
+        let s = solve_signals(&inp, Order::P2, &Ctl::new()).unwrap();
+        let f = boundary_fluxes(&inp, &s.edges, &s.v[0], &|k| er[k], &row(6, 4)).unwrap();
         assert_eq!(f.len(), 5, "one triangle per edge on the dielectric side");
         let total: f64 = f.iter().map(|x| x.flux).sum();
         // total flux = er * E * width = 4 * 0.5 * 3, the capacitance over EPS0
@@ -226,7 +228,7 @@ mod tests {
             assert!((x.flux - 4.0 * 0.5 * (pb[0] - pa[0])).abs() < 1e-12, "flux follows the edge length");
         }
         // the bottom electrode carries the opposite charge
-        let g = boundary_fluxes(&inp, &s.edges, &s.v, &|k| er[k], &row(6, 0)).unwrap();
+        let g = boundary_fluxes(&inp, &s.edges, &s.v[0], &|k| er[k], &row(6, 0)).unwrap();
         let tb: f64 = g.iter().map(|x| x.flux).sum();
         assert!((tb + 6.0).abs() < 1e-12, "{tb}");
     }
@@ -235,10 +237,11 @@ mod tests {
     fn the_total_is_conserved_on_uneven_meshes_and_in_layers() {
         let (pts, tris, er, fixed, fe) = plate(7, 4, &[9.0, 2.0, 2.0], 1.4);
         let tand = vec![0.0; er.len()];
-        let inp = FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, fixed: &fixed, fixed_edges: &fe };
-        let s = solve_lumped(&inp, Order::P2, &Ctl::new()).unwrap();
-        let charge = s.lumped.c / crate::EPS0;
-        let top = boundary_fluxes(&inp, &s.edges, &s.v, &|k| er[k], &row(7, 3)).unwrap();
+        let inp =
+            FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, node_cond: &fixed, edge_cond: &fe };
+        let s = solve_signals(&inp, Order::P2, &Ctl::new()).unwrap();
+        let charge = s.caps.c.get(0, 0) / crate::EPS0;
+        let top = boundary_fluxes(&inp, &s.edges, &s.v[0], &|k| er[k], &row(7, 3)).unwrap();
         let sum: f64 = top.iter().map(|x| x.flux).sum();
         assert!((sum - charge).abs() < 1e-12 * charge, "{sum} vs {charge}");
         // in the layers the flux is uniform in x, so every edge carries its length share although the
@@ -258,9 +261,10 @@ mod tests {
     fn wrong_edge_lists_and_p1_solutions_are_refused() {
         let (pts, tris, er, fixed, fe) = plate(3, 3, &[1.0; 2], 1.0);
         let tand = vec![0.0; er.len()];
-        let inp = FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, fixed: &fixed, fixed_edges: &fe };
-        let s = solve_lumped(&inp, Order::P2, &Ctl::new()).unwrap();
-        assert!(boundary_fluxes(&inp, &s.edges[1..], &s.v, &|_| 1.0, &[]).is_err());
-        assert!(boundary_fluxes(&inp, &s.edges, &s.v[1..], &|_| 1.0, &[]).is_err());
+        let inp =
+            FemInput { pts: &pts, tris: &tris, er: &er, tand: &tand, node_cond: &fixed, edge_cond: &fe };
+        let s = solve_signals(&inp, Order::P2, &Ctl::new()).unwrap();
+        assert!(boundary_fluxes(&inp, &s.edges[1..], &s.v[0], &|_| 1.0, &[]).is_err());
+        assert!(boundary_fluxes(&inp, &s.edges, &s.v[0][1..], &|_| 1.0, &[]).is_err());
     }
 }
